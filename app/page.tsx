@@ -1,5 +1,6 @@
 'use client';
 import { useMemo, useState } from 'react';
+import { isFirebaseConfigured } from '../lib.firebase';
 
 type Role = 'owner_admin'|'branch_manager'|'cashier_sales'|'stock_manager';
 type Branch = {id:string;name:string};
@@ -23,7 +24,7 @@ export default function Page(){
   const expenses=useMemo(()=>visible(db.expenses).reduce((a,b)=>a+b.amount,0),[db,user,branchFilter]);
   const stockQty=(productId:string,branchId:string)=>db.stockMoves.filter(m=>m.productId===productId&&m.branchId===branchId).reduce((a,b)=>a+b.qty,0);
 
-  if(!user)return <div className="auth"><h2>Alpha Matrix Login</h2><p>owner / manager / cashier / stock (password: 1234)</p><form onSubmit={e=>{e.preventDefault();const fd=new FormData(e.currentTarget);const u=db.users.find(x=>x.username===fd.get('username')&&x.password===fd.get('password'));if(u)setUser(u);}} style={{gridTemplateColumns:'1fr'}}><input name="username" required placeholder="Username"/><input name="password" type="password" required placeholder="Password"/><button className="primary">Login</button></form></div>;
+  if(!user)return <div className="auth"><h2>Alpha Matrix Login</h2><p>{isFirebaseConfigured ? 'Firebase config detected ✅' : 'Firebase config missing ⚠️'}</p><p>owner / manager / cashier / stock (password: 1234)</p><form onSubmit={e=>{e.preventDefault();const fd=new FormData(e.currentTarget);const u=db.users.find(x=>x.username===fd.get('username')&&x.password===fd.get('password'));if(u)setUser(u);}} style={{gridTemplateColumns:'1fr'}}><input name="username" required placeholder="Username"/><input name="password" type="password" required placeholder="Password"/><button className="primary">Login</button></form></div>;
 
   return <div className="app"><aside className="sidebar"><h3>Alpha Matrix</h3><div>{user.name} • {roleNames[user.role]}</div><div className="nav">{perms[user.role].map(v=><button key={v} className={view===v?'active':''} onClick={()=>setView(v)}>{v}</button>)}</div><button onClick={()=>{setUser(null);setView('dashboard')}}>Logout</button></aside>
   <main className="main"><h2>{view}</h2>{user.role==='owner_admin'&&<select value={branchFilter} onChange={e=>setBranchFilter(e.target.value)}><option value="all">All branches</option>{db.branches.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select>}
