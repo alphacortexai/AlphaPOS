@@ -1,48 +1,211 @@
 'use client';
-import { useMemo, useState } from 'react';
-import { isFirebaseConfigured } from '../lib.firebase';
 
-type Role = 'owner_admin'|'branch_manager'|'cashier_sales'|'stock_manager';
-type Branch = {id:string;name:string};
-type User = {id:string;name:string;username:string;password:string;role:Role;branchId:string|null};
-type Product = {id:string;name:string;costPrice:number;sellPrice:number;branchId:string};
-type Service = Product;
-type StockMove = {id:string;productId:string;qty:number;branchId:string;date:string};
-type Sale = {id:string;type:'product'|'service';itemId:string;itemName:string;qty:number;discount:number;total:number;profit:number;branchId:string;date:string};
-type Expense = {id:string;title:string;amount:number;branchId:string;date:string};
+import { useEffect, useMemo, useState } from 'react';
+import { isFirebaseConfigured, firebaseApp } from '../lib.firebase';
+import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth';
+import { doc, getDoc, getFirestore, serverTimestamp, setDoc, updateDoc } from 'firebase/firestore';
 
-const roleNames:Record<Role,string>={owner_admin:'Owner/Admin',branch_manager:'Branch Manager',cashier_sales:'Cashier/Sales',stock_manager:'Stock Manager'};
-const perms:Record<Role,string[]>={owner_admin:['dashboard','branches','users','products','services','stock','sales','expenses','reports'],branch_manager:['dashboard','products','services','stock','sales','expenses','reports'],cashier_sales:['dashboard','products','services','sales'],stock_manager:['dashboard','products','stock']};
+type Branch = {
+  id: string;
+  name: string;
+  createdAt: string;
+};
 
-const seed={branches:[{id:'br1',name:'Main Branch'},{id:'br2',name:'Branch 2'}] as Branch[],users:[{id:'u1',name:'Owner',username:'owner',password:'1234',role:'owner_admin',branchId:null},{id:'u2',name:'Manager',username:'manager',password:'1234',role:'branch_manager',branchId:'br1'},{id:'u3',name:'Cashier',username:'cashier',password:'1234',role:'cashier_sales',branchId:'br1'},{id:'u4',name:'Stock',username:'stock',password:'1234',role:'stock_manager',branchId:'br1'}] as User[],products:[] as Product[],services:[] as Service[],stockMoves:[] as StockMove[],sales:[] as Sale[],expenses:[] as Expense[]};
+type OwnerProfile = {
+  uid: string;
+  email: string;
+  displayName: string;
+  role: 'platform_admin' | 'shop_owner';
+  shopName: string;
+  branches: Branch[];
+  createdAt?: unknown;
+  updatedAt?: unknown;
+};
 
-export default function Page(){
-  const [db,setDb]=useState(seed); const [user,setUser]=useState<User|null>(null); const [view,setView]=useState('dashboard'); const [branchFilter,setBranchFilter]=useState('all');
-  const visible=<T extends {branchId?:string|null}>(arr:T[])=>!user?[]:user.role==='owner_admin'?(branchFilter==='all'?arr:arr.filter(a=>a.branchId===branchFilter)):arr.filter(a=>!a.branchId||a.branchId===user.branchId);
-  const revenue=useMemo(()=>visible(db.sales).reduce((a,b)=>a+b.total,0),[db,user,branchFilter]);
-  const gross=useMemo(()=>visible(db.sales).reduce((a,b)=>a+b.profit,0),[db,user,branchFilter]);
-  const expenses=useMemo(()=>visible(db.expenses).reduce((a,b)=>a+b.amount,0),[db,user,branchFilter]);
-  const stockQty=(productId:string,branchId:string)=>db.stockMoves.filter(m=>m.productId===productId&&m.branchId===branchId).reduce((a,b)=>a+b.qty,0);
+const ADMIN_EMAIL = 'alphacortexai@gmail.com';
 
-  if(!user)return <div className="auth"><h2>Alpha Matrix Login</h2><p>{isFirebaseConfigured ? 'Firebase config detected ✅' : 'Firebase config missing ⚠️'}</p><p>owner / manager / cashier / stock (password: 1234)</p><form onSubmit={e=>{e.preventDefault();const fd=new FormData(e.currentTarget);const u=db.users.find(x=>x.username===fd.get('username')&&x.password===fd.get('password'));if(u)setUser(u);}} style={{gridTemplateColumns:'1fr'}}><input name="username" required placeholder="Username"/><input name="password" type="password" required placeholder="Password"/><button className="primary">Login</button></form></div>;
+export default function Page() {
+  const [authUser, setAuthUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [ownerProfile, setOwnerProfile] = useState<OwnerProfile | null>(null);
+  const [shopName, setShopName] = useState('');
+  const [branchName, setBranchName] = useState('');
+  const [status, setStatus] = useState('');
 
-  return <div className="app"><aside className="sidebar"><h3>Alpha Matrix</h3><div>{user.name} • {roleNames[user.role]}</div><div className="nav">{perms[user.role].map(v=><button key={v} className={view===v?'active':''} onClick={()=>setView(v)}>{v}</button>)}</div><button onClick={()=>{setUser(null);setView('dashboard')}}>Logout</button></aside>
-  <main className="main"><h2>{view}</h2>{user.role==='owner_admin'&&<select value={branchFilter} onChange={e=>setBranchFilter(e.target.value)}><option value="all">All branches</option>{db.branches.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select>}
+  const isAdmin = ownerProfile?.role === 'platform_admin';
 
-  {view==='dashboard'&&<div className="card"><div className="kpis"><div className="kpi">Revenue<br/><b>${revenue.toFixed(2)}</b></div><div className="kpi">Gross Profit<br/><b>${gross.toFixed(2)}</b></div><div className="kpi">Expenses<br/><b>${expenses.toFixed(2)}</b></div><div className="kpi">Net Profit<br/><b>${(gross-expenses).toFixed(2)}</b></div></div></div>}
+  useEffect(() => {
+    if (!firebaseApp) {
+      setLoading(false);
+      return;
+    }
 
-  {view==='branches'&&<div className="card"><h3>Branches</h3><form onSubmit={e=>{e.preventDefault();const fd=new FormData(e.currentTarget);setDb(d=>({...d,branches:[...d.branches,{id:crypto.randomUUID(),name:String(fd.get('name'))}]}));e.currentTarget.reset();}}><input name="name" required placeholder="Branch name"/><button className="primary">Add</button></form><table><tbody>{db.branches.map(b=><tr key={b.id}><td>{b.name}</td></tr>)}</tbody></table></div>}
+    const auth = getAuth(firebaseApp);
+    return onAuthStateChanged(auth, async (user) => {
+      setAuthUser(user);
+      setOwnerProfile(null);
 
-  {view==='products'&&<div className="card"><h3>Products</h3><form onSubmit={e=>{e.preventDefault();const fd=new FormData(e.currentTarget);const branchId=user.role==='owner_admin'?String(fd.get('branchId')):String(user.branchId);setDb(d=>({...d,products:[...d.products,{id:crypto.randomUUID(),name:String(fd.get('name')),costPrice:Number(fd.get('costPrice')),sellPrice:Number(fd.get('sellPrice')),branchId}]}));e.currentTarget.reset();}}><input name="name" required placeholder="Product"/><input name="costPrice" type="number" step="0.01" required placeholder="Cost"/><input name="sellPrice" type="number" step="0.01" required placeholder="Sell"/>{user.role==='owner_admin'&&<select name="branchId">{db.branches.map(b=><option value={b.id} key={b.id}>{b.name}</option>)}</select>}<button className="primary">Add</button></form><table><tbody>{visible(db.products).map(p=><tr key={p.id}><td>{p.name}</td><td>{p.costPrice}</td><td>{p.sellPrice}</td></tr>)}</tbody></table></div>}
+      if (!user) {
+        setLoading(false);
+        return;
+      }
 
-  {view==='services'&&<div className="card"><h3>Services</h3><form onSubmit={e=>{e.preventDefault();const fd=new FormData(e.currentTarget);const branchId=user.role==='owner_admin'?String(fd.get('branchId')):String(user.branchId);setDb(d=>({...d,services:[...d.services,{id:crypto.randomUUID(),name:String(fd.get('name')),costPrice:Number(fd.get('costPrice')),sellPrice:Number(fd.get('sellPrice')),branchId}]}));e.currentTarget.reset();}}><input name="name" required placeholder="Service"/><input name="costPrice" type="number" step="0.01" required placeholder="Cost"/><input name="sellPrice" type="number" step="0.01" required placeholder="Sell"/>{user.role==='owner_admin'&&<select name="branchId">{db.branches.map(b=><option value={b.id} key={b.id}>{b.name}</option>)}</select>}<button className="primary">Add</button></form></div>}
+      const db = getFirestore(firebaseApp);
+      const ownerRef = doc(db, 'shopOwners', user.uid);
+      const ownerSnap = await getDoc(ownerRef);
 
-  {view==='stock'&&<div className="card"><h3>Stock</h3><form onSubmit={e=>{e.preventDefault();const fd=new FormData(e.currentTarget);const branchId=user.role==='owner_admin'?String(fd.get('branchId')):String(user.branchId);setDb(d=>({...d,stockMoves:[...d.stockMoves,{id:crypto.randomUUID(),productId:String(fd.get('productId')),qty:Number(fd.get('qty')),branchId,date:new Date().toISOString().slice(0,10)}]}));}}><select name="productId">{visible(db.products).map(p=><option value={p.id} key={p.id}>{p.name}</option>)}</select><input type="number" name="qty" min={1} required placeholder="Qty"/>{user.role==='owner_admin'&&<select name="branchId">{db.branches.map(b=><option value={b.id} key={b.id}>{b.name}</option>)}</select>}<button className="primary">Add</button></form></div>}
+      if (!ownerSnap.exists()) {
+        const created: OwnerProfile = {
+          uid: user.uid,
+          email: user.email || '',
+          displayName: user.displayName || 'Shop Owner',
+          role: (user.email || '').toLowerCase() === ADMIN_EMAIL ? 'platform_admin' : 'shop_owner',
+          shopName: '',
+          branches: [],
+        };
 
-  {view==='sales'&&<div className="card"><h3>Sales</h3><form onSubmit={e=>{e.preventDefault();const fd=new FormData(e.currentTarget);const branchId=user.role==='owner_admin'?String(fd.get('branchId')):String(user.branchId);const t=String(fd.get('type')) as 'product'|'service';const arr=t==='product'?db.products:db.services;const item=arr.find(i=>i.id===fd.get('itemId'));if(!item)return;const qty=Number(fd.get('qty'));if(t==='product'&&stockQty(item.id,branchId)<qty){alert('Not enough stock');return;}const discount=Number(fd.get('discount'));const total=Math.max(0,item.sellPrice*qty-discount);const profit=total-item.costPrice*qty;setDb(d=>({...d,stockMoves:t==='product'?[...d.stockMoves,{id:crypto.randomUUID(),productId:item.id,qty:-qty,branchId,date:new Date().toISOString().slice(0,10)}]:d.stockMoves,sales:[...d.sales,{id:crypto.randomUUID(),type:t,itemId:item.id,itemName:item.name,qty,discount,total,profit,branchId,date:new Date().toISOString().slice(0,10)}]}));}}><select name="type"><option value="product">Product</option><option value="service">Service</option></select><select name="itemId">{[...visible(db.products),...visible(db.services)].map(i=><option value={i.id} key={i.id}>{i.name}</option>)}</select><input type="number" name="qty" min={1} defaultValue={1}/><input type="number" name="discount" step="0.01" defaultValue={0}/>{user.role==='owner_admin'&&<select name="branchId">{db.branches.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select>}<button className="primary">Record</button></form></div>}
+        await setDoc(ownerRef, {
+          ...created,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
 
-  {view==='expenses'&&<div className="card"><h3>Expenses</h3><form onSubmit={e=>{e.preventDefault();const fd=new FormData(e.currentTarget);const branchId=user.role==='owner_admin'?String(fd.get('branchId')):String(user.branchId);setDb(d=>({...d,expenses:[...d.expenses,{id:crypto.randomUUID(),title:String(fd.get('title')),amount:Number(fd.get('amount')),branchId,date:new Date().toISOString().slice(0,10)}]}));}}><input name="title" placeholder="Expense" required/><input name="amount" type="number" step="0.01" required/>{user.role==='owner_admin'&&<select name="branchId">{db.branches.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select>}<button className="primary">Add</button></form></div>}
+        setOwnerProfile(created);
+      } else {
+        setOwnerProfile(ownerSnap.data() as OwnerProfile);
+      }
 
-  {view==='reports'&&<div className="card"><h3>Reports</h3><p>Total Sales: ${revenue.toFixed(2)}</p><p>Gross Profit: ${gross.toFixed(2)}</p><p>Total Expenses: ${expenses.toFixed(2)}</p><p>Net Profit: ${(gross-expenses).toFixed(2)}</p></div>}
-  </main></div>;
+      setLoading(false);
+    });
+  }, []);
+
+  const canCreateShop = useMemo(() => !!authUser && !!ownerProfile && !ownerProfile.shopName, [authUser, ownerProfile]);
+
+  async function handleGoogleSignIn() {
+    if (!firebaseApp) return;
+    const auth = getAuth(firebaseApp);
+    const provider = new GoogleAuthProvider();
+    await signInWithPopup(auth, provider);
+  }
+
+  async function handleCreateShop(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!firebaseApp || !authUser || !ownerProfile || !shopName.trim()) return;
+
+    const db = getFirestore(firebaseApp);
+    const ownerRef = doc(db, 'shopOwners', authUser.uid);
+
+    await updateDoc(ownerRef, {
+      shopName: shopName.trim(),
+      updatedAt: serverTimestamp(),
+    });
+
+    setOwnerProfile({ ...ownerProfile, shopName: shopName.trim() });
+    setShopName('');
+    setStatus('Shop created successfully.');
+  }
+
+  async function handleAddBranch(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!firebaseApp || !authUser || !ownerProfile || !branchName.trim()) return;
+
+    const branch: Branch = {
+      id: crypto.randomUUID(),
+      name: branchName.trim(),
+      createdAt: new Date().toISOString(),
+    };
+
+    const nextBranches = [...ownerProfile.branches, branch];
+    const db = getFirestore(firebaseApp);
+    const ownerRef = doc(db, 'shopOwners', authUser.uid);
+
+    await updateDoc(ownerRef, {
+      branches: nextBranches,
+      updatedAt: serverTimestamp(),
+    });
+
+    setOwnerProfile({ ...ownerProfile, branches: nextBranches });
+    setBranchName('');
+    setStatus('Branch added successfully.');
+  }
+
+  async function handleLogout() {
+    if (!firebaseApp) return;
+    await signOut(getAuth(firebaseApp));
+    setOwnerProfile(null);
+    setStatus('');
+  }
+
+  if (!isFirebaseConfigured) {
+    return <div className="auth"><h2>Firebase setup required</h2><p>Add Firebase environment variables before using Google authentication.</p></div>;
+  }
+
+  if (loading) return <div className="auth"><p>Loading...</p></div>;
+
+  if (!authUser) {
+    return (
+      <div className="auth">
+        <h2>AlphaPOS Authentication</h2>
+        <p>Sign in with Gmail to continue as platform admin or shop owner.</p>
+        <button className="primary" onClick={handleGoogleSignIn}>Continue with Google</button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="app">
+      <aside className="sidebar">
+        <h3>AlphaPOS</h3>
+        <div>{ownerProfile?.displayName}</div>
+        <div>{ownerProfile?.email}</div>
+        <div>{isAdmin ? 'Platform Admin' : 'Shop Owner'}</div>
+        <button onClick={handleLogout}>Logout</button>
+      </aside>
+
+      <main className="main">
+        <h2>{isAdmin ? 'Platform Admin Console' : 'Shop Owner Console'}</h2>
+
+        {canCreateShop && (
+          <div className="card">
+            <h3>Create your shop</h3>
+            <form onSubmit={handleCreateShop}>
+              <input
+                name="shopName"
+                placeholder="Shop name"
+                required
+                value={shopName}
+                onChange={(e) => setShopName(e.target.value)}
+              />
+              <button className="primary">Create Shop</button>
+            </form>
+          </div>
+        )}
+
+        {ownerProfile?.shopName && (
+          <div className="card">
+            <h3>Shop: {ownerProfile.shopName}</h3>
+            <p>Add branches for this shop as needed.</p>
+            <form onSubmit={handleAddBranch}>
+              <input
+                name="branchName"
+                placeholder="Branch name"
+                required
+                value={branchName}
+                onChange={(e) => setBranchName(e.target.value)}
+              />
+              <button className="primary">Add Branch</button>
+            </form>
+
+            <ul>
+              {ownerProfile.branches.map((branch) => (
+                <li key={branch.id}>{branch.name}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {status && <p>{status}</p>}
+      </main>
+    </div>
+  );
 }
