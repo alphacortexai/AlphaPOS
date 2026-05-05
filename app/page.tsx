@@ -35,12 +35,13 @@ export default function Page() {
   const isAdmin = ownerProfile?.role === 'platform_admin';
 
   useEffect(() => {
-    if (!firebaseApp) {
+    const app = firebaseApp;
+    if (!app) {
       setLoading(false);
       return;
     }
 
-    const auth = getAuth(firebaseApp);
+    const auth = getAuth(app);
     return onAuthStateChanged(auth, async (user) => {
       setAuthUser(user);
       setOwnerProfile(null);
@@ -50,7 +51,7 @@ export default function Page() {
         return;
       }
 
-      const db = getFirestore(firebaseApp);
+      const db = getFirestore(app);
       const ownerRef = doc(db, 'shopOwners', user.uid);
       const ownerSnap = await getDoc(ownerRef);
 
