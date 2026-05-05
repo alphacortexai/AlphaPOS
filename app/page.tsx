@@ -22,6 +22,8 @@ type OwnerProfile = {
   updatedAt?: unknown;
 };
 
+type View = 'dashboard' | 'products' | 'services' | 'sales' | 'expenses' | 'users' | 'customers' | 'branches' | 'reports';
+
 const ADMIN_EMAIL = 'alphacortexai@gmail.com';
 
 export default function Page() {
@@ -31,6 +33,7 @@ export default function Page() {
   const [shopName, setShopName] = useState('');
   const [branchName, setBranchName] = useState('');
   const [status, setStatus] = useState('');
+  const [view, setView] = useState<View>('dashboard');
 
   const isAdmin = ownerProfile?.role === 'platform_admin';
 
@@ -153,6 +156,8 @@ export default function Page() {
     );
   }
 
+  const sidebarViews: View[] = ['dashboard', 'products', 'services', 'sales', 'expenses', 'users', 'customers', 'branches', 'reports'];
+
   return (
     <div className="app">
       <aside className="sidebar">
@@ -160,6 +165,13 @@ export default function Page() {
         <div>{ownerProfile?.displayName}</div>
         <div>{ownerProfile?.email}</div>
         <div>{isAdmin ? 'Platform Admin' : 'Shop Owner'}</div>
+        <nav className="nav">
+          {sidebarViews.map((item) => (
+            <button key={item} className={view === item ? 'active' : ''} onClick={() => setView(item)}>
+              {item[0].toUpperCase() + item.slice(1)}
+            </button>
+          ))}
+        </nav>
         <button onClick={handleLogout}>Logout</button>
       </aside>
 
@@ -182,7 +194,20 @@ export default function Page() {
           </div>
         )}
 
-        {ownerProfile?.shopName && (
+        {view === 'dashboard' && (
+          <div className="card">
+            <h3>Business Dashboard</h3>
+            <div className="kpis">
+              <div className="kpi"><strong>Branches</strong><div>{ownerProfile?.branches.length ?? 0}</div></div>
+              <div className="kpi"><strong>Total Sales</strong><div>Coming soon</div></div>
+              <div className="kpi"><strong>Expenses</strong><div>Coming soon</div></div>
+              <div className="kpi"><strong>Net Profit</strong><div>Coming soon</div></div>
+            </div>
+            <p>Next phase connects products, stock, sales, discounts, profits, and cross-branch reports to Firestore collections.</p>
+          </div>
+        )}
+
+        {view === 'branches' && ownerProfile?.shopName && (
           <div className="card">
             <h3>Shop: {ownerProfile.shopName}</h3>
             <p>Add branches for this shop as needed.</p>
@@ -202,6 +227,16 @@ export default function Page() {
                 <li key={branch.id}>{branch.name}</li>
               ))}
             </ul>
+          </div>
+        )}
+
+        {!['dashboard', 'branches'].includes(view) && (
+          <div className="card">
+            <h3>{view[0].toUpperCase() + view.slice(1)} Module</h3>
+            <p>
+              This section is prepared in the UI so you can navigate product management, services, sales, expenses,
+              users, customers, and consolidated reporting. Data wiring is the next implementation stage.
+            </p>
           </div>
         )}
 
