@@ -9,10 +9,19 @@ type Role = 'shop_owner' | 'manager' | 'cashier' | 'stock';
 type View = 'dashboard' | 'products' | 'sales' | 'services' | 'expenses' | 'users' | 'branches' | 'reports';
 
 type Branch = { id: string; name: string; location: string; createdAt?: string };
-type Product = { id: string; name: string; branchId: string; stock: number; purchasePrice: number; salePrice: number };
-type Sale = { id: string; type: 'product' | 'service'; itemName: string; branchId: string; qty: number; amount: number; cost: number; createdAt: string };
-type Expense = { id: string; title: string; branchId: string; amount: number; createdAt: string };
-type StaffUser = { id: string; name: string; email: string; role: Role; branchId: string };
+type AuditStamp = {
+  createdAt: string;
+  createdByUid: string;
+  createdByEmail: string;
+  updatedAt?: string;
+  updatedByUid?: string;
+  updatedByEmail?: string;
+};
+
+type Product = { id: string; name: string; branchId: string; stock: number; purchasePrice: number; salePrice: number } & AuditStamp;
+type Sale = { id: string; type: 'product' | 'service'; itemName: string; branchId: string; qty: number; amount: number; cost: number } & AuditStamp;
+type Expense = { id: string; title: string; branchId: string; amount: number } & AuditStamp;
+type StaffUser = { id: string; name: string; email: string; role: Role; branchId: string } & AuditStamp;
 type ShopMembership = { ownerUid: string; shopName: string; role: Role };
 
 const periodStart = (period: 'day' | 'week' | 'month' | 'year') => {
@@ -32,6 +41,7 @@ export default function Page() {
   const [view, setView] = useState<View>('dashboard');
   const [status, setStatus] = useState('Welcome to AlphaPOS Pro.');
   const hasLoadedUserDataRef = useRef(false);
+  const isSwitchingShopRef = useRef(false);
 
   const [branches, setBranches] = useState<Branch[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -97,7 +107,7 @@ export default function Page() {
         }
         setAvailableShops(memberships);
         const selectedShopOwnerUid = activeShopOwnerUid || memberships[0].ownerUid;
-        setActiveShopOwnerUid(selectedShopOwnerUid);
+        if (!activeShopOwnerUid) setActiveShopOwnerUid(selectedShopOwnerUid);
         const selectedShop = memberships.find((s) => s.ownerUid === selectedShopOwnerUid);
         const userDataRef = doc(db, 'users', selectedShopOwnerUid, 'pos', 'data');
         const snap = await getDoc(userDataRef);
@@ -106,6 +116,8 @@ export default function Page() {
           setBranches([defaultBranch]);
           setRole(selectedShop?.role || 'shop_owner');
           hasLoadedUserDataRef.current = true;
+        isSwitchingShopRef.current = false;
+        setStatus(`Viewing ${selectedShop?.shopName || 'selected shop'} as ${selectedShop?.role || role}.`);
           return;
         }
         const data = snap.data();
@@ -116,6 +128,8 @@ export default function Page() {
         setUsers(Array.isArray(data.users) ? data.users : []);
         setRole(selectedShop?.role || (data.role as Role) || 'shop_owner');
         hasLoadedUserDataRef.current = true;
+        isSwitchingShopRef.current = false;
+        setStatus(`Viewing ${selectedShop?.shopName || 'selected shop'} as ${selectedShop?.role || role}.`);
       } catch (error) {
         setStatus(`Failed to load your data: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }
@@ -125,7 +139,7 @@ export default function Page() {
 
   useEffect(() => {
     const saveUserData = async () => {
-      if (!authUser || !db || !hasLoadedUserDataRef.current || !activeShopOwnerUid) return;
+      if (!authUser || !db || !hasLoadedUserDataRef.current || !activeShopOwnerUid || isSwitchingShopRef.current) return;
       try {
         const userDataRef = doc(db, 'users', activeShopOwnerUid, 'pos', 'data');
         await setDoc(
@@ -178,6 +192,19 @@ export default function Page() {
   const grossProfit = totalRevenue - totalCost;
   const netProfit = grossProfit - expenses.reduce((a, e) => a + e.amount, 0);
 
+
+  const currentAuditStamp = () => ({
+    createdAt: new Date().toISOString(),
+    createdByUid: authUser?.uid || 'unknown',
+    createdByEmail: authUser?.email || 'unknown',
+  });
+
+  const updatedAuditStamp = () => ({
+    updatedAt: new Date().toISOString(),
+    updatedByUid: authUser?.uid || 'unknown',
+    updatedByEmail: authUser?.email || 'unknown',
+  });
+
   const canManageUsers = role === 'shop_owner';
   const canChangeRole = activeShopOwnerUid === authUser?.uid;
 
@@ -199,10 +226,10 @@ export default function Page() {
     if (!productForm.name || !productForm.branchId) return;
     const payload = { ...productForm, stock: Number(productForm.stock), purchasePrice: Number(productForm.purchasePrice), salePrice: Number(productForm.salePrice) };
     if (productForm.id) {
-      setProducts((prev) => prev.map((p) => (p.id === productForm.id ? { ...p, ...payload } : p)));
+      setProducts((prev) => prev.map((p) => (p.id === productForm.id ? { ...p, ...payload, ...updatedAuditStamp() } : p)));
       setStatus('Product updated.');
     } else {
-      setProducts((prev) => [...prev, { ...payload, id: crypto.randomUUID() }]);
+      setProducts((prev) => [...prev, { ...payload, id: crypto.randomUUID(), ...currentAuditStamp() }]);
       setStatus('Product created.');
     }
     setProductForm({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0 });
@@ -213,7 +240,7 @@ export default function Page() {
     const p = products.find((x) => x.id === saleForm.productId);
     if (!p || saleForm.qty < 1 || p.stock < saleForm.qty) return setStatus('Not enough stock for sale.');
     setProducts((prev) => prev.map((x) => (x.id === p.id ? { ...x, stock: x.stock - saleForm.qty } : x)));
-    setSales((prev) => [...prev, { id: crypto.randomUUID(), type: 'product', itemName: p.name, branchId: p.branchId, qty: saleForm.qty, amount: p.salePrice * saleForm.qty, cost: p.purchasePrice * saleForm.qty, createdAt: new Date().toISOString() }]);
+    setSales((prev) => [...prev, { id: crypto.randomUUID(), type: 'product', itemName: p.name, branchId: p.branchId, qty: saleForm.qty, amount: p.salePrice * saleForm.qty, cost: p.purchasePrice * saleForm.qty, ...currentAuditStamp() }]);
     setStatus('Product sale recorded and stock deducted.');
     setSaleForm({ productId: '', qty: 1 });
   };
@@ -221,7 +248,7 @@ export default function Page() {
   const makeServiceSale = (e: React.FormEvent) => {
     e.preventDefault();
     if (!serviceForm.name || !serviceForm.branchId || serviceForm.amount <= 0) return;
-    setSales((prev) => [...prev, { id: crypto.randomUUID(), type: 'service', itemName: serviceForm.name, branchId: serviceForm.branchId, qty: 1, amount: Number(serviceForm.amount), cost: 0, createdAt: new Date().toISOString() }]);
+    setSales((prev) => [...prev, { id: crypto.randomUUID(), type: 'service', itemName: serviceForm.name, branchId: serviceForm.branchId, qty: 1, amount: Number(serviceForm.amount), cost: 0, ...currentAuditStamp() }]);
     setServiceForm({ name: '', branchId: '', amount: 0 });
     setStatus('Service sale recorded.');
   };
@@ -230,10 +257,10 @@ export default function Page() {
     e.preventDefault();
     if (!expenseForm.title || !expenseForm.branchId || expenseForm.amount <= 0) return;
     if (expenseForm.id) {
-      setExpenses((prev) => prev.map((x) => (x.id === expenseForm.id ? { ...x, ...expenseForm, amount: Number(expenseForm.amount) } : x)));
+      setExpenses((prev) => prev.map((x) => (x.id === expenseForm.id ? { ...x, ...expenseForm, amount: Number(expenseForm.amount), ...updatedAuditStamp() } : x)));
       setStatus('Expense updated.');
     } else {
-      setExpenses((prev) => [...prev, { id: crypto.randomUUID(), title: expenseForm.title, branchId: expenseForm.branchId, amount: Number(expenseForm.amount), createdAt: new Date().toISOString() }]);
+      setExpenses((prev) => [...prev, { id: crypto.randomUUID(), title: expenseForm.title, branchId: expenseForm.branchId, amount: Number(expenseForm.amount), ...currentAuditStamp() }]);
       setStatus('Expense added.');
     }
     setExpenseForm({ id: '', title: '', branchId: '', amount: 0 });
@@ -245,10 +272,10 @@ export default function Page() {
     if (!userForm.name || !userForm.email || !userForm.branchId) return;
     const normalizedEmail = userForm.email.toLowerCase().trim();
     if (userForm.id) {
-      setUsers((prev) => prev.map((x) => (x.id === userForm.id ? { ...x, ...userForm } : x)));
+      setUsers((prev) => prev.map((x) => (x.id === userForm.id ? { ...x, ...userForm, ...updatedAuditStamp() } : x)));
       setStatus('User updated.');
     } else {
-      setUsers((prev) => [...prev, { ...userForm, id: crypto.randomUUID() }]);
+      setUsers((prev) => [...prev, { ...userForm, id: crypto.randomUUID(), ...currentAuditStamp() }]);
       setStatus('User created.');
     }
     if (db && activeShopOwnerUid) {
@@ -331,7 +358,7 @@ export default function Page() {
           <h1 className="text-balance">{view.charAt(0).toUpperCase() + view.slice(1)}</h1>
           <div className="status-container">
             {availableShops.length > 1 && (
-              <select value={activeShopOwnerUid} onChange={(e) => setActiveShopOwnerUid(e.target.value)} className="role-select">
+              <select value={activeShopOwnerUid} onChange={(e) => { isSwitchingShopRef.current = true; hasLoadedUserDataRef.current = false; setActiveShopOwnerUid(e.target.value); setStatus('Switching shop...'); }} className="role-select">
                 {availableShops.map((shop) => (
                   <option key={shop.ownerUid} value={shop.ownerUid}>
                     {shop.shopName} ({shop.role})
