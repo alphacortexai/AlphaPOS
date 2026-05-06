@@ -227,12 +227,12 @@ export default function Page() {
   };
 
   if (loading) {
-    return <div className="min-h-screen bg-gradient-to-br from-slate-100 via-indigo-50 to-cyan-50 text-slate-900"><main className="main auth-container"><p className="rounded-xl bg-white/80 px-4 py-3 text-sm font-medium shadow">Loading...</p></main></div>;
+    return <div className="auth-container"><main className="main auth-container"><p className="rounded-xl bg-white/80 px-4 py-3 text-sm font-medium shadow">Loading...</p></main></div>;
   }
 
   if (!authUser) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-100 via-indigo-50 to-cyan-50 text-slate-900">
+      <div className="auth-container">
         <main className="main auth-container">
           <div className="auth-card ring-1 ring-slate-200">
             <span className="auth-badge">Smart Retail Suite</span>
@@ -243,8 +243,8 @@ export default function Page() {
               <li>Fast checkout and sales tracking</li>
               <li>Expense and profit monitoring</li>
             </ul>
-            <button className="primary auth-button shadow-lg shadow-indigo-200/60" onClick={handleLogin}>
-              Sign in with Google
+            <button className="primary auth-button" onClick={handleLogin}>
+              Continue with Google
             </button>
             {!isFirebaseConfigured && <p className="error">Firebase is not configured. Please set up environment variables.</p>}
           </div>
@@ -254,11 +254,11 @@ export default function Page() {
   }
 
   return (
-    <div className="app min-h-screen bg-gradient-to-br from-slate-100 via-indigo-50 to-cyan-50 text-slate-900">
-      <aside className="sidebar shadow-2xl shadow-slate-900/20">
+    <div className="app">
+      <aside className="sidebar">
         <div className="sidebar-header">
           <h2>AlphaPOS Pro</h2>
-          <p className="sidebar-subtitle">Professional POS</p>
+          <p className="sidebar-subtitle">Operations Suite</p>
         </div>
 
         <div className="sidebar-section">
@@ -293,7 +293,7 @@ export default function Page() {
         <header className="main-header">
           <h1 className="text-balance">{view.charAt(0).toUpperCase() + view.slice(1)}</h1>
           <div className="status-container">
-            <p className="status">{status}</p>
+            <span className="status">{status}</span>
           </div>
         </header>
 
