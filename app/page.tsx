@@ -208,6 +208,29 @@ export default function Page() {
   const canManageUsers = role === 'shop_owner';
   const canChangeRole = activeShopOwnerUid === authUser?.uid;
 
+  const resetShopScopedState = () => {
+    setBranches([]);
+    setProducts([]);
+    setSales([]);
+    setExpenses([]);
+    setUsers([]);
+    setBranchForm({ name: '', location: '', id: '' });
+    setProductForm({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0 });
+    setServiceForm({ name: '', branchId: '', amount: 0 });
+    setSaleForm({ productId: '', qty: 1 });
+    setExpenseForm({ id: '', title: '', branchId: '', amount: 0 });
+    setUserForm({ id: '', name: '', email: '', role: 'cashier', branchId: '' });
+  };
+
+  const handleShopSwitch = (nextOwnerUid: string) => {
+    if (!nextOwnerUid || nextOwnerUid === activeShopOwnerUid) return;
+    isSwitchingShopRef.current = true;
+    hasLoadedUserDataRef.current = false;
+    resetShopScopedState();
+    setActiveShopOwnerUid(nextOwnerUid);
+    setStatus('Switching shop...');
+  };
+
   const saveBranch = (e: React.FormEvent) => {
     e.preventDefault();
     if (!branchForm.name.trim()) return;
@@ -358,7 +381,7 @@ export default function Page() {
           <h1 className="text-balance">{view.charAt(0).toUpperCase() + view.slice(1)}</h1>
           <div className="status-container">
             {availableShops.length > 1 && (
-              <select value={activeShopOwnerUid} onChange={(e) => { isSwitchingShopRef.current = true; hasLoadedUserDataRef.current = false; setActiveShopOwnerUid(e.target.value); setStatus('Switching shop...'); }} className="role-select">
+              <select value={activeShopOwnerUid} onChange={(e) => handleShopSwitch(e.target.value)} className="role-select">
                 {availableShops.map((shop) => (
                   <option key={shop.ownerUid} value={shop.ownerUid}>
                     {shop.shopName} ({shop.role})
