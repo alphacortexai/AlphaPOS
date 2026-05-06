@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { isFirebaseConfigured, firebaseApp } from '../lib.firebase';
 import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth';
-import { doc, getDoc, getFirestore, serverTimestamp, setDoc, updateDoc, collection, getDocs, query, where } from 'firebase/firestore';
+import { doc, getDoc, getFirestore, serverTimestamp, setDoc } from 'firebase/firestore';
 
 type Role = 'shop_owner' | 'manager' | 'cashier' | 'stock';
 type View = 'dashboard' | 'products' | 'sales' | 'services' | 'expenses' | 'users' | 'branches' | 'reports';
@@ -43,6 +43,7 @@ export default function Page() {
   const [userForm, setUserForm] = useState({ id: '', name: '', email: '', role: 'cashier' as Role, branchId: '' });
 
   const branchMap = useMemo(() => Object.fromEntries(branches.map((b) => [b.id, b.name])), [branches]);
+  const db = firebaseApp ? getFirestore(firebaseApp) : null;
 
   // Firebase Auth Setup
   useEffect(() => {
@@ -70,6 +71,48 @@ export default function Page() {
       }
     });
   }, []);
+
+  useEffect(() => {
+    const loadUserData = async () => {
+      if (!authUser || !db) return;
+      try {
+        const userDataRef = doc(db, 'users', authUser.uid, 'pos', 'data');
+        const snap = await getDoc(userDataRef);
+        if (!snap.exists()) {
+          const defaultBranch = { id: crypto.randomUUID(), name: 'Main Branch', location: 'HQ', createdAt: new Date().toISOString() };
+          setBranches([defaultBranch]);
+          return;
+        }
+        const data = snap.data();
+        setBranches(Array.isArray(data.branches) ? data.branches : []);
+        setProducts(Array.isArray(data.products) ? data.products : []);
+        setSales(Array.isArray(data.sales) ? data.sales : []);
+        setExpenses(Array.isArray(data.expenses) ? data.expenses : []);
+        setUsers(Array.isArray(data.users) ? data.users : []);
+        setRole((data.role as Role) || 'shop_owner');
+      } catch (error) {
+        setStatus(`Failed to load your data: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      }
+    };
+    void loadUserData();
+  }, [authUser, db]);
+
+  useEffect(() => {
+    const saveUserData = async () => {
+      if (!authUser || !db) return;
+      try {
+        const userDataRef = doc(db, 'users', authUser.uid, 'pos', 'data');
+        await setDoc(
+          userDataRef,
+          { role, branches, products, sales, expenses, users, updatedAt: serverTimestamp() },
+          { merge: true }
+        );
+      } catch (error) {
+        setStatus(`Failed to auto-save your data: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      }
+    };
+    void saveUserData();
+  }, [authUser, db, role, branches, products, sales, expenses, users]);
 
   const handleLogin = async () => {
     if (!firebaseApp) return;
@@ -241,7 +284,7 @@ export default function Page() {
       </aside>
 
       <main className="main">
-        <header className="main-header">
+        <header className="main-header glass">
           <h1>{view.charAt(0).toUpperCase() + view.slice(1)}</h1>
           <p className="status">{status}</p>
         </header>
