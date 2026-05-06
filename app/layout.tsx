@@ -1,5 +1,6 @@
 import './globals.css';
 import type { ReactNode } from 'react';
+import Script from 'next/script';
 
 export const metadata = {
   title: 'AlphaPOS Pro',
@@ -9,7 +10,10 @@ export const metadata = {
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        <Script src="https://cdn.tailwindcss.com" strategy="beforeInteractive" />
+        {children}
+      </body>
     </html>
   );
 }
