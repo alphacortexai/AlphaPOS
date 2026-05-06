@@ -189,6 +189,14 @@ body {
   border-bottom: 2px solid var(--border);
 }
 
+.glass {
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  border-radius: 1rem;
+  padding: 1.25rem;
+}
+
 .main-header h1 {
   margin: 0;
   font-size: 2rem;
@@ -269,6 +277,7 @@ body {
   padding: 1.5rem;
   margin-top: 1rem;
   transition: all 0.3s ease;
+  overflow-x: auto;
 }
 
 .card:hover {
@@ -324,6 +333,7 @@ select {
   color: var(--text);
   font-size: 0.875rem;
   transition: all 0.2s ease;
+  min-height: 42px;
 }
 
 input:focus,
