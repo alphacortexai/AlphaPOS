@@ -226,12 +226,12 @@ export default function Page() {
   };
 
   if (loading) {
-    return <div className="app min-h-screen bg-gradient-to-br from-slate-100 via-indigo-50 to-cyan-50 text-slate-900"><main className="main"><p className="rounded-xl bg-white/80 px-4 py-3 text-sm font-medium shadow">Loading...</p></main></div>;
+    return <div className="min-h-screen bg-gradient-to-br from-slate-100 via-indigo-50 to-cyan-50 text-slate-900"><main className="main auth-container"><p className="rounded-xl bg-white/80 px-4 py-3 text-sm font-medium shadow">Loading...</p></main></div>;
   }
 
   if (!authUser) {
     return (
-      <div className="app min-h-screen bg-gradient-to-br from-slate-100 via-indigo-50 to-cyan-50 text-slate-900">
+      <div className="min-h-screen bg-gradient-to-br from-slate-100 via-indigo-50 to-cyan-50 text-slate-900">
         <main className="main auth-container">
           <div className="auth-card ring-1 ring-slate-200">
             <span className="auth-badge">Smart Retail Suite</span>
