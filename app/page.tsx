@@ -317,11 +317,18 @@ export default function Page() {
         {view === 'branches' && (
           <section className="card">
             <h3>Branch Management</h3>
-            <form onSubmit={saveBranch} className="form">
-              <input placeholder="Branch name" value={branchForm.name} onChange={(e) => setBranchForm({ ...branchForm, name: e.target.value })} />
-              <input placeholder="Location" value={branchForm.location} onChange={(e) => setBranchForm({ ...branchForm, location: e.target.value })} />
+            <form onSubmit={saveBranch} className="form polished-form">
+              <label className="field">
+                <span>Branch Name</span>
+                <input placeholder="Branch name" value={branchForm.name} onChange={(e) => setBranchForm({ ...branchForm, name: e.target.value })} />
+              </label>
+              <label className="field">
+                <span>Location</span>
+                <input placeholder="Location" value={branchForm.location} onChange={(e) => setBranchForm({ ...branchForm, location: e.target.value })} />
+              </label>
               <button className="primary">{branchForm.id ? 'Update' : 'Add'} Branch</button>
             </form>
+            <div className="table-wrap">
             <table className="data-table">
               <thead>
                 <tr>
@@ -347,6 +354,7 @@ export default function Page() {
                 ))}
               </tbody>
             </table>
+            </div>
           </section>
         )}
 
@@ -383,6 +391,7 @@ export default function Page() {
               </label>
               <button className="primary">{productForm.id ? 'Update' : 'Add'} Product</button>
             </form>
+            <div className="table-wrap">
             <table className="data-table">
               <thead>
                 <tr>
@@ -416,6 +425,7 @@ export default function Page() {
                 ))}
               </tbody>
             </table>
+            </div>
           </section>
         )}
 
@@ -450,17 +460,26 @@ export default function Page() {
         {view === 'services' && (
           <section className="card">
             <h3>Record Service Sale</h3>
-            <form onSubmit={makeServiceSale} className="form">
-              <input placeholder="Service name" value={serviceForm.name} onChange={(e) => setServiceForm({ ...serviceForm, name: e.target.value })} />
-              <select value={serviceForm.branchId} onChange={(e) => setServiceForm({ ...serviceForm, branchId: e.target.value })}>
-                <option value="">Select branch</option>
-                {branches.map((b) => (
-                  <option key={b.id} value={b.id}>
-                    {b.name}
-                  </option>
-                ))}
-              </select>
-              <input type="number" placeholder="Amount" value={serviceForm.amount} onChange={(e) => setServiceForm({ ...serviceForm, amount: Number(e.target.value) })} />
+            <form onSubmit={makeServiceSale} className="form polished-form">
+              <label className="field">
+                <span>Service Name</span>
+                <input placeholder="Service name" value={serviceForm.name} onChange={(e) => setServiceForm({ ...serviceForm, name: e.target.value })} />
+              </label>
+              <label className="field">
+                <span>Branch</span>
+                <select value={serviceForm.branchId} onChange={(e) => setServiceForm({ ...serviceForm, branchId: e.target.value })}>
+                  <option value="">Select branch</option>
+                  {branches.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Amount ($)</span>
+                <input type="number" placeholder="Amount" value={serviceForm.amount} onChange={(e) => setServiceForm({ ...serviceForm, amount: Number(e.target.value) })} />
+              </label>
               <button className="primary">Record Service</button>
             </form>
           </section>
@@ -494,6 +513,7 @@ export default function Page() {
             <div className="expense-summary">
               <p>Day: ${expenseTotals('day').toFixed(2)} | Week: ${expenseTotals('week').toFixed(2)} | Month: ${expenseTotals('month').toFixed(2)} | Year: ${expenseTotals('year').toFixed(2)}</p>
             </div>
+            <div className="table-wrap">
             <table className="data-table">
               <tbody>
                 {expenses.map((e) => (
@@ -513,6 +533,7 @@ export default function Page() {
                 ))}
               </tbody>
             </table>
+            </div>
           </section>
         )}
 
@@ -521,24 +542,37 @@ export default function Page() {
             <h3>User Management</h3>
             {canManageUsers ? (
               <>
-                <form onSubmit={saveUser} className="form">
-                  <input placeholder="Name" value={userForm.name} onChange={(e) => setUserForm({ ...userForm, name: e.target.value })} />
-                  <input placeholder="Email" value={userForm.email} onChange={(e) => setUserForm({ ...userForm, email: e.target.value })} />
-                  <select value={userForm.role} onChange={(e) => setUserForm({ ...userForm, role: e.target.value as Role })}>
-                    <option value="manager">Manager</option>
-                    <option value="cashier">Cashier</option>
-                    <option value="stock">Stock Manager</option>
-                  </select>
-                  <select value={userForm.branchId} onChange={(e) => setUserForm({ ...userForm, branchId: e.target.value })}>
-                    <option value="">Select branch</option>
-                    {branches.map((b) => (
-                      <option key={b.id} value={b.id}>
-                        {b.name}
-                      </option>
-                    ))}
-                  </select>
+                <form onSubmit={saveUser} className="form polished-form">
+                  <label className="field">
+                    <span>Name</span>
+                    <input placeholder="Name" value={userForm.name} onChange={(e) => setUserForm({ ...userForm, name: e.target.value })} />
+                  </label>
+                  <label className="field">
+                    <span>Email</span>
+                    <input placeholder="Email" value={userForm.email} onChange={(e) => setUserForm({ ...userForm, email: e.target.value })} />
+                  </label>
+                  <label className="field">
+                    <span>Role</span>
+                    <select value={userForm.role} onChange={(e) => setUserForm({ ...userForm, role: e.target.value as Role })}>
+                      <option value="manager">Manager</option>
+                      <option value="cashier">Cashier</option>
+                      <option value="stock">Stock Manager</option>
+                    </select>
+                  </label>
+                  <label className="field">
+                    <span>Branch</span>
+                    <select value={userForm.branchId} onChange={(e) => setUserForm({ ...userForm, branchId: e.target.value })}>
+                      <option value="">Select branch</option>
+                      {branches.map((b) => (
+                        <option key={b.id} value={b.id}>
+                          {b.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                   <button className="primary">{userForm.id ? 'Update' : 'Add'} User</button>
                 </form>
+                <div className="table-wrap">
                 <table className="data-table">
                   <tbody>
                     {users.map((u) => (
@@ -559,6 +593,7 @@ export default function Page() {
                     ))}
                   </tbody>
                 </table>
+                </div>
               </>
             ) : (
               <p>Only shop owners can manage users.</p>
@@ -577,6 +612,7 @@ export default function Page() {
                 <strong>Net Profit:</strong> ${netProfit.toFixed(2)}
               </p>
             </div>
+            <div className="table-wrap">
             <table className="data-table">
               <thead>
                 <tr>
@@ -601,6 +637,7 @@ export default function Page() {
                 ))}
               </tbody>
             </table>
+            </div>
           </section>
         )}
       </main>
