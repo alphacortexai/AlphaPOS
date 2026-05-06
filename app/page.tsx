@@ -234,8 +234,14 @@ export default function Page() {
       <div className="app">
         <main className="main auth-container">
           <div className="auth-card">
+            <span className="auth-badge">Smart Retail Suite</span>
             <h1>AlphaPOS Pro</h1>
-            <p className="subtitle">Professional Point of Sale Management System</p>
+            <p className="subtitle">Organized sales, products, and expenses for modern business teams.</p>
+            <ul className="auth-highlights">
+              <li>Inventory and stock visibility</li>
+              <li>Fast checkout and sales tracking</li>
+              <li>Expense and profit monitoring</li>
+            </ul>
             <button className="primary auth-button" onClick={handleLogin}>
               Sign in with Google
             </button>
@@ -347,19 +353,34 @@ export default function Page() {
         {view === 'products' && (
           <section className="card">
             <h3>Product Management</h3>
-            <form onSubmit={saveProduct} className="form">
-              <input placeholder="Product name" value={productForm.name} onChange={(e) => setProductForm({ ...productForm, name: e.target.value })} />
-              <select value={productForm.branchId} onChange={(e) => setProductForm({ ...productForm, branchId: e.target.value })}>
-                <option value="">Select branch</option>
-                {branches.map((b) => (
-                  <option key={b.id} value={b.id}>
-                    {b.name}
-                  </option>
-                ))}
-              </select>
-              <input type="number" placeholder="Stock" value={productForm.stock} onChange={(e) => setProductForm({ ...productForm, stock: Number(e.target.value) })} />
-              <input type="number" placeholder="Purchase Price" value={productForm.purchasePrice} onChange={(e) => setProductForm({ ...productForm, purchasePrice: Number(e.target.value) })} />
-              <input type="number" placeholder="Sale Price" value={productForm.salePrice} onChange={(e) => setProductForm({ ...productForm, salePrice: Number(e.target.value) })} />
+            <form onSubmit={saveProduct} className="form polished-form">
+              <label className="field">
+                <span>Product Name</span>
+                <input placeholder="e.g. Coca-Cola 50cl" value={productForm.name} onChange={(e) => setProductForm({ ...productForm, name: e.target.value })} />
+              </label>
+              <label className="field">
+                <span>Branch</span>
+                <select value={productForm.branchId} onChange={(e) => setProductForm({ ...productForm, branchId: e.target.value })}>
+                  <option value="">Select branch</option>
+                  {branches.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Opening Stock</span>
+                <input type="number" placeholder="0" value={productForm.stock} onChange={(e) => setProductForm({ ...productForm, stock: Number(e.target.value) })} />
+              </label>
+              <label className="field">
+                <span>Purchase Price ($)</span>
+                <input type="number" placeholder="0.00" value={productForm.purchasePrice} onChange={(e) => setProductForm({ ...productForm, purchasePrice: Number(e.target.value) })} />
+              </label>
+              <label className="field">
+                <span>Selling Price ($)</span>
+                <input type="number" placeholder="0.00" value={productForm.salePrice} onChange={(e) => setProductForm({ ...productForm, salePrice: Number(e.target.value) })} />
+              </label>
               <button className="primary">{productForm.id ? 'Update' : 'Add'} Product</button>
             </form>
             <table className="data-table">
@@ -401,16 +422,22 @@ export default function Page() {
         {view === 'sales' && (
           <section className="card">
             <h3>Record Product Sale</h3>
-            <form onSubmit={makeProductSale} className="form">
-              <select value={saleForm.productId} onChange={(e) => setSaleForm({ ...saleForm, productId: e.target.value })}>
-                <option value="">Select product</option>
-                {products.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name} ({p.stock} in stock)
-                  </option>
-                ))}
-              </select>
-              <input type="number" min={1} value={saleForm.qty} onChange={(e) => setSaleForm({ ...saleForm, qty: Number(e.target.value) })} placeholder="Quantity" />
+            <form onSubmit={makeProductSale} className="form polished-form form-sales">
+              <label className="field">
+                <span>Product</span>
+                <select value={saleForm.productId} onChange={(e) => setSaleForm({ ...saleForm, productId: e.target.value })}>
+                  <option value="">Select product</option>
+                  {products.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name} ({p.stock} in stock)
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Quantity</span>
+                <input type="number" min={1} value={saleForm.qty} onChange={(e) => setSaleForm({ ...saleForm, qty: Number(e.target.value) })} placeholder="1" />
+              </label>
               <button className="primary">Record Sale</button>
             </form>
             <div className="sales-summary">
@@ -442,17 +469,26 @@ export default function Page() {
         {view === 'expenses' && (
           <section className="card">
             <h3>Expense Management</h3>
-            <form onSubmit={saveExpense} className="form">
-              <input placeholder="Expense title" value={expenseForm.title} onChange={(e) => setExpenseForm({ ...expenseForm, title: e.target.value })} />
-              <select value={expenseForm.branchId} onChange={(e) => setExpenseForm({ ...expenseForm, branchId: e.target.value })}>
-                <option value="">Select branch</option>
-                {branches.map((b) => (
-                  <option key={b.id} value={b.id}>
-                    {b.name}
-                  </option>
-                ))}
-              </select>
-              <input type="number" placeholder="Amount" value={expenseForm.amount} onChange={(e) => setExpenseForm({ ...expenseForm, amount: Number(e.target.value) })} />
+            <form onSubmit={saveExpense} className="form polished-form form-expense">
+              <label className="field">
+                <span>Expense Title</span>
+                <input placeholder="e.g. Utility bill, Internet" value={expenseForm.title} onChange={(e) => setExpenseForm({ ...expenseForm, title: e.target.value })} />
+              </label>
+              <label className="field">
+                <span>Branch</span>
+                <select value={expenseForm.branchId} onChange={(e) => setExpenseForm({ ...expenseForm, branchId: e.target.value })}>
+                  <option value="">Select branch</option>
+                  {branches.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Amount ($)</span>
+                <input type="number" placeholder="0.00" value={expenseForm.amount} onChange={(e) => setExpenseForm({ ...expenseForm, amount: Number(e.target.value) })} />
+              </label>
               <button className="primary">{expenseForm.id ? 'Update' : 'Add'} Expense</button>
             </form>
             <div className="expense-summary">
