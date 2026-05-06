@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { isFirebaseConfigured, firebaseApp } from '../lib.firebase';
 import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth';
-import { doc, getDoc, getFirestore, serverTimestamp, setDoc } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, getFirestore, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
 
 type Role = 'shop_owner' | 'manager' | 'cashier' | 'stock';
 type View = 'dashboard' | 'products' | 'sales' | 'services' | 'expenses' | 'users' | 'branches' | 'reports';
@@ -13,6 +13,7 @@ type Product = { id: string; name: string; branchId: string; stock: number; purc
 type Sale = { id: string; type: 'product' | 'service'; itemName: string; branchId: string; qty: number; amount: number; cost: number; createdAt: string };
 type Expense = { id: string; title: string; branchId: string; amount: number; createdAt: string };
 type StaffUser = { id: string; name: string; email: string; role: Role; branchId: string };
+type ShopMembership = { ownerUid: string; shopName: string; role: Role };
 
 const periodStart = (period: 'day' | 'week' | 'month' | 'year') => {
   const d = new Date();
@@ -26,6 +27,8 @@ export default function Page() {
   const [authUser, setAuthUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [role, setRole] = useState<Role>('shop_owner');
+  const [activeShopOwnerUid, setActiveShopOwnerUid] = useState('');
+  const [availableShops, setAvailableShops] = useState<ShopMembership[]>([]);
   const [view, setView] = useState<View>('dashboard');
   const [status, setStatus] = useState('Welcome to AlphaPOS Pro.');
   const hasLoadedUserDataRef = useRef(false);
@@ -61,6 +64,8 @@ export default function Page() {
       setLoading(false);
       hasLoadedUserDataRef.current = false;
       if (!user) {
+        setActiveShopOwnerUid('');
+        setAvailableShops([]);
         setBranches([]);
         setProducts([]);
         setSales([]);
@@ -74,11 +79,32 @@ export default function Page() {
     const loadUserData = async () => {
       if (!authUser || !db) return;
       try {
-        const userDataRef = doc(db, 'users', authUser.uid, 'pos', 'data');
+        const normalizedEmail = authUser.email?.toLowerCase().trim();
+        const memberships: ShopMembership[] = [{ ownerUid: authUser.uid, shopName: 'My Shop', role: 'shop_owner' }];
+        if (normalizedEmail) {
+          const membershipsQuery = query(collection(db, 'shopMemberships'), where('email', '==', normalizedEmail));
+          const membershipSnap = await getDocs(membershipsQuery);
+          membershipSnap.forEach((m) => {
+            const data = m.data();
+            if (data.ownerUid && data.ownerUid !== authUser.uid) {
+              memberships.push({
+                ownerUid: data.ownerUid as string,
+                shopName: (data.shopName as string) || 'Linked Shop',
+                role: (data.role as Role) || 'cashier',
+              });
+            }
+          });
+        }
+        setAvailableShops(memberships);
+        const selectedShopOwnerUid = activeShopOwnerUid || memberships[0].ownerUid;
+        setActiveShopOwnerUid(selectedShopOwnerUid);
+        const selectedShop = memberships.find((s) => s.ownerUid === selectedShopOwnerUid);
+        const userDataRef = doc(db, 'users', selectedShopOwnerUid, 'pos', 'data');
         const snap = await getDoc(userDataRef);
         if (!snap.exists()) {
           const defaultBranch = { id: crypto.randomUUID(), name: 'Main Branch', location: 'HQ', createdAt: new Date().toISOString() };
           setBranches([defaultBranch]);
+          setRole(selectedShop?.role || 'shop_owner');
           hasLoadedUserDataRef.current = true;
           return;
         }
@@ -88,20 +114,20 @@ export default function Page() {
         setSales(Array.isArray(data.sales) ? data.sales : []);
         setExpenses(Array.isArray(data.expenses) ? data.expenses : []);
         setUsers(Array.isArray(data.users) ? data.users : []);
-        setRole((data.role as Role) || 'shop_owner');
+        setRole(selectedShop?.role || (data.role as Role) || 'shop_owner');
         hasLoadedUserDataRef.current = true;
       } catch (error) {
         setStatus(`Failed to load your data: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }
     };
     void loadUserData();
-  }, [authUser, db]);
+  }, [activeShopOwnerUid, authUser, db]);
 
   useEffect(() => {
     const saveUserData = async () => {
-      if (!authUser || !db || !hasLoadedUserDataRef.current) return;
+      if (!authUser || !db || !hasLoadedUserDataRef.current || !activeShopOwnerUid) return;
       try {
-        const userDataRef = doc(db, 'users', authUser.uid, 'pos', 'data');
+        const userDataRef = doc(db, 'users', activeShopOwnerUid, 'pos', 'data');
         await setDoc(
           userDataRef,
           { role, branches, products, sales, expenses, users, updatedAt: serverTimestamp() },
@@ -112,7 +138,7 @@ export default function Page() {
       }
     };
     void saveUserData();
-  }, [authUser, db, role, branches, products, sales, expenses, users]);
+  }, [activeShopOwnerUid, authUser, db, role, branches, products, sales, expenses, users]);
 
   const handleLogin = async () => {
     if (!firebaseApp) return;
@@ -153,6 +179,7 @@ export default function Page() {
   const netProfit = grossProfit - expenses.reduce((a, e) => a + e.amount, 0);
 
   const canManageUsers = role === 'shop_owner';
+  const canChangeRole = activeShopOwnerUid === authUser?.uid;
 
   const saveBranch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -216,12 +243,22 @@ export default function Page() {
     e.preventDefault();
     if (!canManageUsers) return setStatus('Only shop owner can manage users.');
     if (!userForm.name || !userForm.email || !userForm.branchId) return;
+    const normalizedEmail = userForm.email.toLowerCase().trim();
     if (userForm.id) {
       setUsers((prev) => prev.map((x) => (x.id === userForm.id ? { ...x, ...userForm } : x)));
       setStatus('User updated.');
     } else {
       setUsers((prev) => [...prev, { ...userForm, id: crypto.randomUUID() }]);
       setStatus('User created.');
+    }
+    if (db && activeShopOwnerUid) {
+      void setDoc(doc(db, 'shopMemberships', `${activeShopOwnerUid}_${normalizedEmail}`), {
+        email: normalizedEmail,
+        ownerUid: activeShopOwnerUid,
+        role: userForm.role,
+        shopName: branches.find((b) => b.id === userForm.branchId)?.name || 'Shop',
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
     }
     setUserForm({ id: '', name: '', email: '', role: 'cashier', branchId: '' });
   };
@@ -263,7 +300,7 @@ export default function Page() {
 
         <div className="sidebar-section">
           <label className="role-label">Your Role:</label>
-          <select value={role} onChange={(e) => setRole(e.target.value as Role)} className="role-select">
+          <select value={role} onChange={(e) => setRole(e.target.value as Role)} className="role-select" disabled={!canChangeRole}>
             <option value="shop_owner">Shop Owner</option>
             <option value="manager">Manager</option>
             <option value="cashier">Cashier</option>
@@ -293,6 +330,15 @@ export default function Page() {
         <header className="main-header">
           <h1 className="text-balance">{view.charAt(0).toUpperCase() + view.slice(1)}</h1>
           <div className="status-container">
+            {availableShops.length > 1 && (
+              <select value={activeShopOwnerUid} onChange={(e) => setActiveShopOwnerUid(e.target.value)} className="role-select">
+                {availableShops.map((shop) => (
+                  <option key={shop.ownerUid} value={shop.ownerUid}>
+                    {shop.shopName} ({shop.role})
+                  </option>
+                ))}
+              </select>
+            )}
             <span className="status">{status}</span>
           </div>
         </header>
