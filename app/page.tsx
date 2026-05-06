@@ -290,9 +290,11 @@ export default function Page() {
       </aside>
 
       <main className="main">
-        <header className="main-header glass">
+        <header className="main-header">
           <h1 className="text-balance">{view.charAt(0).toUpperCase() + view.slice(1)}</h1>
-          <p className="status">{status}</p>
+          <div className="status-container">
+            <p className="status">{status}</p>
+          </div>
         </header>
 
         {view === 'dashboard' && (
@@ -309,7 +311,7 @@ export default function Page() {
             ].map((metric) => (
               <article key={metric.label} className={`card dashboard-card ${metric.type === 'count' ? 'dashboard-card--count' : ''}`}>
                 <h4>{metric.label}</h4>
-                <strong className="card-value">{metric.type === 'currency' ? formatUGX(metric.value) : Number(metric.value).toLocaleString()}</strong>
+                <div className="card-value">{metric.type === 'currency' ? formatUGX(metric.value) : Number(metric.value).toLocaleString()}</div>
               </article>
             ))}
           </section>
