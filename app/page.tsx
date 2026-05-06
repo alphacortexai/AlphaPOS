@@ -3,16 +3,26 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { isFirebaseConfigured, firebaseApp } from '../lib.firebase';
 import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth';
-import { doc, getDoc, getFirestore, serverTimestamp, setDoc } from 'firebase/firestore';
+import { collection, doc, getDoc, getFirestore, serverTimestamp, setDoc } from 'firebase/firestore';
 
 type Role = 'shop_owner' | 'manager' | 'cashier' | 'stock';
-type View = 'dashboard' | 'products' | 'sales' | 'services' | 'expenses' | 'users' | 'branches' | 'reports';
+type Category = 'dashboard' | 'products' | 'sales' | 'services' | 'expenses' | 'users' | 'branches' | 'reports';
+type View = Category | 'settings';
 
 type Branch = { id: string; name: string; location: string; createdAt?: string };
 type Product = { id: string; name: string; branchId: string; stock: number; purchasePrice: number; salePrice: number };
 type Sale = { id: string; type: 'product' | 'service'; itemName: string; branchId: string; qty: number; amount: number; cost: number; createdAt: string };
 type Expense = { id: string; title: string; branchId: string; amount: number; createdAt: string };
 type StaffUser = { id: string; name: string; email: string; role: Role; branchId: string };
+type PermissionMatrix = Record<Role, Record<Category, boolean>>;
+
+const categories: Category[] = ['dashboard', 'products', 'sales', 'services', 'expenses', 'users', 'branches', 'reports'];
+const defaultPermissions: PermissionMatrix = {
+  shop_owner: Object.fromEntries(categories.map((c) => [c, true])) as Record<Category, boolean>,
+  manager: { dashboard: true, products: true, sales: true, services: true, expenses: true, users: false, branches: false, reports: true },
+  cashier: { dashboard: true, products: false, sales: true, services: true, expenses: false, users: false, branches: false, reports: false },
+  stock: { dashboard: true, products: true, sales: false, services: false, expenses: false, users: false, branches: false, reports: false },
+};
 
 const periodStart = (period: 'day' | 'week' | 'month' | 'year') => {
   const d = new Date();
@@ -28,6 +38,9 @@ export default function Page() {
   const [role, setRole] = useState<Role>('shop_owner');
   const [view, setView] = useState<View>('dashboard');
   const [status, setStatus] = useState('Welcome to AlphaPOS Pro.');
+  const [activeShopId, setActiveShopId] = useState('');
+  const [permissions, setPermissions] = useState<PermissionMatrix>(defaultPermissions);
+  const [assignedBranchId, setAssignedBranchId] = useState('');
   const hasLoadedUserDataRef = useRef(false);
 
   const [branches, setBranches] = useState<Branch[]>([]);
@@ -43,605 +56,83 @@ export default function Page() {
   const [expenseForm, setExpenseForm] = useState({ id: '', title: '', branchId: '', amount: 0 });
   const [userForm, setUserForm] = useState({ id: '', name: '', email: '', role: 'cashier' as Role, branchId: '' });
 
-  const branchMap = useMemo(() => Object.fromEntries(branches.map((b) => [b.id, b.name])), [branches]);
   const db = firebaseApp ? getFirestore(firebaseApp) : null;
+  const branchMap = useMemo(() => Object.fromEntries(branches.map((b) => [b.id, b.name])), [branches]);
   const formatUGX = (value: number) => `UGX ${new Intl.NumberFormat('en-UG', { maximumFractionDigits: 0 }).format(Math.round(value))}`;
+  const canManageUsers = role === 'shop_owner' || permissions[role].users;
+  const allowedBranchIds = role === 'shop_owner' ? branches.map((b) => b.id) : assignedBranchId ? [assignedBranchId] : [];
+  const canAccess = (c: Category) => role === 'shop_owner' || permissions[role][c];
+  const visibleProducts = products.filter((p) => allowedBranchIds.includes(p.branchId));
+  const visibleSales = sales.filter((s) => allowedBranchIds.includes(s.branchId));
+  const visibleExpenses = expenses.filter((e) => allowedBranchIds.includes(e.branchId));
 
-  // Firebase Auth Setup
   useEffect(() => {
-    const app = firebaseApp;
-    if (!app) {
-      setLoading(false);
-      return;
-    }
-
-    const auth = getAuth(app);
+    if (!firebaseApp) return setLoading(false);
+    const auth = getAuth(firebaseApp);
     return onAuthStateChanged(auth, (user) => {
       setAuthUser(user);
       setLoading(false);
       hasLoadedUserDataRef.current = false;
-      if (!user) {
-        setBranches([]);
-        setProducts([]);
-        setSales([]);
-        setExpenses([]);
-        setUsers([]);
-      }
     });
   }, []);
 
   useEffect(() => {
     const loadUserData = async () => {
       if (!authUser || !db) return;
-      try {
-        const userDataRef = doc(db, 'users', authUser.uid, 'pos', 'data');
-        const snap = await getDoc(userDataRef);
-        if (!snap.exists()) {
-          const defaultBranch = { id: crypto.randomUUID(), name: 'Main Branch', location: 'HQ', createdAt: new Date().toISOString() };
-          setBranches([defaultBranch]);
-          hasLoadedUserDataRef.current = true;
-          return;
-        }
-        const data = snap.data();
-        setBranches(Array.isArray(data.branches) ? data.branches : []);
-        setProducts(Array.isArray(data.products) ? data.products : []);
-        setSales(Array.isArray(data.sales) ? data.sales : []);
-        setExpenses(Array.isArray(data.expenses) ? data.expenses : []);
-        setUsers(Array.isArray(data.users) ? data.users : []);
-        setRole((data.role as Role) || 'shop_owner');
+      const emailKey = (authUser.email || '').toLowerCase();
+      const inviteSnap = emailKey ? await getDoc(doc(db, 'shopInvites', emailKey)) : null;
+      const invite = inviteSnap?.exists() ? inviteSnap.data() : null;
+      const shopId = (invite?.shopId as string) || authUser.uid;
+      setActiveShopId(shopId);
+      setRole((invite?.role as Role) || 'shop_owner');
+      setAssignedBranchId((invite?.branchId as string) || '');
+
+      const shopDataRef = doc(db, 'shops', shopId, 'pos', 'data');
+      const snap = await getDoc(shopDataRef);
+      if (!snap.exists()) {
+        const defaultBranch = { id: crypto.randomUUID(), name: 'Main Branch', location: 'HQ', createdAt: new Date().toISOString() };
+        setBranches([defaultBranch]);
         hasLoadedUserDataRef.current = true;
-      } catch (error) {
-        setStatus(`Failed to load your data: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        return;
       }
+      const data = snap.data();
+      setBranches(Array.isArray(data.branches) ? data.branches : []);
+      setProducts(Array.isArray(data.products) ? data.products : []);
+      setSales(Array.isArray(data.sales) ? data.sales : []);
+      setExpenses(Array.isArray(data.expenses) ? data.expenses : []);
+      setUsers(Array.isArray(data.users) ? data.users : []);
+      setPermissions((data.permissions as PermissionMatrix) || defaultPermissions);
+      hasLoadedUserDataRef.current = true;
     };
     void loadUserData();
   }, [authUser, db]);
 
   useEffect(() => {
     const saveUserData = async () => {
-      if (!authUser || !db || !hasLoadedUserDataRef.current) return;
-      try {
-        const userDataRef = doc(db, 'users', authUser.uid, 'pos', 'data');
-        await setDoc(
-          userDataRef,
-          { role, branches, products, sales, expenses, users, updatedAt: serverTimestamp() },
-          { merge: true }
-        );
-      } catch (error) {
-        setStatus(`Failed to auto-save your data: ${error instanceof Error ? error.message : 'Unknown error'}`);
-      }
+      if (!authUser || !db || !hasLoadedUserDataRef.current || !activeShopId) return;
+      const shopDataRef = doc(db, 'shops', activeShopId, 'pos', 'data');
+      await setDoc(shopDataRef, { branches, products, sales, expenses, users, permissions, updatedAt: serverTimestamp() }, { merge: true });
     };
     void saveUserData();
-  }, [authUser, db, role, branches, products, sales, expenses, users]);
+  }, [authUser, db, activeShopId, branches, products, sales, expenses, users, permissions]);
 
-  const handleLogin = async () => {
-    if (!firebaseApp) return;
-    const auth = getAuth(firebaseApp);
-    const provider = new GoogleAuthProvider();
-    try {
-      await signInWithPopup(auth, provider);
-      setStatus('Logged in successfully!');
-    } catch (error) {
-      setStatus(`Login failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  };
+  const handleLogin = async () => firebaseApp && signInWithPopup(getAuth(firebaseApp), new GoogleAuthProvider());
+  const handleLogout = async () => firebaseApp && signOut(getAuth(firebaseApp));
+  const salesTotals = (p: 'day' | 'week' | 'month' | 'year') => visibleSales.filter((s) => new Date(s.createdAt) >= periodStart(p)).reduce((a, s) => a + s.amount, 0);
+  const expenseTotals = (p: 'day' | 'week' | 'month' | 'year') => visibleExpenses.filter((e) => new Date(e.createdAt) >= periodStart(p)).reduce((a, e) => a + e.amount, 0);
 
-  const handleLogout = async () => {
-    if (!firebaseApp) return;
-    const auth = getAuth(firebaseApp);
-    try {
-      await signOut(auth);
-      setStatus('Logged out successfully!');
-    } catch (error) {
-      setStatus(`Logout failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  };
-
-  const salesTotals = (period: 'day' | 'week' | 'month' | 'year') => {
-    const start = periodStart(period);
-    return sales.filter((s) => new Date(s.createdAt) >= start).reduce((a, s) => a + s.amount, 0);
-  };
-
-  const expenseTotals = (period: 'day' | 'week' | 'month' | 'year') => {
-    const start = periodStart(period);
-    return expenses.filter((e) => new Date(e.createdAt) >= start).reduce((a, e) => a + e.amount, 0);
-  };
-
-  const totalCost = sales.reduce((a, s) => a + s.cost, 0);
-  const totalRevenue = sales.reduce((a, s) => a + s.amount, 0);
-  const grossProfit = totalRevenue - totalCost;
-  const netProfit = grossProfit - expenses.reduce((a, e) => a + e.amount, 0);
-
-  const canManageUsers = role === 'shop_owner';
-
-  const saveBranch = (e: React.FormEvent) => {
+  const saveUser = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!branchForm.name.trim()) return;
-    if (branchForm.id) {
-      setBranches((prev) => prev.map((b) => (b.id === branchForm.id ? { ...b, name: branchForm.name, location: branchForm.location } : b)));
-      setStatus('Branch updated.');
-    } else {
-      setBranches((prev) => [...prev, { id: crypto.randomUUID(), name: branchForm.name, location: branchForm.location, createdAt: new Date().toISOString() }]);
-      setStatus('Branch created.');
-    }
-    setBranchForm({ name: '', location: '', id: '' });
-  };
-
-  const saveProduct = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!productForm.name || !productForm.branchId) return;
-    const payload = { ...productForm, stock: Number(productForm.stock), purchasePrice: Number(productForm.purchasePrice), salePrice: Number(productForm.salePrice) };
-    if (productForm.id) {
-      setProducts((prev) => prev.map((p) => (p.id === productForm.id ? { ...p, ...payload } : p)));
-      setStatus('Product updated.');
-    } else {
-      setProducts((prev) => [...prev, { ...payload, id: crypto.randomUUID() }]);
-      setStatus('Product created.');
-    }
-    setProductForm({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0 });
-  };
-
-  const makeProductSale = (e: React.FormEvent) => {
-    e.preventDefault();
-    const p = products.find((x) => x.id === saleForm.productId);
-    if (!p || saleForm.qty < 1 || p.stock < saleForm.qty) return setStatus('Not enough stock for sale.');
-    setProducts((prev) => prev.map((x) => (x.id === p.id ? { ...x, stock: x.stock - saleForm.qty } : x)));
-    setSales((prev) => [...prev, { id: crypto.randomUUID(), type: 'product', itemName: p.name, branchId: p.branchId, qty: saleForm.qty, amount: p.salePrice * saleForm.qty, cost: p.purchasePrice * saleForm.qty, createdAt: new Date().toISOString() }]);
-    setStatus('Product sale recorded and stock deducted.');
-    setSaleForm({ productId: '', qty: 1 });
-  };
-
-  const makeServiceSale = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!serviceForm.name || !serviceForm.branchId || serviceForm.amount <= 0) return;
-    setSales((prev) => [...prev, { id: crypto.randomUUID(), type: 'service', itemName: serviceForm.name, branchId: serviceForm.branchId, qty: 1, amount: Number(serviceForm.amount), cost: 0, createdAt: new Date().toISOString() }]);
-    setServiceForm({ name: '', branchId: '', amount: 0 });
-    setStatus('Service sale recorded.');
-  };
-
-  const saveExpense = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!expenseForm.title || !expenseForm.branchId || expenseForm.amount <= 0) return;
-    if (expenseForm.id) {
-      setExpenses((prev) => prev.map((x) => (x.id === expenseForm.id ? { ...x, ...expenseForm, amount: Number(expenseForm.amount) } : x)));
-      setStatus('Expense updated.');
-    } else {
-      setExpenses((prev) => [...prev, { id: crypto.randomUUID(), title: expenseForm.title, branchId: expenseForm.branchId, amount: Number(expenseForm.amount), createdAt: new Date().toISOString() }]);
-      setStatus('Expense added.');
-    }
-    setExpenseForm({ id: '', title: '', branchId: '', amount: 0 });
-  };
-
-  const saveUser = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!canManageUsers) return setStatus('Only shop owner can manage users.');
-    if (!userForm.name || !userForm.email || !userForm.branchId) return;
-    if (userForm.id) {
-      setUsers((prev) => prev.map((x) => (x.id === userForm.id ? { ...x, ...userForm } : x)));
-      setStatus('User updated.');
-    } else {
-      setUsers((prev) => [...prev, { ...userForm, id: crypto.randomUUID() }]);
-      setStatus('User created.');
-    }
+    if (!db || !canManageUsers || !userForm.email || !userForm.branchId || !activeShopId) return;
+    const payload = { ...userForm, id: userForm.id || crypto.randomUUID() };
+    setUsers((prev) => (userForm.id ? prev.map((x) => (x.id === userForm.id ? payload : x)) : [...prev, payload]));
+    await setDoc(doc(collection(db, 'shopInvites'), userForm.email.toLowerCase()), { shopId: activeShopId, role: userForm.role, branchId: userForm.branchId, updatedAt: serverTimestamp() }, { merge: true });
     setUserForm({ id: '', name: '', email: '', role: 'cashier', branchId: '' });
+    setStatus('User added to your shop. They will login into your shop workspace with assigned permissions.');
   };
 
-  if (loading) {
-    return <div className="min-h-screen bg-gradient-to-br from-slate-100 via-indigo-50 to-cyan-50 text-slate-900"><main className="main auth-container"><p className="rounded-xl bg-white/80 px-4 py-3 text-sm font-medium shadow">Loading...</p></main></div>;
-  }
+  if (loading) return <div className="main auth-container">Loading...</div>;
+  if (!authUser) return <button onClick={handleLogin}>Sign in with Google</button>;
 
-  if (!authUser) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-100 via-indigo-50 to-cyan-50 text-slate-900">
-        <main className="main auth-container">
-          <div className="auth-card ring-1 ring-slate-200">
-            <span className="auth-badge">Smart Retail Suite</span>
-            <h1>AlphaPOS Pro</h1>
-            <p className="subtitle">Organized sales, products, and expenses for modern business teams.</p>
-            <ul className="auth-highlights">
-              <li>Inventory and stock visibility</li>
-              <li>Fast checkout and sales tracking</li>
-              <li>Expense and profit monitoring</li>
-            </ul>
-            <button className="primary auth-button shadow-lg shadow-indigo-200/60" onClick={handleLogin}>
-              Sign in with Google
-            </button>
-            {!isFirebaseConfigured && <p className="error">Firebase is not configured. Please set up environment variables.</p>}
-          </div>
-        </main>
-      </div>
-    );
-  }
-
-  return (
-    <div className="app min-h-screen bg-gradient-to-br from-slate-100 via-indigo-50 to-cyan-50 text-slate-900">
-      <aside className="sidebar shadow-2xl shadow-slate-900/20">
-        <div className="sidebar-header">
-          <h2>AlphaPOS Pro</h2>
-          <p className="sidebar-subtitle">Professional POS</p>
-        </div>
-
-        <div className="sidebar-section">
-          <label className="role-label">Your Role:</label>
-          <select value={role} onChange={(e) => setRole(e.target.value as Role)} className="role-select">
-            <option value="shop_owner">Shop Owner</option>
-            <option value="manager">Manager</option>
-            <option value="cashier">Cashier</option>
-            <option value="stock">Stock Manager</option>
-          </select>
-        </div>
-
-        <nav className="sidebar-nav">
-          {(['dashboard', 'products', 'sales', 'services', 'expenses', 'users', 'branches', 'reports'] as View[]).map((v) => (
-            <button key={v} className={`nav-button ${view === v ? 'active' : ''}`} onClick={() => setView(v)}>
-              {v.charAt(0).toUpperCase() + v.slice(1)}
-            </button>
-          ))}
-        </nav>
-
-        <div className="sidebar-footer">
-          <div className="user-info">
-            <p className="user-email">{authUser.email}</p>
-          </div>
-          <button className="logout-button" onClick={handleLogout}>
-            Logout
-          </button>
-        </div>
-      </aside>
-
-      <main className="main">
-        <header className="main-header glass">
-          <h1 className="text-balance">{view.charAt(0).toUpperCase() + view.slice(1)}</h1>
-          <p className="status">{status}</p>
-        </header>
-
-        {view === 'dashboard' && (
-          <section className="grid">
-            {[
-              { label: 'Daily Sales', value: salesTotals('day'), type: 'currency' },
-              { label: 'Weekly Sales', value: salesTotals('week'), type: 'currency' },
-              { label: 'Monthly Sales', value: salesTotals('month'), type: 'currency' },
-              { label: 'Yearly Sales', value: salesTotals('year'), type: 'currency' },
-              { label: 'Gross Profit', value: grossProfit, type: 'currency' },
-              { label: 'Net Profit', value: netProfit, type: 'currency' },
-              { label: 'Products', value: products.length, type: 'count' },
-              { label: 'Users', value: users.length, type: 'count' },
-            ].map((metric) => (
-              <article key={metric.label} className={`card dashboard-card ${metric.type === 'count' ? 'dashboard-card--count' : ''}`}>
-                <h4>{metric.label}</h4>
-                <strong className="card-value">{metric.type === 'currency' ? formatUGX(metric.value) : Number(metric.value).toLocaleString()}</strong>
-              </article>
-            ))}
-          </section>
-        )}
-
-        {view === 'branches' && (
-          <section className="card">
-            <h3>Branch Management</h3>
-            <form onSubmit={saveBranch} className="form polished-form">
-              <label className="field">
-                <span>Branch Name</span>
-                <input placeholder="Branch name" value={branchForm.name} onChange={(e) => setBranchForm({ ...branchForm, name: e.target.value })} />
-              </label>
-              <label className="field">
-                <span>Location</span>
-                <input placeholder="Location" value={branchForm.location} onChange={(e) => setBranchForm({ ...branchForm, location: e.target.value })} />
-              </label>
-              <button className="primary">{branchForm.id ? 'Update' : 'Add'} Branch</button>
-            </form>
-            <div className="table-wrap">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Location</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {branches.map((b) => (
-                  <tr key={b.id}>
-                    <td>{b.name}</td>
-                    <td>{b.location}</td>
-                    <td>
-                      <button className="edit-btn" onClick={() => setBranchForm({ id: b.id, name: b.name, location: b.location })}>
-                        Edit
-                      </button>
-                      <button className="delete-btn" onClick={() => setBranches((prev) => prev.filter((x) => x.id !== b.id))}>
-                        Delete
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            </div>
-          </section>
-        )}
-
-        {view === 'products' && (
-          <section className="card">
-            <h3>Product Management</h3>
-            <form onSubmit={saveProduct} className="form polished-form">
-              <label className="field">
-                <span>Product Name</span>
-                <input placeholder="e.g. Coca-Cola 50cl" value={productForm.name} onChange={(e) => setProductForm({ ...productForm, name: e.target.value })} />
-              </label>
-              <label className="field">
-                <span>Branch</span>
-                <select value={productForm.branchId} onChange={(e) => setProductForm({ ...productForm, branchId: e.target.value })}>
-                  <option value="">Select branch</option>
-                  {branches.map((b) => (
-                    <option key={b.id} value={b.id}>
-                      {b.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="field">
-                <span>Opening Stock</span>
-                <input type="number" placeholder="0" value={productForm.stock} onChange={(e) => setProductForm({ ...productForm, stock: Number(e.target.value) })} />
-              </label>
-              <label className="field">
-                <span>Purchase Price (UGX)</span>
-                <input type="number" placeholder="0.00" value={productForm.purchasePrice} onChange={(e) => setProductForm({ ...productForm, purchasePrice: Number(e.target.value) })} />
-              </label>
-              <label className="field">
-                <span>Selling Price (UGX)</span>
-                <input type="number" placeholder="0.00" value={productForm.salePrice} onChange={(e) => setProductForm({ ...productForm, salePrice: Number(e.target.value) })} />
-              </label>
-              <button className="primary">{productForm.id ? 'Update' : 'Add'} Product</button>
-            </form>
-            <div className="table-wrap">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Branch</th>
-                  <th>Stock</th>
-                  <th>Buy</th>
-                  <th>Sell</th>
-                  <th>Unit Profit</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {products.map((p) => (
-                  <tr key={p.id}>
-                    <td>{p.name}</td>
-                    <td>{branchMap[p.branchId]}</td>
-                    <td>{p.stock}</td>
-                    <td>{formatUGX(p.purchasePrice)}</td>
-                    <td>{formatUGX(p.salePrice)}</td>
-                    <td>{formatUGX(p.salePrice - p.purchasePrice)}</td>
-                    <td>
-                      <button className="edit-btn" onClick={() => setProductForm(p)}>
-                        Edit
-                      </button>
-                      <button className="delete-btn" onClick={() => setProducts((prev) => prev.filter((x) => x.id !== p.id))}>
-                        Delete
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            </div>
-          </section>
-        )}
-
-        {view === 'sales' && (
-          <section className="card">
-            <h3>Record Product Sale</h3>
-            <form onSubmit={makeProductSale} className="form polished-form form-sales">
-              <label className="field">
-                <span>Product</span>
-                <select value={saleForm.productId} onChange={(e) => setSaleForm({ ...saleForm, productId: e.target.value })}>
-                  <option value="">Select product</option>
-                  {products.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name} ({p.stock} in stock)
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="field">
-                <span>Quantity</span>
-                <input type="number" min={1} value={saleForm.qty} onChange={(e) => setSaleForm({ ...saleForm, qty: Number(e.target.value) })} placeholder="1" />
-              </label>
-              <button className="primary">Record Sale</button>
-            </form>
-            <div className="sales-summary">
-              <p>Recent Sales: {sales.length}</p>
-              <p>Total Revenue: {formatUGX(totalRevenue)}</p>
-            </div>
-          </section>
-        )}
-
-        {view === 'services' && (
-          <section className="card">
-            <h3>Record Service Sale</h3>
-            <form onSubmit={makeServiceSale} className="form polished-form">
-              <label className="field">
-                <span>Service Name</span>
-                <input placeholder="Service name" value={serviceForm.name} onChange={(e) => setServiceForm({ ...serviceForm, name: e.target.value })} />
-              </label>
-              <label className="field">
-                <span>Branch</span>
-                <select value={serviceForm.branchId} onChange={(e) => setServiceForm({ ...serviceForm, branchId: e.target.value })}>
-                  <option value="">Select branch</option>
-                  {branches.map((b) => (
-                    <option key={b.id} value={b.id}>
-                      {b.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="field">
-                <span>Amount (UGX)</span>
-                <input type="number" placeholder="Amount" value={serviceForm.amount} onChange={(e) => setServiceForm({ ...serviceForm, amount: Number(e.target.value) })} />
-              </label>
-              <button className="primary">Record Service</button>
-            </form>
-          </section>
-        )}
-
-        {view === 'expenses' && (
-          <section className="card">
-            <h3>Expense Management</h3>
-            <form onSubmit={saveExpense} className="form polished-form form-expense">
-              <label className="field">
-                <span>Expense Title</span>
-                <input placeholder="e.g. Utility bill, Internet" value={expenseForm.title} onChange={(e) => setExpenseForm({ ...expenseForm, title: e.target.value })} />
-              </label>
-              <label className="field">
-                <span>Branch</span>
-                <select value={expenseForm.branchId} onChange={(e) => setExpenseForm({ ...expenseForm, branchId: e.target.value })}>
-                  <option value="">Select branch</option>
-                  {branches.map((b) => (
-                    <option key={b.id} value={b.id}>
-                      {b.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="field">
-                <span>Amount (UGX)</span>
-                <input type="number" placeholder="0.00" value={expenseForm.amount} onChange={(e) => setExpenseForm({ ...expenseForm, amount: Number(e.target.value) })} />
-              </label>
-              <button className="primary">{expenseForm.id ? 'Update' : 'Add'} Expense</button>
-            </form>
-            <div className="expense-summary">
-              <p>Day: {formatUGX(expenseTotals('day'))} | Week: {formatUGX(expenseTotals('week'))} | Month: {formatUGX(expenseTotals('month'))} | Year: {formatUGX(expenseTotals('year'))}</p>
-            </div>
-            <div className="table-wrap">
-            <table className="data-table">
-              <tbody>
-                {expenses.map((e) => (
-                  <tr key={e.id}>
-                    <td>{e.title}</td>
-                    <td>{branchMap[e.branchId]}</td>
-                    <td>{formatUGX(e.amount)}</td>
-                    <td>
-                      <button className="edit-btn" onClick={() => setExpenseForm({ id: e.id, title: e.title, branchId: e.branchId, amount: e.amount })}>
-                        Edit
-                      </button>
-                      <button className="delete-btn" onClick={() => setExpenses((prev) => prev.filter((x) => x.id !== e.id))}>
-                        Delete
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            </div>
-          </section>
-        )}
-
-        {view === 'users' && (
-          <section className="card">
-            <h3>User Management</h3>
-            {canManageUsers ? (
-              <>
-                <form onSubmit={saveUser} className="form polished-form">
-                  <label className="field">
-                    <span>Name</span>
-                    <input placeholder="Name" value={userForm.name} onChange={(e) => setUserForm({ ...userForm, name: e.target.value })} />
-                  </label>
-                  <label className="field">
-                    <span>Email</span>
-                    <input placeholder="Email" value={userForm.email} onChange={(e) => setUserForm({ ...userForm, email: e.target.value })} />
-                  </label>
-                  <label className="field">
-                    <span>Role</span>
-                    <select value={userForm.role} onChange={(e) => setUserForm({ ...userForm, role: e.target.value as Role })}>
-                      <option value="manager">Manager</option>
-                      <option value="cashier">Cashier</option>
-                      <option value="stock">Stock Manager</option>
-                    </select>
-                  </label>
-                  <label className="field">
-                    <span>Branch</span>
-                    <select value={userForm.branchId} onChange={(e) => setUserForm({ ...userForm, branchId: e.target.value })}>
-                      <option value="">Select branch</option>
-                      {branches.map((b) => (
-                        <option key={b.id} value={b.id}>
-                          {b.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <button className="primary">{userForm.id ? 'Update' : 'Add'} User</button>
-                </form>
-                <div className="table-wrap">
-                <table className="data-table">
-                  <tbody>
-                    {users.map((u) => (
-                      <tr key={u.id}>
-                        <td>{u.name}</td>
-                        <td>{u.email}</td>
-                        <td>{u.role}</td>
-                        <td>{branchMap[u.branchId]}</td>
-                        <td>
-                          <button className="edit-btn" onClick={() => setUserForm(u)}>
-                            Edit
-                          </button>
-                          <button className="delete-btn" onClick={() => setUsers((prev) => prev.filter((x) => x.id !== u.id))}>
-                            Delete
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                </div>
-              </>
-            ) : (
-              <p>Only shop owners can manage users.</p>
-            )}
-          </section>
-        )}
-
-        {view === 'reports' && (
-          <section className="card">
-            <h3>Sales & Expense Reports</h3>
-            <div className="reports-summary">
-              <p>
-                <strong>Sales:</strong> Daily: {formatUGX(salesTotals('day'))} | Weekly: {formatUGX(salesTotals('week'))} | Monthly: {formatUGX(salesTotals('month'))} | Yearly: {formatUGX(salesTotals('year'))}
-              </p>
-              <p>
-                <strong>Net Profit:</strong> {formatUGX(netProfit)}
-              </p>
-            </div>
-            <div className="table-wrap">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Type</th>
-                  <th>Item</th>
-                  <th>Branch</th>
-                  <th>Amount</th>
-                  <th>Profit</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sales.map((s) => (
-                  <tr key={s.id}>
-                    <td>{new Date(s.createdAt).toLocaleDateString()}</td>
-                    <td>{s.type}</td>
-                    <td>{s.itemName}</td>
-                    <td>{branchMap[s.branchId]}</td>
-                    <td>{formatUGX(s.amount)}</td>
-                    <td>{formatUGX(s.amount - s.cost)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            </div>
-          </section>
-        )}
-      </main>
-    </div>
-  );
+  return <div className="app"><aside className="sidebar"><nav>{([...categories, 'settings'] as View[]).filter((v) => v === 'settings' ? role === 'shop_owner' : canAccess(v as Category)).map((v) => <button key={v} onClick={() => setView(v)}>{v}</button>)}</nav><p>{authUser.email}</p><button onClick={handleLogout}>Logout</button></aside><main className="main"><h1>{view}</h1><p>{status}</p>{view==='users'&&canManageUsers&&<form onSubmit={saveUser}><input placeholder='Name' value={userForm.name} onChange={(e)=>setUserForm({...userForm,name:e.target.value})}/><input placeholder='Email' value={userForm.email} onChange={(e)=>setUserForm({...userForm,email:e.target.value})}/><select value={userForm.role} onChange={(e)=>setUserForm({...userForm,role:e.target.value as Role})}><option value='manager'>Manager</option><option value='cashier'>Cashier</option><option value='stock'>Stock</option></select><select value={userForm.branchId} onChange={(e)=>setUserForm({...userForm,branchId:e.target.value})}><option value=''>Select branch</option>{branches.map((b)=><option key={b.id} value={b.id}>{b.name}</option>)}</select><button>Add User</button></form>}{view==='settings'&&role==='shop_owner'&&<section><h3>Role Permissions</h3>{(['manager','cashier','stock'] as Role[]).map((r)=><div key={r}><h4>{r}</h4>{categories.map((c)=><label key={c}><input type='checkbox' checked={permissions[r][c]} onChange={(e)=>setPermissions((prev)=>({...prev,[r]:{...prev[r],[c]:e.target.checked}}))}/>{c}</label>)}</div>)}</section>}<p>Visible products: {visibleProducts.length} | sales: {visibleSales.length} | expenses: {visibleExpenses.length}</p></main></div>;
 }
