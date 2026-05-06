@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { isFirebaseConfigured, firebaseApp } from '../lib.firebase';
 import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth';
 import { doc, getDoc, getFirestore, serverTimestamp, setDoc } from 'firebase/firestore';
@@ -28,6 +28,7 @@ export default function Page() {
   const [role, setRole] = useState<Role>('shop_owner');
   const [view, setView] = useState<View>('dashboard');
   const [status, setStatus] = useState('Welcome to AlphaPOS Pro.');
+  const hasLoadedUserDataRef = useRef(false);
 
   const [branches, setBranches] = useState<Branch[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -57,17 +58,13 @@ export default function Page() {
     return onAuthStateChanged(auth, (user) => {
       setAuthUser(user);
       setLoading(false);
+      hasLoadedUserDataRef.current = false;
       if (!user) {
         setBranches([]);
         setProducts([]);
         setSales([]);
         setExpenses([]);
         setUsers([]);
-      } else {
-        // Initialize default branch on first login
-        if (branches.length === 0) {
-          setBranches([{ id: crypto.randomUUID(), name: 'Main Branch', location: 'CBD', createdAt: new Date().toISOString() }]);
-        }
       }
     });
   }, []);
@@ -81,6 +78,7 @@ export default function Page() {
         if (!snap.exists()) {
           const defaultBranch = { id: crypto.randomUUID(), name: 'Main Branch', location: 'HQ', createdAt: new Date().toISOString() };
           setBranches([defaultBranch]);
+          hasLoadedUserDataRef.current = true;
           return;
         }
         const data = snap.data();
@@ -90,6 +88,7 @@ export default function Page() {
         setExpenses(Array.isArray(data.expenses) ? data.expenses : []);
         setUsers(Array.isArray(data.users) ? data.users : []);
         setRole((data.role as Role) || 'shop_owner');
+        hasLoadedUserDataRef.current = true;
       } catch (error) {
         setStatus(`Failed to load your data: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }
@@ -99,7 +98,7 @@ export default function Page() {
 
   useEffect(() => {
     const saveUserData = async () => {
-      if (!authUser || !db) return;
+      if (!authUser || !db || !hasLoadedUserDataRef.current) return;
       try {
         const userDataRef = doc(db, 'users', authUser.uid, 'pos', 'data');
         await setDoc(
