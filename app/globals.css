@@ -57,6 +57,7 @@ body { background: radial-gradient(circle at top right, var(--bg-accent), var(--
 .card:hover { box-shadow: var(--shadow); }
 .card h3 { margin: 0 0 1rem; font-size: 1.12rem; }
 .dashboard-card { color: #fff; border: none; background: linear-gradient(145deg, #2563eb, #1e40af); }
+.dashboard-card--count { background: linear-gradient(145deg, #0f766e, #115e59); }
 .dashboard-card h4 { margin: 0 0 0.42rem; font-size: 0.82rem; opacity: 0.9; }
 .card-value { font-size: 1.7rem; font-weight: 750; }
 .form { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0.8rem; margin: 1rem 0 1.4rem; align-items: end; }

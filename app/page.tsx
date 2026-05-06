@@ -45,6 +45,7 @@ export default function Page() {
 
   const branchMap = useMemo(() => Object.fromEntries(branches.map((b) => [b.id, b.name])), [branches]);
   const db = firebaseApp ? getFirestore(firebaseApp) : null;
+  const formatUGX = (value: number) => `UGX ${new Intl.NumberFormat('en-UG', { maximumFractionDigits: 0 }).format(Math.round(value))}`;
 
   // Firebase Auth Setup
   useEffect(() => {
@@ -297,18 +298,18 @@ export default function Page() {
         {view === 'dashboard' && (
           <section className="grid">
             {[
-              ['Daily Sales', salesTotals('day')],
-              ['Weekly Sales', salesTotals('week')],
-              ['Monthly Sales', salesTotals('month')],
-              ['Yearly Sales', salesTotals('year')],
-              ['Gross Profit', grossProfit],
-              ['Net Profit', netProfit],
-              ['Products', products.length],
-              ['Users', users.length],
-            ].map(([k, v]) => (
-              <article key={String(k)} className="card dashboard-card">
-                <h4>{k}</h4>
-                <strong className="card-value">${Number(v).toFixed(2)}</strong>
+              { label: 'Daily Sales', value: salesTotals('day'), type: 'currency' },
+              { label: 'Weekly Sales', value: salesTotals('week'), type: 'currency' },
+              { label: 'Monthly Sales', value: salesTotals('month'), type: 'currency' },
+              { label: 'Yearly Sales', value: salesTotals('year'), type: 'currency' },
+              { label: 'Gross Profit', value: grossProfit, type: 'currency' },
+              { label: 'Net Profit', value: netProfit, type: 'currency' },
+              { label: 'Products', value: products.length, type: 'count' },
+              { label: 'Users', value: users.length, type: 'count' },
+            ].map((metric) => (
+              <article key={metric.label} className={`card dashboard-card ${metric.type === 'count' ? 'dashboard-card--count' : ''}`}>
+                <h4>{metric.label}</h4>
+                <strong className="card-value">{metric.type === 'currency' ? formatUGX(metric.value) : Number(metric.value).toLocaleString()}</strong>
               </article>
             ))}
           </section>
@@ -382,11 +383,11 @@ export default function Page() {
                 <input type="number" placeholder="0" value={productForm.stock} onChange={(e) => setProductForm({ ...productForm, stock: Number(e.target.value) })} />
               </label>
               <label className="field">
-                <span>Purchase Price ($)</span>
+                <span>Purchase Price (UGX)</span>
                 <input type="number" placeholder="0.00" value={productForm.purchasePrice} onChange={(e) => setProductForm({ ...productForm, purchasePrice: Number(e.target.value) })} />
               </label>
               <label className="field">
-                <span>Selling Price ($)</span>
+                <span>Selling Price (UGX)</span>
                 <input type="number" placeholder="0.00" value={productForm.salePrice} onChange={(e) => setProductForm({ ...productForm, salePrice: Number(e.target.value) })} />
               </label>
               <button className="primary">{productForm.id ? 'Update' : 'Add'} Product</button>
@@ -410,9 +411,9 @@ export default function Page() {
                     <td>{p.name}</td>
                     <td>{branchMap[p.branchId]}</td>
                     <td>{p.stock}</td>
-                    <td>${p.purchasePrice.toFixed(2)}</td>
-                    <td>${p.salePrice.toFixed(2)}</td>
-                    <td>${(p.salePrice - p.purchasePrice).toFixed(2)}</td>
+                    <td>{formatUGX(p.purchasePrice)}</td>
+                    <td>{formatUGX(p.salePrice)}</td>
+                    <td>{formatUGX(p.salePrice - p.purchasePrice)}</td>
                     <td>
                       <button className="edit-btn" onClick={() => setProductForm(p)}>
                         Edit
@@ -452,7 +453,7 @@ export default function Page() {
             </form>
             <div className="sales-summary">
               <p>Recent Sales: {sales.length}</p>
-              <p>Total Revenue: ${totalRevenue.toFixed(2)}</p>
+              <p>Total Revenue: {formatUGX(totalRevenue)}</p>
             </div>
           </section>
         )}
@@ -477,7 +478,7 @@ export default function Page() {
                 </select>
               </label>
               <label className="field">
-                <span>Amount ($)</span>
+                <span>Amount (UGX)</span>
                 <input type="number" placeholder="Amount" value={serviceForm.amount} onChange={(e) => setServiceForm({ ...serviceForm, amount: Number(e.target.value) })} />
               </label>
               <button className="primary">Record Service</button>
@@ -505,13 +506,13 @@ export default function Page() {
                 </select>
               </label>
               <label className="field">
-                <span>Amount ($)</span>
+                <span>Amount (UGX)</span>
                 <input type="number" placeholder="0.00" value={expenseForm.amount} onChange={(e) => setExpenseForm({ ...expenseForm, amount: Number(e.target.value) })} />
               </label>
               <button className="primary">{expenseForm.id ? 'Update' : 'Add'} Expense</button>
             </form>
             <div className="expense-summary">
-              <p>Day: ${expenseTotals('day').toFixed(2)} | Week: ${expenseTotals('week').toFixed(2)} | Month: ${expenseTotals('month').toFixed(2)} | Year: ${expenseTotals('year').toFixed(2)}</p>
+              <p>Day: {formatUGX(expenseTotals('day'))} | Week: {formatUGX(expenseTotals('week'))} | Month: {formatUGX(expenseTotals('month'))} | Year: {formatUGX(expenseTotals('year'))}</p>
             </div>
             <div className="table-wrap">
             <table className="data-table">
@@ -520,7 +521,7 @@ export default function Page() {
                   <tr key={e.id}>
                     <td>{e.title}</td>
                     <td>{branchMap[e.branchId]}</td>
-                    <td>${e.amount.toFixed(2)}</td>
+                    <td>{formatUGX(e.amount)}</td>
                     <td>
                       <button className="edit-btn" onClick={() => setExpenseForm({ id: e.id, title: e.title, branchId: e.branchId, amount: e.amount })}>
                         Edit
@@ -606,10 +607,10 @@ export default function Page() {
             <h3>Sales & Expense Reports</h3>
             <div className="reports-summary">
               <p>
-                <strong>Sales:</strong> Daily: ${salesTotals('day').toFixed(2)} | Weekly: ${salesTotals('week').toFixed(2)} | Monthly: ${salesTotals('month').toFixed(2)} | Yearly: ${salesTotals('year').toFixed(2)}
+                <strong>Sales:</strong> Daily: {formatUGX(salesTotals('day'))} | Weekly: {formatUGX(salesTotals('week'))} | Monthly: {formatUGX(salesTotals('month'))} | Yearly: {formatUGX(salesTotals('year'))}
               </p>
               <p>
-                <strong>Net Profit:</strong> ${netProfit.toFixed(2)}
+                <strong>Net Profit:</strong> {formatUGX(netProfit)}
               </p>
             </div>
             <div className="table-wrap">
@@ -631,8 +632,8 @@ export default function Page() {
                     <td>{s.type}</td>
                     <td>{s.itemName}</td>
                     <td>{branchMap[s.branchId]}</td>
-                    <td>${s.amount.toFixed(2)}</td>
-                    <td>${(s.amount - s.cost).toFixed(2)}</td>
+                    <td>{formatUGX(s.amount)}</td>
+                    <td>{formatUGX(s.amount - s.cost)}</td>
                   </tr>
                 ))}
               </tbody>
