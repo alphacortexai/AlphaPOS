@@ -186,6 +186,29 @@ export default function Page() {
     }
   };
 
+  const resetShopScopedState = () => {
+    setBranches([]);
+    setProducts([]);
+    setSales([]);
+    setExpenses([]);
+    setUsers([]);
+    setBranchForm({ name: '', location: '', id: '' });
+    setProductForm({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0 });
+    setServiceForm({ name: '', branchId: '', amount: 0 });
+    setSaleForm({ productId: '', qty: 1 });
+    setExpenseForm({ id: '', title: '', branchId: '', amount: 0 });
+    setUserForm({ id: '', name: '', email: '', role: 'cashier', branchId: '' });
+  };
+
+  const handleShopSwitch = (nextOwnerUid: string) => {
+    if (!nextOwnerUid || nextOwnerUid === activeShopOwnerUid) return;
+    isSwitchingShopRef.current = true;
+    hasLoadedUserDataRef.current = false;
+    resetShopScopedState();
+    setActiveShopOwnerUid(nextOwnerUid);
+    setStatus('Switching shop...');
+  };
+
   // Metric Calculation Utilities
   const getMetrics = (period: 'day' | 'week' | 'month', offset: number = 0) => {
     const now = new Date();
