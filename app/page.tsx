@@ -6,7 +6,7 @@ import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signO
 import { collection, doc, getDoc, getDocs, getFirestore, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
 
 type Role = 'shop_owner' | 'manager' | 'cashier' | 'stock';
-type View = 'dashboard' | 'products' | 'sales' | 'services' | 'expenses' | 'users' | 'branches' | 'reports';
+type View = 'dashboard' | 'products' | 'sales' | 'services' | 'expenses' | 'users' | 'branches' | 'reports' | 'settings';
 
 type Branch = { id: string; name: string; location: string; createdAt?: string };
 type AuditStamp = {
@@ -54,6 +54,7 @@ export default function Page() {
   const [showExpenseModal, setShowExpenseModal] = useState(false);
   const [showUserModal, setShowUserModal] = useState(false);
   const [showBranchModal, setShowBranchModal] = useState(false);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
 
   // Filters
   const [salesDateFilter, setSalesDateFilter] = useState(new Date().toISOString().split('T')[0]);
@@ -64,10 +65,13 @@ export default function Page() {
   const [saleForm, setSaleForm] = useState({ productId: '', qty: 1 });
   const [expenseForm, setExpenseForm] = useState({ id: '', title: '', branchId: '', amount: 0 });
   const [userForm, setUserForm] = useState({ id: '', name: '', email: '', role: 'cashier' as Role, branchId: '' });
+  const [shopNameForm, setShopNameForm] = useState('');
 
   const branchMap = useMemo(() => Object.fromEntries(branches.map((b) => [b.id, b.name])), [branches]);
   const db = firebaseApp ? getFirestore(firebaseApp) : null;
   const formatUGX = (value: number) => `UGX ${new Intl.NumberFormat('en-UG', { maximumFractionDigits: 0 }).format(Math.round(value))}`;
+  const currentShop = availableShops.find((s) => s.ownerUid === activeShopOwnerUid);
+  const isShopOwner = activeShopOwnerUid === authUser?.uid;
 
   // Firebase Auth Setup
   useEffect(() => {
@@ -394,6 +398,39 @@ export default function Page() {
   const canManageUsers = role === 'shop_owner' && activeShopOwnerUid === authUser?.uid;
   const canChangeRole = activeShopOwnerUid === authUser?.uid;
 
+  const saveShopName = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!shopNameForm.trim() || !db || !activeShopOwnerUid) {
+      setStatus('Please enter a valid shop name.');
+      return;
+    }
+
+    try {
+      // Update the shop name in the user's data document
+      const userDataRef = doc(db, 'users', activeShopOwnerUid, 'pos', 'data');
+      await setDoc(userDataRef, { shopName: shopNameForm.trim(), updatedAt: serverTimestamp() }, { merge: true });
+
+      // Update all shop memberships for this shop
+      const membershipsQuery = query(collection(db, 'shopMemberships'), where('ownerUid', '==', activeShopOwnerUid));
+      const membershipSnap = await getDocs(membershipsQuery);
+      const updatePromises = membershipSnap.docs.map((doc) =>
+        setDoc(doc.ref, { shopName: shopNameForm.trim(), updatedAt: serverTimestamp() }, { merge: true })
+      );
+      await Promise.all(updatePromises);
+
+      // Update the local state
+      setAvailableShops((prev) =>
+        prev.map((s) => (s.ownerUid === activeShopOwnerUid ? { ...s, shopName: shopNameForm.trim() } : s))
+      );
+
+      setStatus(`Shop name updated to "${shopNameForm.trim()}"!`);
+      setShowSettingsModal(false);
+      setShopNameForm('');
+    } catch (error) {
+      setStatus(`Failed to update shop name: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  };
+
   const Badge = ({ value }: { value: number }) => (
     <span className={`badge ${value >= 0 ? 'badge-success' : 'badge-danger'}`}>
       {value >= 0 ? '↑' : '↓'} {Math.abs(value).toFixed(1)}%
@@ -448,6 +485,7 @@ export default function Page() {
           <button className={`nav-button ${view === 'expenses' ? 'active' : ''}`} onClick={() => setView('expenses')}>Expenses</button>
           <button className={`nav-button ${view === 'users' ? 'active' : ''}`} onClick={() => setView('users')}>Staff</button>
           <button className={`nav-button ${view === 'reports' ? 'active' : ''}`} onClick={() => setView('reports')}>Reports</button>
+          {isShopOwner && <button className={`nav-button ${view === 'settings' ? 'active' : ''}`} onClick={() => setView('settings')}>Settings</button>}
         </nav>
 
         <div className="sidebar-footer">
@@ -700,6 +738,30 @@ export default function Page() {
           </section>
         )}
 
+        {view === 'settings' && (
+          <section>
+            <div className="page-header">
+              <h2>Shop Settings</h2>
+            </div>
+            <div className="card">
+              <h3>Shop Information</h3>
+              <div style={{ marginTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                <div>
+                  <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Current Shop Name</div>
+                  <div style={{ fontSize: '1.25rem', fontWeight: 600, color: 'var(--text)', marginTop: '0.5rem' }}>{currentShop?.shopName || 'My Shop'}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Your Role</div>
+                  <div style={{ fontSize: '1.25rem', fontWeight: 600, color: 'var(--text)', marginTop: '0.5rem' }}>{role}</div>
+                </div>
+                <button className="primary" onClick={() => { setShopNameForm(currentShop?.shopName || ''); setShowSettingsModal(true); }} style={{ marginTop: '1rem', alignSelf: 'flex-start' }}>
+                  Edit Shop Name
+                </button>
+              </div>
+            </div>
+          </section>
+        )}
+
         {view === 'reports' && (
           <section>
             <div className="page-header">
@@ -937,6 +999,32 @@ export default function Page() {
                 <div className="modal-footer">
                   <button type="button" className="edit-btn" onClick={() => setShowUserModal(false)}>Cancel</button>
                   <button type="submit" className="primary">{userForm.id ? 'Update' : 'Send Invitation'}</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* Settings Modal */}
+        {showSettingsModal && (
+          <div className="modal-overlay">
+            <div className="modal-content">
+              <div className="modal-header">
+                <h3>Edit Shop Name</h3>
+                <button className="modal-close" onClick={() => setShowSettingsModal(false)}>&times;</button>
+              </div>
+              <form onSubmit={saveShopName}>
+                <div className="modal-body">
+                  <div className="form">
+                    <label className="field">
+                      <span>Shop Name</span>
+                      <input value={shopNameForm} onChange={(e) => setShopNameForm(e.target.value)} placeholder="Enter your shop name" required />
+                    </label>
+                  </div>
+                </div>
+                <div className="modal-footer">
+                  <button type="button" className="edit-btn" onClick={() => setShowSettingsModal(false)}>Cancel</button>
+                  <button type="submit" className="primary">Save Shop Name</button>
                 </div>
               </form>
             </div>
