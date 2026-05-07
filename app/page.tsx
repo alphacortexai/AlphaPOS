@@ -327,6 +327,42 @@ export default function Page() {
     setShowExpenseModal(false);
   };
 
+  const saveUser = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!userForm.email || !userForm.name || !userForm.branchId) return;
+
+    if (userForm.id) {
+      setUsers((prev) => prev.map((u) => (u.id === userForm.id ? { ...u, ...userForm, ...updatedAuditStamp() } : u)));
+      setStatus('User updated.');
+    } else {
+      const newUser: StaffUser = {
+        id: crypto.randomUUID(),
+        name: userForm.name,
+        email: userForm.email,
+        role: userForm.role,
+        branchId: userForm.branchId,
+        ...currentAuditStamp(),
+      };
+      setUsers((prev) => [...prev, newUser]);
+
+      // Save shop membership for email-based invitation
+      if (db) {
+        const normalizedEmail = userForm.email.toLowerCase().trim();
+        const shopMembershipRef = doc(db, 'shopMemberships', `${activeShopOwnerUid}_${normalizedEmail}`);
+        setDoc(shopMembershipRef, {
+          ownerUid: activeShopOwnerUid,
+          email: normalizedEmail,
+          shopName: availableShops.find(s => s.ownerUid === activeShopOwnerUid)?.shopName || 'My Shop',
+          role: userForm.role,
+          invitedAt: serverTimestamp(),
+        }, { merge: true }).catch(err => console.error('Failed to save membership:', err));
+      }
+      setStatus(`Invitation sent to ${userForm.email}`);
+    }
+    setUserForm({ id: '', name: '', email: '', role: 'cashier', branchId: '' });
+    setShowUserModal(false);
+  };
+
   const makeProductSale = (e: React.FormEvent) => {
     e.preventDefault();
     const p = products.find((x) => x.id === saleForm.productId);
@@ -355,6 +391,15 @@ export default function Page() {
     return sales.filter(s => s.createdAt.startsWith(salesDateFilter));
   }, [sales, salesDateFilter]);
 
+  const canManageUsers = role === 'shop_owner' && activeShopOwnerUid === authUser?.uid;
+  const canChangeRole = activeShopOwnerUid === authUser?.uid;
+
+  const Badge = ({ value }: { value: number }) => (
+    <span className={`badge ${value >= 0 ? 'badge-success' : 'badge-danger'}`}>
+      {value >= 0 ? '↑' : '↓'} {Math.abs(value).toFixed(1)}%
+    </span>
+  );
+
   if (loading) return <div className="auth-container"><div className="status">Loading AlphaPOS...</div></div>;
   if (!authUser) {
     return (
@@ -376,12 +421,6 @@ export default function Page() {
       </div>
     );
   }
-
-  const Badge = ({ value }: { value: number }) => (
-    <span className={`badge ${value >= 0 ? 'badge-success' : 'badge-danger'}`}>
-      {value >= 0 ? '↑' : '↓'} {Math.abs(value).toFixed(1)}%
-    </span>
-  );
 
   return (
     <div className="app">
@@ -512,7 +551,7 @@ export default function Page() {
             <div className="page-header">
               <h2>Sales Records</h2>
             </div>
-            
+
             <div className="grid" style={{ gridTemplateColumns: '1fr 2fr', alignItems: 'start' }}>
               <div className="card">
                 <h3>Record New Sale</h3>
@@ -543,7 +582,7 @@ export default function Page() {
                   <button className="edit-btn" onClick={() => setSalesDateFilter(new Date().toISOString().split('T')[0])}>Today</button>
                   <button className="edit-btn" onClick={() => setSalesDateFilter('')}>All Time</button>
                 </div>
-                
+
                 <div className="table-wrap">
                   <table className="data-table">
                     <thead>
@@ -607,6 +646,172 @@ export default function Page() {
                   ))}
                 </tbody>
               </table>
+            </div>
+          </section>
+        )}
+
+        {view === 'users' && (
+          <section>
+            <div className="page-header">
+              <h2>Staff Management</h2>
+              {canManageUsers && (
+                <button className="primary" onClick={() => { setUserForm({ id: '', name: '', email: '', role: 'cashier', branchId: branches[0]?.id || '' }); setShowUserModal(true); }}>
+                  + Invite Staff
+                </button>
+              )}
+            </div>
+            {canManageUsers ? (
+              <div className="table-wrap">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>Email</th>
+                      <th>Role</th>
+                      <th>Branch</th>
+                      <th>Added</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {users.map((u) => (
+                      <tr key={u.id}>
+                        <td style={{ fontWeight: 600 }}>{u.name}</td>
+                        <td>{u.email}</td>
+                        <td>
+                          <span className="badge badge-info">{u.role}</span>
+                        </td>
+                        <td>{branchMap[u.branchId]}</td>
+                        <td>{new Date(u.createdAt).toLocaleDateString()}</td>
+                        <td>
+                          <button className="edit-btn" onClick={() => { setUserForm(u); setShowUserModal(true); }}>Edit</button>
+                          <button className="delete-btn" onClick={() => setUsers(prev => prev.filter(x => x.id !== u.id))}>Remove</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="card">
+                <p>Only shop owners can manage staff members.</p>
+              </div>
+            )}
+          </section>
+        )}
+
+        {view === 'reports' && (
+          <section>
+            <div className="page-header">
+              <h2>Business Reports & Analytics</h2>
+            </div>
+
+            <div className="grid" style={{ gridTemplateColumns: 'repeat(2, 1fr)' }}>
+              <div className="card">
+                <h4>Daily Summary</h4>
+                <div style={{ marginTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                  <div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Today's Sales</div>
+                    <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--text)' }}>{formatUGX(getMetrics('day', 0).revenue)}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Today's Expenses</div>
+                    <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--danger)' }}>{formatUGX(getMetrics('day', 0).expenseTotal)}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Today's Net Profit</div>
+                    <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--success)' }}>{formatUGX(getMetrics('day', 0).netProfit)}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="card">
+                <h4>Weekly Summary</h4>
+                <div style={{ marginTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                  <div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Week's Sales</div>
+                    <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--text)' }}>{formatUGX(getMetrics('week', 0).revenue)}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Week's Expenses</div>
+                    <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--danger)' }}>{formatUGX(getMetrics('week', 0).expenseTotal)}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Week's Net Profit</div>
+                    <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--success)' }}>{formatUGX(getMetrics('week', 0).netProfit)}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="card">
+                <h4>Monthly Summary</h4>
+                <div style={{ marginTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                  <div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Month's Sales</div>
+                    <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--text)' }}>{formatUGX(getMetrics('month', 0).revenue)}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Month's Expenses</div>
+                    <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--danger)' }}>{formatUGX(getMetrics('month', 0).expenseTotal)}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Month's Gross Profit</div>
+                    <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--success)' }}>{formatUGX(getMetrics('month', 0).grossProfit)}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="card">
+                <h4>Inventory Status</h4>
+                <div style={{ marginTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                  <div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Total Products</div>
+                    <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--text)' }}>{products.length}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Low Stock Items</div>
+                    <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--warning)' }}>{products.filter(p => p.stock < 10).length}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Total Stock Value</div>
+                    <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--info)' }}>{formatUGX(products.reduce((a, p) => a + (p.stock * p.purchasePrice), 0))}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div style={{ marginTop: '3rem' }}>
+              <h3 style={{ marginBottom: '1.5rem' }}>All Sales Transactions</h3>
+              <div className="table-wrap">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Type</th>
+                      <th>Item</th>
+                      <th>Branch</th>
+                      <th>Qty</th>
+                      <th>Revenue</th>
+                      <th>Cost</th>
+                      <th>Profit</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sales.map((s) => (
+                      <tr key={s.id}>
+                        <td>{new Date(s.createdAt).toLocaleDateString()}</td>
+                        <td><span className="badge badge-info">{s.type}</span></td>
+                        <td style={{ fontWeight: 600 }}>{s.itemName}</td>
+                        <td>{branchMap[s.branchId]}</td>
+                        <td>{s.qty}</td>
+                        <td>{formatUGX(s.amount)}</td>
+                        <td>{formatUGX(s.cost)}</td>
+                        <td style={{ color: 'var(--success)', fontWeight: 600 }}>{formatUGX(s.amount - s.cost)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </section>
         )}
@@ -687,6 +892,51 @@ export default function Page() {
                 <div className="modal-footer">
                   <button type="button" className="edit-btn" onClick={() => setShowExpenseModal(false)}>Cancel</button>
                   <button type="submit" className="primary">Save Expense</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* User Modal */}
+        {showUserModal && (
+          <div className="modal-overlay">
+            <div className="modal-content">
+              <div className="modal-header">
+                <h3>{userForm.id ? 'Edit Staff Member' : 'Invite Staff Member'}</h3>
+                <button className="modal-close" onClick={() => setShowUserModal(false)}>&times;</button>
+              </div>
+              <form onSubmit={saveUser}>
+                <div className="modal-body">
+                  <div className="form">
+                    <label className="field">
+                      <span>Full Name</span>
+                      <input value={userForm.name} onChange={(e) => setUserForm({ ...userForm, name: e.target.value })} required />
+                    </label>
+                    <label className="field">
+                      <span>Email Address</span>
+                      <input type="email" value={userForm.email} onChange={(e) => setUserForm({ ...userForm, email: e.target.value })} required />
+                    </label>
+                    <label className="field">
+                      <span>Role</span>
+                      <select value={userForm.role} onChange={(e) => setUserForm({ ...userForm, role: e.target.value as Role })} required>
+                        <option value="cashier">Cashier</option>
+                        <option value="manager">Manager</option>
+                        <option value="stock">Stock Manager</option>
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Branch</span>
+                      <select value={userForm.branchId} onChange={(e) => setUserForm({ ...userForm, branchId: e.target.value })} required>
+                        <option value="">Select Branch</option>
+                        {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                      </select>
+                    </label>
+                  </div>
+                </div>
+                <div className="modal-footer">
+                  <button type="button" className="edit-btn" onClick={() => setShowUserModal(false)}>Cancel</button>
+                  <button type="submit" className="primary">{userForm.id ? 'Update' : 'Send Invitation'}</button>
                 </div>
               </form>
             </div>
