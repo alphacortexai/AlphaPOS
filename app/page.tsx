@@ -6,7 +6,7 @@ import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signO
 import { collection, doc, getDoc, getDocs, getFirestore, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
 
 type Role = 'shop_owner' | 'manager' | 'cashier' | 'stock';
-type View = 'dashboard' | 'products' | 'sales' | 'services' | 'expenses' | 'users' | 'branches' | 'reports' | 'settings';
+type View = 'dashboard' | 'products' | 'sales' | 'services' | 'expenses' | 'users' | 'branches' | 'reports' | 'settings' | 'profile';
 
 type Branch = { id: string; name: string; location: string; createdAt?: string };
 type AuditStamp = {
@@ -40,8 +40,10 @@ export default function Page() {
   const [availableShops, setAvailableShops] = useState<ShopMembership[]>([]);
   const [view, setView] = useState<View>('dashboard');
   const [status, setStatus] = useState('Welcome to AlphaPOS Pro.');
+  const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
   const hasLoadedUserDataRef = useRef(false);
   const isSwitchingShopRef = useRef(false);
+  const notificationTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const [branches, setBranches] = useState<Branch[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -55,6 +57,7 @@ export default function Page() {
   const [showUserModal, setShowUserModal] = useState(false);
   const [showBranchModal, setShowBranchModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [showBranchFormModal, setShowBranchFormModal] = useState(false);
 
   // Filters
   const [salesDateFilter, setSalesDateFilter] = useState(new Date().toISOString().split('T')[0]);
@@ -66,12 +69,22 @@ export default function Page() {
   const [expenseForm, setExpenseForm] = useState({ id: '', title: '', branchId: '', amount: 0 });
   const [userForm, setUserForm] = useState({ id: '', name: '', email: '', role: 'cashier' as Role, branchId: '' });
   const [shopNameForm, setShopNameForm] = useState('');
+  const [settingsTab, setSettingsTab] = useState<'shop' | 'branches'>('shop');
 
   const branchMap = useMemo(() => Object.fromEntries(branches.map((b) => [b.id, b.name])), [branches]);
   const db = firebaseApp ? getFirestore(firebaseApp) : null;
   const formatUGX = (value: number) => `UGX ${new Intl.NumberFormat('en-UG', { maximumFractionDigits: 0 }).format(Math.round(value))}`;
   const currentShop = availableShops.find((s) => s.ownerUid === activeShopOwnerUid);
   const isShopOwner = activeShopOwnerUid === authUser?.uid;
+  const truncateShopName = (name: string, maxLength: number = 15) => name.length > maxLength ? name.substring(0, maxLength) + '...' : name;
+
+  const showNotification = (message: string, type: 'success' | 'error' | 'info' = 'info', duration: number = 3000) => {
+    if (notificationTimeoutRef.current) clearTimeout(notificationTimeoutRef.current);
+    setNotification({ message, type });
+    notificationTimeoutRef.current = setTimeout(() => {
+      setNotification(null);
+    }, duration);
+  };
 
   // Firebase Auth Setup
   useEffect(() => {
@@ -423,12 +436,35 @@ export default function Page() {
         prev.map((s) => (s.ownerUid === activeShopOwnerUid ? { ...s, shopName: shopNameForm.trim() } : s))
       );
 
-      setStatus(`Shop name updated to "${shopNameForm.trim()}"!`);
+      showNotification(`Shop name updated to "${shopNameForm.trim()}"!`, 'success');
       setShowSettingsModal(false);
       setShopNameForm('');
     } catch (error) {
-      setStatus(`Failed to update shop name: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      showNotification(`Failed to update shop name: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
     }
+  };
+
+  const saveBranch = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!branchForm.name || !branchForm.location) return;
+    if (branchForm.id) {
+      setBranches((prev) => prev.map((b) => (b.id === branchForm.id ? { ...b, name: branchForm.name, location: branchForm.location } : b)));
+      showNotification('Branch updated successfully!', 'success');
+    } else {
+      setBranches((prev) => [...prev, { id: crypto.randomUUID(), name: branchForm.name, location: branchForm.location, createdAt: new Date().toISOString() }]);
+      showNotification('Branch added successfully!', 'success');
+    }
+    setBranchForm({ name: '', location: '', id: '' });
+    setShowBranchFormModal(false);
+  };
+
+  const deleteBranch = (id: string) => {
+    if (branches.length === 1) {
+      showNotification('You must have at least one branch!', 'error');
+      return;
+    }
+    setBranches((prev) => prev.filter((b) => b.id !== id));
+    showNotification('Branch deleted successfully!', 'success');
   };
 
   const Badge = ({ value }: { value: number }) => (
@@ -472,7 +508,7 @@ export default function Page() {
           <select className="role-select" value={activeShopOwnerUid} onChange={(e) => handleShopSwitch(e.target.value)}>
             {availableShops.map((s) => (
               <option key={s.ownerUid} value={s.ownerUid}>
-                {s.shopName} ({s.role})
+                {truncateShopName(s.shopName)} ({s.role})
               </option>
             ))}
           </select>
@@ -490,11 +526,38 @@ export default function Page() {
 
         <div className="sidebar-footer">
           <div className="user-info">
-            <div>{authUser.displayName}</div>
-            <div style={{ opacity: 0.6 }}>{authUser.email}</div>
+            <button onClick={() => setView('profile')} style={{ background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left', width: '100%' }}>
+              <div>{authUser.displayName}</div>
+              <div style={{ opacity: 0.6 }}>{authUser.email}</div>
+            </button>
           </div>
           <button className="logout-button" onClick={handleLogout}>Sign Out</button>
         </div>
+
+        {notification && (
+          <div style={{
+            position: 'fixed',
+            bottom: '20px',
+            right: '20px',
+            padding: '12px 20px',
+            borderRadius: '8px',
+            backgroundColor: notification.type === 'success' ? 'var(--success)' : notification.type === 'error' ? 'var(--danger)' : 'var(--info)',
+            color: 'white',
+            fontSize: '0.875rem',
+            fontWeight: 600,
+            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
+            zIndex: 1000,
+            animation: 'slideIn 0.3s ease-out'
+          }}>
+            {notification.message}
+          </div>
+        )}
+        <style>{`
+          @keyframes slideIn {
+            from { transform: translateX(400px); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+          }
+        `}</style>
       </aside>
 
       <main className="main">
@@ -743,20 +806,101 @@ export default function Page() {
             <div className="page-header">
               <h2>Shop Settings</h2>
             </div>
+            <div style={{ display: 'flex', gap: '1rem', marginBottom: '2rem', borderBottom: '1px solid var(--border)' }}>
+              <button onClick={() => setSettingsTab('shop')} style={{ padding: '0.75rem 1.5rem', borderBottom: settingsTab === 'shop' ? '3px solid var(--primary)' : 'none', background: 'none', cursor: 'pointer', fontWeight: settingsTab === 'shop' ? 600 : 400 }}>Shop Information</button>
+              <button onClick={() => setSettingsTab('branches')} style={{ padding: '0.75rem 1.5rem', borderBottom: settingsTab === 'branches' ? '3px solid var(--primary)' : 'none', background: 'none', cursor: 'pointer', fontWeight: settingsTab === 'branches' ? 600 : 400 }}>Manage Branches</button>
+            </div>
+
+            {settingsTab === 'shop' && (
+              <div className="card">
+                <h3>Shop Information</h3>
+                <div style={{ marginTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                  <div>
+                    <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Current Shop Name</div>
+                    <div style={{ fontSize: '1.25rem', fontWeight: 600, color: 'var(--text)', marginTop: '0.5rem' }}>{currentShop?.shopName || 'My Shop'}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Your Role</div>
+                    <div style={{ fontSize: '1.25rem', fontWeight: 600, color: 'var(--text)', marginTop: '0.5rem' }}>{role}</div>
+                  </div>
+                  <button className="primary" onClick={() => { setShopNameForm(currentShop?.shopName || ''); setShowSettingsModal(true); }} style={{ marginTop: '1rem', alignSelf: 'flex-start' }}>
+                    Edit Shop Name
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {settingsTab === 'branches' && (
+              <div>
+                <div style={{ marginBottom: '1.5rem' }}>
+                  <button className="primary" onClick={() => { setBranchForm({ name: '', location: '', id: '' }); setShowBranchFormModal(true); }}>
+                    + Add Branch
+                  </button>
+                </div>
+                <div className="table-wrap">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Branch Name</th>
+                        <th>Location</th>
+                        <th>Created</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {branches.map((b) => (
+                        <tr key={b.id}>
+                          <td style={{ fontWeight: 600 }}>{b.name}</td>
+                          <td>{b.location}</td>
+                          <td>{b.createdAt ? new Date(b.createdAt).toLocaleDateString() : 'N/A'}</td>
+                          <td>
+                            <button className="edit-btn" onClick={() => { setBranchForm(b); setShowBranchFormModal(true); }}>Edit</button>
+                            <button className="delete-btn" onClick={() => deleteBranch(b.id)}>Delete</button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </section>
+        )}
+
+                {view === 'profile' && (
+          <section>
+            <div className="page-header">
+              <h2>My Profile</h2>
+            </div>
             <div className="card">
-              <h3>Shop Information</h3>
-              <div style={{ marginTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <h3>User Information</h3>
+              <div style={{ marginTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
                 <div>
-                  <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Current Shop Name</div>
-                  <div style={{ fontSize: '1.25rem', fontWeight: 600, color: 'var(--text)', marginTop: '0.5rem' }}>{currentShop?.shopName || 'My Shop'}</div>
+                  <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Display Name</div>
+                  <div style={{ fontSize: '1.25rem', fontWeight: 600, color: 'var(--text)', marginTop: '0.5rem' }}>{authUser?.displayName || 'Not set'}</div>
                 </div>
                 <div>
-                  <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Your Role</div>
-                  <div style={{ fontSize: '1.25rem', fontWeight: 600, color: 'var(--text)', marginTop: '0.5rem' }}>{role}</div>
+                  <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Email Address</div>
+                  <div style={{ fontSize: '1.25rem', fontWeight: 600, color: 'var(--text)', marginTop: '0.5rem' }}>{authUser?.email}</div>
                 </div>
-                <button className="primary" onClick={() => { setShopNameForm(currentShop?.shopName || ''); setShowSettingsModal(true); }} style={{ marginTop: '1rem', alignSelf: 'flex-start' }}>
-                  Edit Shop Name
-                </button>
+                <div>
+                  <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Account Created</div>
+                  <div style={{ fontSize: '1.25rem', fontWeight: 600, color: 'var(--text)', marginTop: '0.5rem' }}>{authUser?.metadata?.creationTime ? new Date(authUser.metadata.creationTime).toLocaleDateString() : 'N/A'}</div>
+                </div>
+              </div>
+            </div>
+            <div className="card" style={{ marginTop: '2rem' }}>
+              <h3>My Shops</h3>
+              <div style={{ marginTop: '1.5rem' }}>
+                {availableShops.map((shop) => (
+                  <div key={shop.ownerUid} style={{ padding: '1rem', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div>
+                      <div style={{ fontWeight: 600, color: 'var(--text)' }}>{shop.shopName}</div>
+                      <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>Role: {shop.role}</div>
+                    </div>
+                    <button className="primary" onClick={() => handleShopSwitch(shop.ownerUid)}>Switch</button>
+                  </div>
+                ))}
               </div>
             </div>
           </section>
@@ -1030,6 +1174,36 @@ export default function Page() {
             </div>
           </div>
         )}
+        {/* Branch Form Modal */}
+        {showBranchFormModal && (
+          <div className="modal-overlay">
+            <div className="modal-content">
+              <div className="modal-header">
+                <h3>{branchForm.id ? 'Edit Branch' : 'Add New Branch'}</h3>
+                <button className="modal-close" onClick={() => setShowBranchFormModal(false)}>&times;</button>
+              </div>
+              <form onSubmit={saveBranch}>
+                <div className="modal-body">
+                  <div className="form">
+                    <label className="field">
+                      <span>Branch Name</span>
+                      <input value={branchForm.name} onChange={(e) => setBranchForm({ ...branchForm, name: e.target.value })} placeholder="e.g., Main Branch" required />
+                    </label>
+                    <label className="field">
+                      <span>Location</span>
+                      <input value={branchForm.location} onChange={(e) => setBranchForm({ ...branchForm, location: e.target.value })} placeholder="e.g., Downtown" required />
+                    </label>
+                  </div>
+                </div>
+                <div className="modal-footer">
+                  <button type="button" className="edit-btn" onClick={() => setShowBranchFormModal(false)}>Cancel</button>
+                  <button type="submit" className="primary">Save Branch</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
       </main>
     </div>
   );
