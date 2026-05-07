@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { isFirebaseConfigured, firebaseApp } from '../lib.firebase';
+import { firebaseApp } from '../lib.firebase';
 import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth';
 import { collection, doc, getDoc, getDocs, getFirestore, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
 
@@ -24,8 +24,8 @@ type Expense = { id: string; title: string; branchId: string; amount: number } &
 type StaffUser = { id: string; name: string; email: string; role: Role; branchId: string } & AuditStamp;
 type ShopMembership = { ownerUid: string; shopName: string; role: Role };
 
-const periodStart = (period: 'day' | 'week' | 'month' | 'year') => {
-  const d = new Date();
+const periodStart = (period: 'day' | 'week' | 'month' | 'year', date: Date = new Date()) => {
+  const d = new Date(date);
   if (period === 'day') return new Date(d.getFullYear(), d.getMonth(), d.getDate());
   if (period === 'week') return new Date(d.getFullYear(), d.getMonth(), d.getDate() - d.getDay());
   if (period === 'month') return new Date(d.getFullYear(), d.getMonth(), 1);
@@ -48,6 +48,15 @@ export default function Page() {
   const [sales, setSales] = useState<Sale[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [users, setUsers] = useState<StaffUser[]>([]);
+
+  // Modals
+  const [showProductModal, setShowProductModal] = useState(false);
+  const [showExpenseModal, setShowExpenseModal] = useState(false);
+  const [showUserModal, setShowUserModal] = useState(false);
+  const [showBranchModal, setShowBranchModal] = useState(false);
+
+  // Filters
+  const [salesDateFilter, setSalesDateFilter] = useState(new Date().toISOString().split('T')[0]);
 
   const [branchForm, setBranchForm] = useState({ name: '', location: '', id: '' });
   const [productForm, setProductForm] = useState({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0 });
@@ -116,8 +125,8 @@ export default function Page() {
           setBranches([defaultBranch]);
           setRole(selectedShop?.role || 'shop_owner');
           hasLoadedUserDataRef.current = true;
-        isSwitchingShopRef.current = false;
-        setStatus(`Viewing ${selectedShop?.shopName || 'selected shop'} as ${selectedShop?.role || role}.`);
+          isSwitchingShopRef.current = false;
+          setStatus(`Viewing ${selectedShop?.shopName || 'selected shop'} as ${selectedShop?.role || role}.`);
           return;
         }
         const data = snap.data();
@@ -177,21 +186,83 @@ export default function Page() {
     }
   };
 
-  const salesTotals = (period: 'day' | 'week' | 'month' | 'year') => {
-    const start = periodStart(period);
-    return sales.filter((s) => new Date(s.createdAt) >= start).reduce((a, s) => a + s.amount, 0);
+  // Metric Calculation Utilities
+  const getMetrics = (period: 'day' | 'week' | 'month', offset: number = 0) => {
+    const now = new Date();
+    let start: Date, end: Date;
+
+    if (period === 'day') {
+      start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - offset);
+      end = new Date(now.getFullYear(), now.getMonth(), now.getDate() - offset + 1);
+    } else if (period === 'week') {
+      const currentWeekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay());
+      start = new Date(currentWeekStart.getTime() - offset * 7 * 24 * 60 * 60 * 1000);
+      end = new Date(start.getTime() + 7 * 24 * 60 * 60 * 1000);
+    } else {
+      start = new Date(now.getFullYear(), now.getMonth() - offset, 1);
+      end = new Date(now.getFullYear(), now.getMonth() - offset + 1, 1);
+    }
+
+    const periodSales = sales.filter(s => {
+      const d = new Date(s.createdAt);
+      return d >= start && d < end;
+    });
+    const periodExpenses = expenses.filter(e => {
+      const d = new Date(e.createdAt);
+      return d >= start && d < end;
+    });
+
+    const revenue = periodSales.reduce((a, s) => a + s.amount, 0);
+    const cost = periodSales.reduce((a, s) => a + s.cost, 0);
+    const expenseTotal = periodExpenses.reduce((a, e) => a + e.amount, 0);
+    const grossProfit = revenue - cost;
+    const netProfit = grossProfit - expenseTotal;
+
+    return { revenue, cost, expenseTotal, grossProfit, netProfit };
   };
 
-  const expenseTotals = (period: 'day' | 'week' | 'month' | 'year') => {
-    const start = periodStart(period);
-    return expenses.filter((e) => new Date(e.createdAt) >= start).reduce((a, e) => a + e.amount, 0);
+  const calculateChange = (current: number, previous: number) => {
+    if (previous === 0) return current > 0 ? 100 : 0;
+    return ((current - previous) / previous) * 100;
   };
 
-  const totalCost = sales.reduce((a, s) => a + s.cost, 0);
-  const totalRevenue = sales.reduce((a, s) => a + s.amount, 0);
-  const grossProfit = totalRevenue - totalCost;
-  const netProfit = grossProfit - expenses.reduce((a, e) => a + e.amount, 0);
+  const dashboardMetrics = useMemo(() => {
+    const currentDay = getMetrics('day', 0);
+    const prevDay = getMetrics('day', 1);
+    const currentWeek = getMetrics('week', 0);
+    const prevWeek = getMetrics('week', 1);
+    const currentMonth = getMetrics('month', 0);
+    const prevMonth = getMetrics('month', 1);
 
+    return {
+      sales: {
+        value: currentWeek.revenue,
+        change: calculateChange(currentWeek.revenue, prevWeek.revenue),
+        period: 'week'
+      },
+      expenses: {
+        value: currentWeek.expenseTotal,
+        change: calculateChange(currentWeek.expenseTotal, prevWeek.expenseTotal),
+        period: 'week'
+      },
+      products: products.length,
+      profits: {
+        value: currentDay.netProfit,
+        change: calculateChange(currentDay.netProfit, prevDay.netProfit),
+        period: 'day'
+      },
+      grossProfit: {
+        value: currentMonth.grossProfit,
+        change: calculateChange(currentMonth.grossProfit, prevMonth.grossProfit),
+        period: 'month'
+      },
+      netProfit: {
+        value: currentMonth.netProfit,
+        change: calculateChange(currentMonth.netProfit, prevMonth.netProfit),
+        period: 'month'
+      }
+    };
+  }, [sales, expenses, products]);
 
   const currentAuditStamp = () => ({
     createdAt: new Date().toISOString(),
@@ -205,539 +276,398 @@ export default function Page() {
     updatedByEmail: authUser?.email || 'unknown',
   });
 
-  const canManageUsers = role === 'shop_owner';
-  const canChangeRole = activeShopOwnerUid === authUser?.uid;
-
-  const resetShopScopedState = () => {
-    setBranches([]);
-    setProducts([]);
-    setSales([]);
-    setExpenses([]);
-    setUsers([]);
-    setBranchForm({ name: '', location: '', id: '' });
-    setProductForm({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0 });
-    setServiceForm({ name: '', branchId: '', amount: 0 });
-    setSaleForm({ productId: '', qty: 1 });
-    setExpenseForm({ id: '', title: '', branchId: '', amount: 0 });
-    setUserForm({ id: '', name: '', email: '', role: 'cashier', branchId: '' });
-  };
-
-  const handleShopSwitch = (nextOwnerUid: string) => {
-    if (!nextOwnerUid || nextOwnerUid === activeShopOwnerUid) return;
-    isSwitchingShopRef.current = true;
-    hasLoadedUserDataRef.current = false;
-    resetShopScopedState();
-    setActiveShopOwnerUid(nextOwnerUid);
-    setStatus('Switching shop...');
-  };
-
-  const saveBranch = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!branchForm.name.trim()) return;
-    if (branchForm.id) {
-      setBranches((prev) => prev.map((b) => (b.id === branchForm.id ? { ...b, name: branchForm.name, location: branchForm.location } : b)));
-      setStatus('Branch updated.');
-    } else {
-      setBranches((prev) => [...prev, { id: crypto.randomUUID(), name: branchForm.name, location: branchForm.location, createdAt: new Date().toISOString() }]);
-      setStatus('Branch created.');
-    }
-    setBranchForm({ name: '', location: '', id: '' });
-  };
-
   const saveProduct = (e: React.FormEvent) => {
     e.preventDefault();
     if (!productForm.name || !productForm.branchId) return;
-    const payload = { ...productForm, stock: Number(productForm.stock), purchasePrice: Number(productForm.purchasePrice), salePrice: Number(productForm.salePrice) };
     if (productForm.id) {
-      setProducts((prev) => prev.map((p) => (p.id === productForm.id ? { ...p, ...payload, ...updatedAuditStamp() } : p)));
+      setProducts((prev) => prev.map((p) => (p.id === productForm.id ? { ...p, ...productForm, ...updatedAuditStamp() } : p)));
       setStatus('Product updated.');
     } else {
-      setProducts((prev) => [...prev, { ...payload, id: crypto.randomUUID(), ...currentAuditStamp() }]);
-      setStatus('Product created.');
+      setProducts((prev) => [...prev, { ...productForm, id: crypto.randomUUID(), ...currentAuditStamp() }]);
+      setStatus('Product added.');
     }
     setProductForm({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0 });
-  };
-
-  const makeProductSale = (e: React.FormEvent) => {
-    e.preventDefault();
-    const p = products.find((x) => x.id === saleForm.productId);
-    if (!p || saleForm.qty < 1 || p.stock < saleForm.qty) return setStatus('Not enough stock for sale.');
-    setProducts((prev) => prev.map((x) => (x.id === p.id ? { ...x, stock: x.stock - saleForm.qty } : x)));
-    setSales((prev) => [...prev, { id: crypto.randomUUID(), type: 'product', itemName: p.name, branchId: p.branchId, qty: saleForm.qty, amount: p.salePrice * saleForm.qty, cost: p.purchasePrice * saleForm.qty, ...currentAuditStamp() }]);
-    setStatus('Product sale recorded and stock deducted.');
-    setSaleForm({ productId: '', qty: 1 });
-  };
-
-  const makeServiceSale = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!serviceForm.name || !serviceForm.branchId || serviceForm.amount <= 0) return;
-    setSales((prev) => [...prev, { id: crypto.randomUUID(), type: 'service', itemName: serviceForm.name, branchId: serviceForm.branchId, qty: 1, amount: Number(serviceForm.amount), cost: 0, ...currentAuditStamp() }]);
-    setServiceForm({ name: '', branchId: '', amount: 0 });
-    setStatus('Service sale recorded.');
+    setShowProductModal(false);
   };
 
   const saveExpense = (e: React.FormEvent) => {
     e.preventDefault();
     if (!expenseForm.title || !expenseForm.branchId || expenseForm.amount <= 0) return;
     if (expenseForm.id) {
-      setExpenses((prev) => prev.map((x) => (x.id === expenseForm.id ? { ...x, ...expenseForm, amount: Number(expenseForm.amount), ...updatedAuditStamp() } : x)));
+      setExpenses((prev) => prev.map((ex) => (ex.id === expenseForm.id ? { ...ex, ...expenseForm, ...updatedAuditStamp() } : ex)));
       setStatus('Expense updated.');
     } else {
-      setExpenses((prev) => [...prev, { id: crypto.randomUUID(), title: expenseForm.title, branchId: expenseForm.branchId, amount: Number(expenseForm.amount), ...currentAuditStamp() }]);
-      setStatus('Expense added.');
+      setExpenses((prev) => [...prev, { ...expenseForm, id: crypto.randomUUID(), ...currentAuditStamp() }]);
+      setStatus('Expense recorded.');
     }
     setExpenseForm({ id: '', title: '', branchId: '', amount: 0 });
+    setShowExpenseModal(false);
   };
 
-  const saveUser = (e: React.FormEvent) => {
+  const makeProductSale = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!canManageUsers) return setStatus('Only shop owner can manage users.');
-    if (!userForm.name || !userForm.email || !userForm.branchId) return;
-    const normalizedEmail = userForm.email.toLowerCase().trim();
-    if (userForm.id) {
-      setUsers((prev) => prev.map((x) => (x.id === userForm.id ? { ...x, ...userForm, ...updatedAuditStamp() } : x)));
-      setStatus('User updated.');
-    } else {
-      setUsers((prev) => [...prev, { ...userForm, id: crypto.randomUUID(), ...currentAuditStamp() }]);
-      setStatus('User created.');
+    const p = products.find((x) => x.id === saleForm.productId);
+    if (!p || p.stock < saleForm.qty) {
+      setStatus('Invalid sale or insufficient stock.');
+      return;
     }
-    if (db && activeShopOwnerUid) {
-      void setDoc(doc(db, 'shopMemberships', `${activeShopOwnerUid}_${normalizedEmail}`), {
-        email: normalizedEmail,
-        ownerUid: activeShopOwnerUid,
-        role: userForm.role,
-        shopName: branches.find((b) => b.id === userForm.branchId)?.name || 'Shop',
-        updatedAt: serverTimestamp(),
-      }, { merge: true });
-    }
-    setUserForm({ id: '', name: '', email: '', role: 'cashier', branchId: '' });
+    const newSale: Sale = {
+      id: crypto.randomUUID(),
+      type: 'product',
+      itemName: p.name,
+      branchId: p.branchId,
+      qty: saleForm.qty,
+      amount: p.salePrice * saleForm.qty,
+      cost: p.purchasePrice * saleForm.qty,
+      ...currentAuditStamp(),
+    };
+    setSales((prev) => [newSale, ...prev]);
+    setProducts((prev) => prev.map((x) => (x.id === p.id ? { ...x, stock: x.stock - saleForm.qty } : x)));
+    setSaleForm({ productId: '', qty: 1 });
+    setStatus('Sale recorded.');
   };
 
-  if (loading) {
-    return <div className="auth-container"><main className="main auth-container"><p className="rounded-xl bg-white/80 px-4 py-3 text-sm font-medium shadow">Loading...</p></main></div>;
-  }
+  const filteredSales = useMemo(() => {
+    if (!salesDateFilter) return sales;
+    return sales.filter(s => s.createdAt.startsWith(salesDateFilter));
+  }, [sales, salesDateFilter]);
 
+  if (loading) return <div className="auth-container"><div className="status">Loading AlphaPOS...</div></div>;
   if (!authUser) {
     return (
       <div className="auth-container">
-        <main className="main auth-container">
-          <div className="auth-card ring-1 ring-slate-200">
-            <span className="auth-badge">Smart Retail Suite</span>
-            <h1>AlphaPOS Pro</h1>
-            <p className="subtitle">Organized sales, products, and expenses for modern business teams.</p>
-            <ul className="auth-highlights">
-              <li>Inventory and stock visibility</li>
-              <li>Fast checkout and sales tracking</li>
-              <li>Expense and profit monitoring</li>
-            </ul>
-            <button className="primary auth-button" onClick={handleLogin}>
-              Continue with Google
-            </button>
-            {!isFirebaseConfigured && <p className="error">Firebase is not configured. Please set up environment variables.</p>}
-          </div>
-        </main>
+        <div className="auth-card">
+          <span className="auth-badge">v2.0 Beta</span>
+          <h1>AlphaPOS Pro</h1>
+          <p>The ultimate point of sale for modern businesses.</p>
+          <ul className="auth-highlights">
+            <li>Multi-branch inventory management</li>
+            <li>Real-time sales tracking & analytics</li>
+            <li>Expense & profit monitoring</li>
+            <li>Staff role-based access control</li>
+          </ul>
+          <button className="primary" style={{ width: '100%', padding: '1rem' }} onClick={handleLogin}>
+            Sign in with Google
+          </button>
+        </div>
       </div>
     );
   }
+
+  const Badge = ({ value }: { value: number }) => (
+    <span className={`badge ${value >= 0 ? 'badge-success' : 'badge-danger'}`}>
+      {value >= 0 ? '↑' : '↓'} {Math.abs(value).toFixed(1)}%
+    </span>
+  );
 
   return (
     <div className="app">
       <aside className="sidebar">
         <div className="sidebar-header">
-          <h2>AlphaPOS Pro</h2>
-          <p className="sidebar-subtitle">Operations Suite</p>
+          <h2>AlphaPOS</h2>
+          <div className="sidebar-subtitle">Business Intelligence</div>
         </div>
 
         <div className="sidebar-section">
-          <label className="role-label">Your Role:</label>
-          <select value={role} onChange={(e) => setRole(e.target.value as Role)} className="role-select" disabled={!canChangeRole}>
-            <option value="shop_owner">Shop Owner</option>
-            <option value="manager">Manager</option>
-            <option value="cashier">Cashier</option>
-            <option value="stock">Stock Manager</option>
+          <label className="role-label">Active Shop</label>
+          <select className="role-select" value={activeShopOwnerUid} onChange={(e) => handleShopSwitch(e.target.value)}>
+            {availableShops.map((s) => (
+              <option key={s.ownerUid} value={s.ownerUid}>
+                {s.shopName} ({s.role})
+              </option>
+            ))}
           </select>
         </div>
 
         <nav className="sidebar-nav">
-          {(['dashboard', 'products', 'sales', 'services', 'expenses', 'users', 'branches', 'reports'] as View[]).map((v) => (
-            <button key={v} className={`nav-button ${view === v ? 'active' : ''}`} onClick={() => setView(v)}>
-              {v.charAt(0).toUpperCase() + v.slice(1)}
-            </button>
-          ))}
+          <button className={`nav-button ${view === 'dashboard' ? 'active' : ''}`} onClick={() => setView('dashboard')}>Dashboard</button>
+          <button className={`nav-button ${view === 'products' ? 'active' : ''}`} onClick={() => setView('products')}>Inventory</button>
+          <button className={`nav-button ${view === 'sales' ? 'active' : ''}`} onClick={() => setView('sales')}>Sales Desk</button>
+          <button className={`nav-button ${view === 'expenses' ? 'active' : ''}`} onClick={() => setView('expenses')}>Expenses</button>
+          <button className={`nav-button ${view === 'users' ? 'active' : ''}`} onClick={() => setView('users')}>Staff</button>
+          <button className={`nav-button ${view === 'reports' ? 'active' : ''}`} onClick={() => setView('reports')}>Reports</button>
         </nav>
 
         <div className="sidebar-footer">
           <div className="user-info">
-            <p className="user-email">{authUser.email}</p>
+            <div>{authUser.displayName}</div>
+            <div style={{ opacity: 0.6 }}>{authUser.email}</div>
           </div>
-          <button className="logout-button" onClick={handleLogout}>
-            Logout
-          </button>
+          <button className="logout-button" onClick={handleLogout}>Sign Out</button>
         </div>
       </aside>
 
       <main className="main">
         <header className="main-header">
-          <h1 className="text-balance">{view.charAt(0).toUpperCase() + view.slice(1)}</h1>
+          <h1>{view.charAt(0).toUpperCase() + view.slice(1)}</h1>
           <div className="status-container">
-            {availableShops.length > 1 && (
-              <select value={activeShopOwnerUid} onChange={(e) => handleShopSwitch(e.target.value)} className="role-select">
-                {availableShops.map((shop) => (
-                  <option key={shop.ownerUid} value={shop.ownerUid}>
-                    {shop.shopName} ({shop.role})
-                  </option>
-                ))}
-              </select>
-            )}
             <span className="status">{status}</span>
           </div>
         </header>
 
         {view === 'dashboard' && (
-          <section className="grid">
-            {[
-              { label: 'Daily Sales', value: salesTotals('day'), type: 'currency' },
-              { label: 'Weekly Sales', value: salesTotals('week'), type: 'currency' },
-              { label: 'Monthly Sales', value: salesTotals('month'), type: 'currency' },
-              { label: 'Yearly Sales', value: salesTotals('year'), type: 'currency' },
-              { label: 'Gross Profit', value: grossProfit, type: 'currency' },
-              { label: 'Net Profit', value: netProfit, type: 'currency' },
-              { label: 'Products', value: products.length, type: 'count' },
-              { label: 'Users', value: users.length, type: 'count' },
-            ].map((metric) => (
-              <article key={metric.label} className={`card dashboard-card ${metric.type === 'count' ? 'dashboard-card--count' : ''}`}>
-                <h4>{metric.label}</h4>
-                <div className="card-value">{metric.type === 'currency' ? formatUGX(metric.value) : Number(metric.value).toLocaleString()}</div>
-              </article>
-            ))}
-          </section>
-        )}
-
-        {view === 'branches' && (
-          <section className="card">
-            <h3>Branch Management</h3>
-            <form onSubmit={saveBranch} className="form polished-form">
-              <label className="field">
-                <span>Branch Name</span>
-                <input placeholder="Branch name" value={branchForm.name} onChange={(e) => setBranchForm({ ...branchForm, name: e.target.value })} />
-              </label>
-              <label className="field">
-                <span>Location</span>
-                <input placeholder="Location" value={branchForm.location} onChange={(e) => setBranchForm({ ...branchForm, location: e.target.value })} />
-              </label>
-              <button className="primary">{branchForm.id ? 'Update' : 'Add'} Branch</button>
-            </form>
-            <div className="table-wrap">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Location</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {branches.map((b) => (
-                  <tr key={b.id}>
-                    <td>{b.name}</td>
-                    <td>{b.location}</td>
-                    <td>
-                      <button className="edit-btn" onClick={() => setBranchForm({ id: b.id, name: b.name, location: b.location })}>
-                        Edit
-                      </button>
-                      <button className="delete-btn" onClick={() => setBranches((prev) => prev.filter((x) => x.id !== b.id))}>
-                        Delete
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="grid">
+            <div className="card dashboard-card">
+              <h4>Weekly Sales</h4>
+              <div className="card-value">{formatUGX(dashboardMetrics.sales.value)}</div>
+              <Badge value={dashboardMetrics.sales.change} />
             </div>
-          </section>
+            <div className="card dashboard-card">
+              <h4>Weekly Expenses</h4>
+              <div className="card-value">{formatUGX(dashboardMetrics.expenses.value)}</div>
+              <Badge value={dashboardMetrics.expenses.change} />
+            </div>
+            <div className="card dashboard-card">
+              <h4>Products in Shop</h4>
+              <div className="card-value">{dashboardMetrics.products}</div>
+              <span className="badge badge-info">Total Stock</span>
+            </div>
+            <div className="card dashboard-card">
+              <h4>Daily Net Profit</h4>
+              <div className="card-value">{formatUGX(dashboardMetrics.profits.value)}</div>
+              <Badge value={dashboardMetrics.profits.change} />
+            </div>
+            <div className="card dashboard-card">
+              <h4>Monthly Gross Profit</h4>
+              <div className="card-value">{formatUGX(dashboardMetrics.grossProfit.value)}</div>
+              <Badge value={dashboardMetrics.grossProfit.change} />
+            </div>
+            <div className="card dashboard-card">
+              <h4>Monthly Net Profit</h4>
+              <div className="card-value">{formatUGX(dashboardMetrics.netProfit.value)}</div>
+              <Badge value={dashboardMetrics.netProfit.change} />
+            </div>
+          </div>
         )}
 
         {view === 'products' && (
-          <section className="card">
-            <h3>Product Management</h3>
-            <form onSubmit={saveProduct} className="form polished-form">
-              <label className="field">
-                <span>Product Name</span>
-                <input placeholder="e.g. Coca-Cola 50cl" value={productForm.name} onChange={(e) => setProductForm({ ...productForm, name: e.target.value })} />
-              </label>
-              <label className="field">
-                <span>Branch</span>
-                <select value={productForm.branchId} onChange={(e) => setProductForm({ ...productForm, branchId: e.target.value })}>
-                  <option value="">Select branch</option>
-                  {branches.map((b) => (
-                    <option key={b.id} value={b.id}>
-                      {b.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="field">
-                <span>Opening Stock</span>
-                <input type="number" placeholder="0" value={productForm.stock} onChange={(e) => setProductForm({ ...productForm, stock: Number(e.target.value) })} />
-              </label>
-              <label className="field">
-                <span>Purchase Price (UGX)</span>
-                <input type="number" placeholder="0.00" value={productForm.purchasePrice} onChange={(e) => setProductForm({ ...productForm, purchasePrice: Number(e.target.value) })} />
-              </label>
-              <label className="field">
-                <span>Selling Price (UGX)</span>
-                <input type="number" placeholder="0.00" value={productForm.salePrice} onChange={(e) => setProductForm({ ...productForm, salePrice: Number(e.target.value) })} />
-              </label>
-              <button className="primary">{productForm.id ? 'Update' : 'Add'} Product</button>
-            </form>
+          <section>
+            <div className="page-header">
+              <h2>Product Inventory</h2>
+              <button className="primary" onClick={() => { setProductForm({ id: '', name: '', branchId: branches[0]?.id || '', stock: 0, purchasePrice: 0, salePrice: 0 }); setShowProductModal(true); }}>
+                + Add Product
+              </button>
+            </div>
             <div className="table-wrap">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Branch</th>
-                  <th>Stock</th>
-                  <th>Buy</th>
-                  <th>Sell</th>
-                  <th>Unit Profit</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {products.map((p) => (
-                  <tr key={p.id}>
-                    <td>{p.name}</td>
-                    <td>{branchMap[p.branchId]}</td>
-                    <td>{p.stock}</td>
-                    <td>{formatUGX(p.purchasePrice)}</td>
-                    <td>{formatUGX(p.salePrice)}</td>
-                    <td>{formatUGX(p.salePrice - p.purchasePrice)}</td>
-                    <td>
-                      <button className="edit-btn" onClick={() => setProductForm(p)}>
-                        Edit
-                      </button>
-                      <button className="delete-btn" onClick={() => setProducts((prev) => prev.filter((x) => x.id !== p.id))}>
-                        Delete
-                      </button>
-                    </td>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Product Name</th>
+                    <th>Branch</th>
+                    <th>Stock</th>
+                    <th>Purchase</th>
+                    <th>Sale</th>
+                    <th>Profit/Unit</th>
+                    <th>Actions</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {products.map((p) => (
+                    <tr key={p.id}>
+                      <td style={{ fontWeight: 600, color: 'var(--text)' }}>{p.name}</td>
+                      <td>{branchMap[p.branchId]}</td>
+                      <td>
+                        <span className={`badge ${p.stock < 10 ? 'badge-danger' : 'badge-info'}`}>{p.stock}</span>
+                      </td>
+                      <td>{formatUGX(p.purchasePrice)}</td>
+                      <td>{formatUGX(p.salePrice)}</td>
+                      <td style={{ color: 'var(--success)', fontWeight: 600 }}>{formatUGX(p.salePrice - p.purchasePrice)}</td>
+                      <td>
+                        <button className="edit-btn" onClick={() => { setProductForm(p); setShowProductModal(true); }}>Edit</button>
+                        <button className="delete-btn" onClick={() => setProducts(prev => prev.filter(x => x.id !== p.id))}>Delete</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </section>
         )}
 
         {view === 'sales' && (
-          <section className="card">
-            <h3>Record Product Sale</h3>
-            <form onSubmit={makeProductSale} className="form polished-form form-sales">
-              <label className="field">
-                <span>Product</span>
-                <select value={saleForm.productId} onChange={(e) => setSaleForm({ ...saleForm, productId: e.target.value })}>
-                  <option value="">Select product</option>
-                  {products.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name} ({p.stock} in stock)
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="field">
-                <span>Quantity</span>
-                <input type="number" min={1} value={saleForm.qty} onChange={(e) => setSaleForm({ ...saleForm, qty: Number(e.target.value) })} placeholder="1" />
-              </label>
-              <button className="primary">Record Sale</button>
-            </form>
-            <div className="sales-summary">
-              <p>Recent Sales: {sales.length}</p>
-              <p>Total Revenue: {formatUGX(totalRevenue)}</p>
+          <section>
+            <div className="page-header">
+              <h2>Sales Records</h2>
             </div>
-          </section>
-        )}
+            
+            <div className="grid" style={{ gridTemplateColumns: '1fr 2fr', alignItems: 'start' }}>
+              <div className="card">
+                <h3>Record New Sale</h3>
+                <form onSubmit={makeProductSale} className="field" style={{ gap: '1.5rem', marginTop: '1.5rem' }}>
+                  <label className="field">
+                    <span>Product</span>
+                    <select value={saleForm.productId} onChange={(e) => setSaleForm({ ...saleForm, productId: e.target.value })} required>
+                      <option value="">Select product</option>
+                      {products.map((p) => (
+                        <option key={p.id} value={p.id}>{p.name} ({p.stock} left)</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="field">
+                    <span>Quantity</span>
+                    <input type="number" min={1} value={saleForm.qty} onChange={(e) => setSaleForm({ ...saleForm, qty: Number(e.target.value) })} required />
+                  </label>
+                  <button className="primary">Complete Sale</button>
+                </form>
+              </div>
 
-        {view === 'services' && (
-          <section className="card">
-            <h3>Record Service Sale</h3>
-            <form onSubmit={makeServiceSale} className="form polished-form">
-              <label className="field">
-                <span>Service Name</span>
-                <input placeholder="Service name" value={serviceForm.name} onChange={(e) => setServiceForm({ ...serviceForm, name: e.target.value })} />
-              </label>
-              <label className="field">
-                <span>Branch</span>
-                <select value={serviceForm.branchId} onChange={(e) => setServiceForm({ ...serviceForm, branchId: e.target.value })}>
-                  <option value="">Select branch</option>
-                  {branches.map((b) => (
-                    <option key={b.id} value={b.id}>
-                      {b.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="field">
-                <span>Amount (UGX)</span>
-                <input type="number" placeholder="Amount" value={serviceForm.amount} onChange={(e) => setServiceForm({ ...serviceForm, amount: Number(e.target.value) })} />
-              </label>
-              <button className="primary">Record Service</button>
-            </form>
+              <div>
+                <div className="filter-bar">
+                  <div className="filter-group">
+                    <label>Filter by Date</label>
+                    <input type="date" value={salesDateFilter} onChange={(e) => setSalesDateFilter(e.target.value)} />
+                  </div>
+                  <button className="edit-btn" onClick={() => setSalesDateFilter(new Date().toISOString().split('T')[0])}>Today</button>
+                  <button className="edit-btn" onClick={() => setSalesDateFilter('')}>All Time</button>
+                </div>
+                
+                <div className="table-wrap">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Date</th>
+                        <th>Item</th>
+                        <th>Qty</th>
+                        <th>Total</th>
+                        <th>Profit</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredSales.map((s) => (
+                        <tr key={s.id}>
+                          <td>{new Date(s.createdAt).toLocaleDateString()}</td>
+                          <td style={{ fontWeight: 600 }}>{s.itemName}</td>
+                          <td>{s.qty}</td>
+                          <td>{formatUGX(s.amount)}</td>
+                          <td style={{ color: 'var(--success)' }}>{formatUGX(s.amount - s.cost)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
           </section>
         )}
 
         {view === 'expenses' && (
-          <section className="card">
-            <h3>Expense Management</h3>
-            <form onSubmit={saveExpense} className="form polished-form form-expense">
-              <label className="field">
-                <span>Expense Title</span>
-                <input placeholder="e.g. Utility bill, Internet" value={expenseForm.title} onChange={(e) => setExpenseForm({ ...expenseForm, title: e.target.value })} />
-              </label>
-              <label className="field">
-                <span>Branch</span>
-                <select value={expenseForm.branchId} onChange={(e) => setExpenseForm({ ...expenseForm, branchId: e.target.value })}>
-                  <option value="">Select branch</option>
-                  {branches.map((b) => (
-                    <option key={b.id} value={b.id}>
-                      {b.name}
-                    </option>
+          <section>
+            <div className="page-header">
+              <h2>Expense Tracking</h2>
+              <button className="primary" onClick={() => { setExpenseForm({ id: '', title: '', branchId: branches[0]?.id || '', amount: 0 }); setShowExpenseModal(true); }}>
+                + Add Expense
+              </button>
+            </div>
+            <div className="table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Expense Title</th>
+                    <th>Branch</th>
+                    <th>Amount</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {expenses.map((e) => (
+                    <tr key={e.id}>
+                      <td>{new Date(e.createdAt).toLocaleDateString()}</td>
+                      <td style={{ fontWeight: 600 }}>{e.title}</td>
+                      <td>{branchMap[e.branchId]}</td>
+                      <td style={{ color: 'var(--danger)' }}>{formatUGX(e.amount)}</td>
+                      <td>
+                        <button className="edit-btn" onClick={() => { setExpenseForm(e); setShowExpenseModal(true); }}>Edit</button>
+                        <button className="delete-btn" onClick={() => setExpenses(prev => prev.filter(x => x.id !== e.id))}>Delete</button>
+                      </td>
+                    </tr>
                   ))}
-                </select>
-              </label>
-              <label className="field">
-                <span>Amount (UGX)</span>
-                <input type="number" placeholder="0.00" value={expenseForm.amount} onChange={(e) => setExpenseForm({ ...expenseForm, amount: Number(e.target.value) })} />
-              </label>
-              <button className="primary">{expenseForm.id ? 'Update' : 'Add'} Expense</button>
-            </form>
-            <div className="expense-summary">
-              <p>Day: {formatUGX(expenseTotals('day'))} | Week: {formatUGX(expenseTotals('week'))} | Month: {formatUGX(expenseTotals('month'))} | Year: {formatUGX(expenseTotals('year'))}</p>
-            </div>
-            <div className="table-wrap">
-            <table className="data-table">
-              <tbody>
-                {expenses.map((e) => (
-                  <tr key={e.id}>
-                    <td>{e.title}</td>
-                    <td>{branchMap[e.branchId]}</td>
-                    <td>{formatUGX(e.amount)}</td>
-                    <td>
-                      <button className="edit-btn" onClick={() => setExpenseForm({ id: e.id, title: e.title, branchId: e.branchId, amount: e.amount })}>
-                        Edit
-                      </button>
-                      <button className="delete-btn" onClick={() => setExpenses((prev) => prev.filter((x) => x.id !== e.id))}>
-                        Delete
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                </tbody>
+              </table>
             </div>
           </section>
         )}
 
-        {view === 'users' && (
-          <section className="card">
-            <h3>User Management</h3>
-            {canManageUsers ? (
-              <>
-                <form onSubmit={saveUser} className="form polished-form">
-                  <label className="field">
-                    <span>Name</span>
-                    <input placeholder="Name" value={userForm.name} onChange={(e) => setUserForm({ ...userForm, name: e.target.value })} />
-                  </label>
-                  <label className="field">
-                    <span>Email</span>
-                    <input placeholder="Email" value={userForm.email} onChange={(e) => setUserForm({ ...userForm, email: e.target.value })} />
-                  </label>
-                  <label className="field">
-                    <span>Role</span>
-                    <select value={userForm.role} onChange={(e) => setUserForm({ ...userForm, role: e.target.value as Role })}>
-                      <option value="manager">Manager</option>
-                      <option value="cashier">Cashier</option>
-                      <option value="stock">Stock Manager</option>
-                    </select>
-                  </label>
-                  <label className="field">
-                    <span>Branch</span>
-                    <select value={userForm.branchId} onChange={(e) => setUserForm({ ...userForm, branchId: e.target.value })}>
-                      <option value="">Select branch</option>
-                      {branches.map((b) => (
-                        <option key={b.id} value={b.id}>
-                          {b.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <button className="primary">{userForm.id ? 'Update' : 'Add'} User</button>
-                </form>
-                <div className="table-wrap">
-                <table className="data-table">
-                  <tbody>
-                    {users.map((u) => (
-                      <tr key={u.id}>
-                        <td>{u.name}</td>
-                        <td>{u.email}</td>
-                        <td>{u.role}</td>
-                        <td>{branchMap[u.branchId]}</td>
-                        <td>
-                          <button className="edit-btn" onClick={() => setUserForm(u)}>
-                            Edit
-                          </button>
-                          <button className="delete-btn" onClick={() => setUsers((prev) => prev.filter((x) => x.id !== u.id))}>
-                            Delete
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+        {/* Product Modal */}
+        {showProductModal && (
+          <div className="modal-overlay">
+            <div className="modal-content">
+              <div className="modal-header">
+                <h3>{productForm.id ? 'Edit Product' : 'Add New Product'}</h3>
+                <button className="modal-close" onClick={() => setShowProductModal(false)}>&times;</button>
+              </div>
+              <form onSubmit={saveProduct}>
+                <div className="modal-body">
+                  <div className="form">
+                    <label className="field">
+                      <span>Product Name</span>
+                      <input value={productForm.name} onChange={(e) => setProductForm({ ...productForm, name: e.target.value })} required />
+                    </label>
+                    <label className="field">
+                      <span>Branch</span>
+                      <select value={productForm.branchId} onChange={(e) => setProductForm({ ...productForm, branchId: e.target.value })} required>
+                        <option value="">Select Branch</option>
+                        {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Initial Stock</span>
+                      <input type="number" value={productForm.stock} onChange={(e) => setProductForm({ ...productForm, stock: Number(e.target.value) })} required />
+                    </label>
+                    <label className="field">
+                      <span>Purchase Price (UGX)</span>
+                      <input type="number" value={productForm.purchasePrice} onChange={(e) => setProductForm({ ...productForm, purchasePrice: Number(e.target.value) })} required />
+                    </label>
+                    <label className="field">
+                      <span>Selling Price (UGX)</span>
+                      <input type="number" value={productForm.salePrice} onChange={(e) => setProductForm({ ...productForm, salePrice: Number(e.target.value) })} required />
+                    </label>
+                  </div>
                 </div>
-              </>
-            ) : (
-              <p>Only shop owners can manage users.</p>
-            )}
-          </section>
+                <div className="modal-footer">
+                  <button type="button" className="edit-btn" onClick={() => setShowProductModal(false)}>Cancel</button>
+                  <button type="submit" className="primary">Save Product</button>
+                </div>
+              </form>
+            </div>
+          </div>
         )}
 
-        {view === 'reports' && (
-          <section className="card">
-            <h3>Sales & Expense Reports</h3>
-            <div className="reports-summary">
-              <p>
-                <strong>Sales:</strong> Daily: {formatUGX(salesTotals('day'))} | Weekly: {formatUGX(salesTotals('week'))} | Monthly: {formatUGX(salesTotals('month'))} | Yearly: {formatUGX(salesTotals('year'))}
-              </p>
-              <p>
-                <strong>Net Profit:</strong> {formatUGX(netProfit)}
-              </p>
+        {/* Expense Modal */}
+        {showExpenseModal && (
+          <div className="modal-overlay">
+            <div className="modal-content">
+              <div className="modal-header">
+                <h3>{expenseForm.id ? 'Edit Expense' : 'Record Expense'}</h3>
+                <button className="modal-close" onClick={() => setShowExpenseModal(false)}>&times;</button>
+              </div>
+              <form onSubmit={saveExpense}>
+                <div className="modal-body">
+                  <div className="form">
+                    <label className="field">
+                      <span>Expense Title</span>
+                      <input value={expenseForm.title} onChange={(e) => setExpenseForm({ ...expenseForm, title: e.target.value })} required />
+                    </label>
+                    <label className="field">
+                      <span>Branch</span>
+                      <select value={expenseForm.branchId} onChange={(e) => setExpenseForm({ ...expenseForm, branchId: e.target.value })} required>
+                        <option value="">Select Branch</option>
+                        {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Amount (UGX)</span>
+                      <input type="number" value={expenseForm.amount} onChange={(e) => setExpenseForm({ ...expenseForm, amount: Number(e.target.value) })} required />
+                    </label>
+                  </div>
+                </div>
+                <div className="modal-footer">
+                  <button type="button" className="edit-btn" onClick={() => setShowExpenseModal(false)}>Cancel</button>
+                  <button type="submit" className="primary">Save Expense</button>
+                </div>
+              </form>
             </div>
-            <div className="table-wrap">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Type</th>
-                  <th>Item</th>
-                  <th>Branch</th>
-                  <th>Amount</th>
-                  <th>Profit</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sales.map((s) => (
-                  <tr key={s.id}>
-                    <td>{new Date(s.createdAt).toLocaleDateString()}</td>
-                    <td>{s.type}</td>
-                    <td>{s.itemName}</td>
-                    <td>{branchMap[s.branchId]}</td>
-                    <td>{formatUGX(s.amount)}</td>
-                    <td>{formatUGX(s.amount - s.cost)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            </div>
-          </section>
+          </div>
         )}
       </main>
     </div>
