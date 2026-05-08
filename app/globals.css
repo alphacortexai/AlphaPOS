@@ -437,8 +437,9 @@ body {
 .dashboard-card {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-  min-height: 140px;
+  gap: 0.25rem;
+  min-height: 100px;
+  justify-content: space-between;
 }
 
 .dashboard-card .badge {
@@ -449,21 +450,23 @@ body {
 }
 
 .dashboard-card h4 {
-  font-size: 0.7rem;
+  font-size: 0.65rem;
   font-weight: 600;
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   margin: 0;
   padding-right: 3rem;
+  line-height: 1.2;
 }
 
 .card-value {
-  font-size: 1.25rem;
+  font-size: 1.1rem;
   font-weight: 700;
   letter-spacing: -0.02em;
   color: var(--text);
-  margin-top: 0.5rem;
+  margin-top: 0.25rem;
+  line-height: 1.2;
 }
 
 /* Modern Forms */
