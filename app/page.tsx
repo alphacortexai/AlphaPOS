@@ -7,6 +7,7 @@ import { collection, doc, getDoc, getDocs, getFirestore, query, serverTimestamp,
 
 type Role = 'shop_owner' | 'manager' | 'cashier' | 'stock';
 type View = 'dashboard' | 'products' | 'sales' | 'services' | 'expenses' | 'users' | 'branches' | 'reports' | 'settings' | 'profile';
+type DashboardPeriod = 'daily' | 'weekly' | 'monthly' | 'yearly';
 
 type Branch = { id: string; name: string; location: string; createdAt?: string };
 type AuditStamp = {
@@ -61,6 +62,10 @@ export default function Page() {
 
   // Filters
   const [salesDateFilter, setSalesDateFilter] = useState(new Date().toISOString().split('T')[0]);
+  const [dashboardPeriod, setDashboardPeriod] = useState<DashboardPeriod>('weekly');
+  const [productSearchQuery, setProductSearchQuery] = useState('');
+  const [productBranchFilter, setProductBranchFilter] = useState('');
+  const [productStockFilter, setProductStockFilter] = useState<'all' | 'low' | 'out'>('all');
 
   const [branchForm, setBranchForm] = useState({ name: '', location: '', id: '' });
   const [productForm, setProductForm] = useState({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0 });
@@ -226,7 +231,44 @@ export default function Page() {
     setStatus('Switching shop...');
   };
 
-  // Metric Calculation Utilities
+  // Enhanced Metric Calculation Utilities
+  const getMetricsForPeriod = (period: DashboardPeriod, offset: number = 0) => {
+    const now = new Date();
+    let start: Date, end: Date;
+
+    if (period === 'daily') {
+      start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - offset);
+      end = new Date(now.getFullYear(), now.getMonth(), now.getDate() - offset + 1);
+    } else if (period === 'weekly') {
+      const currentWeekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay());
+      start = new Date(currentWeekStart.getTime() - offset * 7 * 24 * 60 * 60 * 1000);
+      end = new Date(start.getTime() + 7 * 24 * 60 * 60 * 1000);
+    } else if (period === 'monthly') {
+      start = new Date(now.getFullYear(), now.getMonth() - offset, 1);
+      end = new Date(now.getFullYear(), now.getMonth() - offset + 1, 1);
+    } else {
+      start = new Date(now.getFullYear() - offset, 0, 1);
+      end = new Date(now.getFullYear() - offset + 1, 0, 1);
+    }
+
+    const periodSales = sales.filter(s => {
+      const d = new Date(s.createdAt);
+      return d >= start && d < end;
+    });
+    const periodExpenses = expenses.filter(e => {
+      const d = new Date(e.createdAt);
+      return d >= start && d < end;
+    });
+
+    const revenue = periodSales.reduce((a, s) => a + s.amount, 0);
+    const cost = periodSales.reduce((a, s) => a + s.cost, 0);
+    const expenseTotal = periodExpenses.reduce((a, e) => a + e.amount, 0);
+    const grossProfit = revenue - cost;
+    const netProfit = grossProfit - expenseTotal;
+
+    return { revenue, cost, expenseTotal, grossProfit, netProfit, salesCount: periodSales.length };
+  };
+
   const getMetrics = (period: 'day' | 'week' | 'month', offset: number = 0) => {
     const now = new Date();
     let start: Date, end: Date;
@@ -266,43 +308,81 @@ export default function Page() {
     return ((current - previous) / previous) * 100;
   };
 
+  // Dynamic dashboard metrics based on selected period
   const dashboardMetrics = useMemo(() => {
-    const currentDay = getMetrics('day', 0);
-    const prevDay = getMetrics('day', 1);
-    const currentWeek = getMetrics('week', 0);
-    const prevWeek = getMetrics('week', 1);
-    const currentMonth = getMetrics('month', 0);
-    const prevMonth = getMetrics('month', 1);
+    const current = getMetricsForPeriod(dashboardPeriod, 0);
+    const previous = getMetricsForPeriod(dashboardPeriod, 1);
 
     return {
       sales: {
-        value: currentWeek.revenue,
-        change: calculateChange(currentWeek.revenue, prevWeek.revenue),
-        period: 'week'
+        value: current.revenue,
+        change: calculateChange(current.revenue, previous.revenue),
+        period: dashboardPeriod
       },
       expenses: {
-        value: currentWeek.expenseTotal,
-        change: calculateChange(currentWeek.expenseTotal, prevWeek.expenseTotal),
-        period: 'week'
+        value: current.expenseTotal,
+        change: calculateChange(current.expenseTotal, previous.expenseTotal),
+        period: dashboardPeriod
       },
       products: products.length,
       profits: {
-        value: currentDay.netProfit,
-        change: calculateChange(currentDay.netProfit, prevDay.netProfit),
-        period: 'day'
+        value: current.netProfit,
+        change: calculateChange(current.netProfit, previous.netProfit),
+        period: dashboardPeriod
       },
       grossProfit: {
-        value: currentMonth.grossProfit,
-        change: calculateChange(currentMonth.grossProfit, prevMonth.grossProfit),
-        period: 'month'
+        value: current.grossProfit,
+        change: calculateChange(current.grossProfit, previous.grossProfit),
+        period: dashboardPeriod
       },
       netProfit: {
-        value: currentMonth.netProfit,
-        change: calculateChange(currentMonth.netProfit, prevMonth.netProfit),
-        period: 'month'
+        value: current.netProfit,
+        change: calculateChange(current.netProfit, previous.netProfit),
+        period: dashboardPeriod
       }
     };
-  }, [sales, expenses, products]);
+  }, [sales, expenses, products, dashboardPeriod]);
+
+  // Product & Service Chart Data
+  const chartData = useMemo(() => {
+    const productSales = sales.filter(s => s.type === 'product');
+    const serviceSales = sales.filter(s => s.type === 'service');
+
+    // Group by item name
+    const productMap: { [key: string]: { qty: number; revenue: number; count: number } } = {};
+    productSales.forEach(s => {
+      if (!productMap[s.itemName]) {
+        productMap[s.itemName] = { qty: 0, revenue: 0, count: 0 };
+      }
+      productMap[s.itemName].qty += s.qty;
+      productMap[s.itemName].revenue += s.amount;
+      productMap[s.itemName].count += 1;
+    });
+
+    const serviceMap: { [key: string]: { revenue: number; count: number } } = {};
+    serviceSales.forEach(s => {
+      if (!serviceMap[s.itemName]) {
+        serviceMap[s.itemName] = { revenue: 0, count: 0 };
+      }
+      serviceMap[s.itemName].revenue += s.amount;
+      serviceMap[s.itemName].count += 1;
+    });
+
+    return { productMap, serviceMap };
+  }, [sales]);
+
+  // Filtered products for inventory
+  const filteredProducts = useMemo(() => {
+    return products.filter(p => {
+      const matchesSearch = p.name.toLowerCase().includes(productSearchQuery.toLowerCase());
+      const matchesBranch = !productBranchFilter || p.branchId === productBranchFilter;
+      const matchesStock = 
+        productStockFilter === 'all' ? true :
+        productStockFilter === 'low' ? p.stock < 10 && p.stock > 0 :
+        p.stock === 0;
+      return matchesSearch && matchesBranch && matchesStock;
+    });
+  }, [products, productSearchQuery, productBranchFilter, productStockFilter]);
 
   const currentAuditStamp = () => ({
     createdAt: new Date().toISOString(),
@@ -569,38 +649,112 @@ export default function Page() {
         </header>
 
         {view === 'dashboard' && (
-          <div className="grid">
-            <div className="card dashboard-card">
-              <h4>Weekly Sales</h4>
-              <div className="card-value">{formatUGX(dashboardMetrics.sales.value)}</div>
-              <Badge value={dashboardMetrics.sales.change} />
+          <section>
+            {/* Dashboard Period Selector */}
+            <div className="dashboard-controls">
+              <div className="filter-group">
+                <label>Time Period</label>
+                <select 
+                  value={dashboardPeriod} 
+                  onChange={(e) => setDashboardPeriod(e.target.value as DashboardPeriod)}
+                  className="period-select"
+                >
+                  <option value="daily">Daily</option>
+                  <option value="weekly">Weekly</option>
+                  <option value="monthly">Monthly</option>
+                  <option value="yearly">Yearly</option>
+                </select>
+              </div>
             </div>
-            <div className="card dashboard-card">
-              <h4>Weekly Expenses</h4>
-              <div className="card-value">{formatUGX(dashboardMetrics.expenses.value)}</div>
-              <Badge value={dashboardMetrics.expenses.change} />
+
+            {/* KPI Cards Grid */}
+            <div className="grid">
+              <div className="card dashboard-card">
+                <h4>Sales ({dashboardPeriod})</h4>
+                <div className="card-value">{formatUGX(dashboardMetrics.sales.value)}</div>
+                <Badge value={dashboardMetrics.sales.change} />
+              </div>
+              <div className="card dashboard-card">
+                <h4>Expenses ({dashboardPeriod})</h4>
+                <div className="card-value">{formatUGX(dashboardMetrics.expenses.value)}</div>
+                <Badge value={dashboardMetrics.expenses.change} />
+              </div>
+              <div className="card dashboard-card">
+                <h4>Products in Shop</h4>
+                <div className="card-value">{dashboardMetrics.products}</div>
+                <span className="badge badge-info">Total Stock</span>
+              </div>
+              <div className="card dashboard-card">
+                <h4>Net Profit ({dashboardPeriod})</h4>
+                <div className="card-value">{formatUGX(dashboardMetrics.profits.value)}</div>
+                <Badge value={dashboardMetrics.profits.change} />
+              </div>
+              <div className="card dashboard-card">
+                <h4>Gross Profit ({dashboardPeriod})</h4>
+                <div className="card-value">{formatUGX(dashboardMetrics.grossProfit.value)}</div>
+                <Badge value={dashboardMetrics.grossProfit.change} />
+              </div>
+              <div className="card dashboard-card">
+                <h4>Net Profit ({dashboardPeriod})</h4>
+                <div className="card-value">{formatUGX(dashboardMetrics.netProfit.value)}</div>
+                <Badge value={dashboardMetrics.netProfit.change} />
+              </div>
             </div>
-            <div className="card dashboard-card">
-              <h4>Products in Shop</h4>
-              <div className="card-value">{dashboardMetrics.products}</div>
-              <span className="badge badge-info">Total Stock</span>
+
+            {/* Product & Service Charts */}
+            <div style={{ marginTop: '3rem' }}>
+              <h3 style={{ marginBottom: '1.5rem', fontSize: '1.25rem', fontWeight: 700 }}>Product Sales Performance</h3>
+              <div className="chart-container">
+                {Object.entries(chartData.productMap).length > 0 ? (
+                  <div className="chart-grid">
+                    {Object.entries(chartData.productMap).map(([name, data]) => (
+                      <div key={name} className="chart-card">
+                        <div className="chart-title">{name}</div>
+                        <div className="chart-stat">
+                          <div className="stat-label">Units Sold</div>
+                          <div className="stat-value">{data.qty}</div>
+                        </div>
+                        <div className="chart-stat">
+                          <div className="stat-label">Revenue</div>
+                          <div className="stat-value">{formatUGX(data.revenue)}</div>
+                        </div>
+                        <div className="chart-stat">
+                          <div className="stat-label">Transactions</div>
+                          <div className="stat-value">{data.count}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="empty-state">No product sales data available for this period.</div>
+                )}
+              </div>
             </div>
-            <div className="card dashboard-card">
-              <h4>Daily Net Profit</h4>
-              <div className="card-value">{formatUGX(dashboardMetrics.profits.value)}</div>
-              <Badge value={dashboardMetrics.profits.change} />
-            </div>
-            <div className="card dashboard-card">
-              <h4>Monthly Gross Profit</h4>
-              <div className="card-value">{formatUGX(dashboardMetrics.grossProfit.value)}</div>
-              <Badge value={dashboardMetrics.grossProfit.change} />
-            </div>
-            <div className="card dashboard-card">
-              <h4>Monthly Net Profit</h4>
-              <div className="card-value">{formatUGX(dashboardMetrics.netProfit.value)}</div>
-              <Badge value={dashboardMetrics.netProfit.change} />
-            </div>
-          </div>
+
+            {/* Service Sales Chart */}
+            {Object.entries(chartData.serviceMap).length > 0 && (
+              <div style={{ marginTop: '3rem' }}>
+                <h3 style={{ marginBottom: '1.5rem', fontSize: '1.25rem', fontWeight: 700 }}>Service Sales Performance</h3>
+                <div className="chart-container">
+                  <div className="chart-grid">
+                    {Object.entries(chartData.serviceMap).map(([name, data]) => (
+                      <div key={name} className="chart-card">
+                        <div className="chart-title">{name}</div>
+                        <div className="chart-stat">
+                          <div className="stat-label">Revenue</div>
+                          <div className="stat-value">{formatUGX(data.revenue)}</div>
+                        </div>
+                        <div className="chart-stat">
+                          <div className="stat-label">Transactions</div>
+                          <div className="stat-value">{data.count}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+          </section>
         )}
 
         {view === 'products' && (
@@ -611,6 +765,45 @@ export default function Page() {
                 + Add Product
               </button>
             </div>
+
+            {/* Inventory Search & Filter */}
+            <div className="filter-bar">
+              <div className="filter-group">
+                <label>Search Product</label>
+                <input 
+                  type="text" 
+                  placeholder="Search by name..." 
+                  value={productSearchQuery}
+                  onChange={(e) => setProductSearchQuery(e.target.value)}
+                />
+              </div>
+              <div className="filter-group">
+                <label>Branch</label>
+                <select 
+                  value={productBranchFilter}
+                  onChange={(e) => setProductBranchFilter(e.target.value)}
+                >
+                  <option value="">All Branches</option>
+                  {branches.map(b => (
+                    <option key={b.id} value={b.id}>{b.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="filter-group">
+                <label>Stock Status</label>
+                <select 
+                  value={productStockFilter}
+                  onChange={(e) => setProductStockFilter(e.target.value as 'all' | 'low' | 'out')}
+                >
+                  <option value="all">All Products</option>
+                  <option value="low">Low Stock (1-9)</option>
+                  <option value="out">Out of Stock</option>
+                </select>
+              </div>
+              <button className="edit-btn" onClick={() => { setProductSearchQuery(''); setProductBranchFilter(''); setProductStockFilter('all'); }}>Reset Filters</button>
+            </div>
+
+            {/* Inventory Table */}
             <div className="table-wrap">
               <table className="data-table">
                 <thead>
@@ -625,22 +818,30 @@ export default function Page() {
                   </tr>
                 </thead>
                 <tbody>
-                  {products.map((p) => (
-                    <tr key={p.id}>
-                      <td style={{ fontWeight: 600, color: 'var(--text)' }}>{p.name}</td>
-                      <td>{branchMap[p.branchId]}</td>
-                      <td>
-                        <span className={`badge ${p.stock < 10 ? 'badge-danger' : 'badge-info'}`}>{p.stock}</span>
-                      </td>
-                      <td>{formatUGX(p.purchasePrice)}</td>
-                      <td>{formatUGX(p.salePrice)}</td>
-                      <td style={{ color: 'var(--success)', fontWeight: 600 }}>{formatUGX(p.salePrice - p.purchasePrice)}</td>
-                      <td>
-                        <button className="edit-btn" onClick={() => { setProductForm(p); setShowProductModal(true); }}>Edit</button>
-                        <button className="delete-btn" onClick={() => setProducts(prev => prev.filter(x => x.id !== p.id))}>Delete</button>
+                  {filteredProducts.length > 0 ? (
+                    filteredProducts.map((p) => (
+                      <tr key={p.id}>
+                        <td style={{ fontWeight: 600, color: 'var(--text)' }}>{p.name}</td>
+                        <td>{branchMap[p.branchId]}</td>
+                        <td>
+                          <span className={`badge ${p.stock < 10 ? 'badge-danger' : 'badge-info'}`}>{p.stock}</span>
+                        </td>
+                        <td>{formatUGX(p.purchasePrice)}</td>
+                        <td>{formatUGX(p.salePrice)}</td>
+                        <td style={{ color: 'var(--success)', fontWeight: 600 }}>{formatUGX(p.salePrice - p.purchasePrice)}</td>
+                        <td>
+                          <button className="edit-btn" onClick={() => { setProductForm(p); setShowProductModal(true); }}>Edit</button>
+                          <button className="delete-btn" onClick={() => setProducts(prev => prev.filter(x => x.id !== p.id))}>Delete</button>
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan={7} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>
+                        No products found matching your filters.
                       </td>
                     </tr>
-                  ))}
+                  )}
                 </tbody>
               </table>
             </div>
@@ -801,111 +1002,6 @@ export default function Page() {
           </section>
         )}
 
-        {view === 'settings' && (
-          <section>
-            <div className="page-header">
-              <h2>Shop Settings</h2>
-            </div>
-            <div style={{ display: 'flex', gap: '1rem', marginBottom: '2rem', borderBottom: '1px solid var(--border)' }}>
-              <button onClick={() => setSettingsTab('shop')} style={{ padding: '0.75rem 1.5rem', borderBottom: settingsTab === 'shop' ? '3px solid var(--primary)' : 'none', background: 'none', cursor: 'pointer', fontWeight: settingsTab === 'shop' ? 600 : 400 }}>Shop Information</button>
-              <button onClick={() => setSettingsTab('branches')} style={{ padding: '0.75rem 1.5rem', borderBottom: settingsTab === 'branches' ? '3px solid var(--primary)' : 'none', background: 'none', cursor: 'pointer', fontWeight: settingsTab === 'branches' ? 600 : 400 }}>Manage Branches</button>
-            </div>
-
-            {settingsTab === 'shop' && (
-              <div className="card">
-                <h3>Shop Information</h3>
-                <div style={{ marginTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                  <div>
-                    <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Current Shop Name</div>
-                    <div style={{ fontSize: '1.25rem', fontWeight: 600, color: 'var(--text)', marginTop: '0.5rem' }}>{currentShop?.shopName || 'My Shop'}</div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Your Role</div>
-                    <div style={{ fontSize: '1.25rem', fontWeight: 600, color: 'var(--text)', marginTop: '0.5rem' }}>{role}</div>
-                  </div>
-                  <button className="primary" onClick={() => { setShopNameForm(currentShop?.shopName || ''); setShowSettingsModal(true); }} style={{ marginTop: '1rem', alignSelf: 'flex-start' }}>
-                    Edit Shop Name
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {settingsTab === 'branches' && (
-              <div>
-                <div style={{ marginBottom: '1.5rem' }}>
-                  <button className="primary" onClick={() => { setBranchForm({ name: '', location: '', id: '' }); setShowBranchFormModal(true); }}>
-                    + Add Branch
-                  </button>
-                </div>
-                <div className="table-wrap">
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        <th>Branch Name</th>
-                        <th>Location</th>
-                        <th>Created</th>
-                        <th>Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {branches.map((b) => (
-                        <tr key={b.id}>
-                          <td style={{ fontWeight: 600 }}>{b.name}</td>
-                          <td>{b.location}</td>
-                          <td>{b.createdAt ? new Date(b.createdAt).toLocaleDateString() : 'N/A'}</td>
-                          <td>
-                            <button className="edit-btn" onClick={() => { setBranchForm(b); setShowBranchFormModal(true); }}>Edit</button>
-                            <button className="delete-btn" onClick={() => deleteBranch(b.id)}>Delete</button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-          </section>
-        )}
-
-                {view === 'profile' && (
-          <section>
-            <div className="page-header">
-              <h2>My Profile</h2>
-            </div>
-            <div className="card">
-              <h3>User Information</h3>
-              <div style={{ marginTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-                <div>
-                  <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Display Name</div>
-                  <div style={{ fontSize: '1.25rem', fontWeight: 600, color: 'var(--text)', marginTop: '0.5rem' }}>{authUser?.displayName || 'Not set'}</div>
-                </div>
-                <div>
-                  <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Email Address</div>
-                  <div style={{ fontSize: '1.25rem', fontWeight: 600, color: 'var(--text)', marginTop: '0.5rem' }}>{authUser?.email}</div>
-                </div>
-                <div>
-                  <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Account Created</div>
-                  <div style={{ fontSize: '1.25rem', fontWeight: 600, color: 'var(--text)', marginTop: '0.5rem' }}>{authUser?.metadata?.creationTime ? new Date(authUser.metadata.creationTime).toLocaleDateString() : 'N/A'}</div>
-                </div>
-              </div>
-            </div>
-            <div className="card" style={{ marginTop: '2rem' }}>
-              <h3>My Shops</h3>
-              <div style={{ marginTop: '1.5rem' }}>
-                {availableShops.map((shop) => (
-                  <div key={shop.ownerUid} style={{ padding: '1rem', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div>
-                      <div style={{ fontWeight: 600, color: 'var(--text)' }}>{shop.shopName}</div>
-                      <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>Role: {shop.role}</div>
-                    </div>
-                    <button className="primary" onClick={() => handleShopSwitch(shop.ownerUid)}>Switch</button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </section>
-        )}
-
         {view === 'reports' && (
           <section>
             <div className="page-header">
@@ -1017,6 +1113,82 @@ export default function Page() {
                     ))}
                   </tbody>
                 </table>
+              </div>
+            </div>
+          </section>
+        )}
+
+        {view === 'settings' && (
+          <section>
+            <div className="page-header">
+              <h2>Shop Settings</h2>
+            </div>
+            <div style={{ display: 'flex', gap: '1rem', marginBottom: '2rem', borderBottom: '1px solid var(--border)' }}>
+              <button onClick={() => setSettingsTab('shop')} style={{ padding: '0.75rem 1.5rem', borderBottom: settingsTab === 'shop' ? '3px solid var(--primary)' : 'none', background: 'none', cursor: 'pointer', fontWeight: settingsTab === 'shop' ? 600 : 400 }}>Shop Information</button>
+              <button onClick={() => setSettingsTab('branches')} style={{ padding: '0.75rem 1.5rem', borderBottom: settingsTab === 'branches' ? '3px solid var(--primary)' : 'none', background: 'none', cursor: 'pointer', fontWeight: settingsTab === 'branches' ? 600 : 400 }}>Manage Branches</button>
+            </div>
+
+            {settingsTab === 'shop' && (
+              <div className="card">
+                <h3>Shop Information</h3>
+                <div style={{ marginTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                  <div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '0.5rem' }}>Shop Name</div>
+                    <div style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--text)', marginBottom: '1rem' }}>{currentShop?.shopName || 'My Shop'}</div>
+                    {isShopOwner && (
+                      <button className="primary" onClick={() => { setShopNameForm(currentShop?.shopName || ''); setShowSettingsModal(true); }}>Edit Shop Name</button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {settingsTab === 'branches' && (
+              <div>
+                <div style={{ marginBottom: '2rem' }}>
+                  {isShopOwner && (
+                    <button className="primary" onClick={() => { setBranchForm({ name: '', location: '', id: '' }); setShowBranchFormModal(true); }}>+ Add Branch</button>
+                  )}
+                </div>
+                <div className="grid">
+                  {branches.map((b) => (
+                    <div key={b.id} className="card">
+                      <h4 style={{ marginBottom: '1rem' }}>{b.name}</h4>
+                      <div style={{ marginBottom: '1rem' }}>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Location</div>
+                        <div style={{ fontSize: '0.95rem', color: 'var(--text)' }}>{b.location}</div>
+                      </div>
+                      {isShopOwner && (
+                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                          <button className="edit-btn" onClick={() => { setBranchForm(b); setShowBranchFormModal(true); }}>Edit</button>
+                          <button className="delete-btn" onClick={() => deleteBranch(b.id)}>Delete</button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </section>
+        )}
+
+        {view === 'profile' && (
+          <section>
+            <div className="card">
+              <h3>Your Profile</h3>
+              <div style={{ marginTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                <div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Name</div>
+                  <div style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--text)' }}>{authUser?.displayName}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Email</div>
+                  <div style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--text)' }}>{authUser?.email}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Current Role</div>
+                  <div style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--text)' }}>{role}</div>
+                </div>
               </div>
             </div>
           </section>
