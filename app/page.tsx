@@ -59,6 +59,7 @@ export default function Page() {
   const [showBranchModal, setShowBranchModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showBranchFormModal, setShowBranchFormModal] = useState(false);
+  const [showSaleModal, setShowSaleModal] = useState(false);
 
   // Filters
   const [salesDateFilter, setSalesDateFilter] = useState(new Date().toISOString().split('T')[0]);
@@ -852,63 +853,42 @@ export default function Page() {
           <section>
             <div className="page-header">
               <h2>Sales Records</h2>
+              <button className="primary" onClick={() => setShowSaleModal(true)}>+ Record Sale</button>
             </div>
 
-            <div className="grid" style={{ gridTemplateColumns: '1fr 2fr', alignItems: 'start' }}>
-              <div className="card">
-                <h3>Record New Sale</h3>
-                <form onSubmit={makeProductSale} className="field" style={{ gap: '1.5rem', marginTop: '1.5rem' }}>
-                  <label className="field">
-                    <span>Product</span>
-                    <select value={saleForm.productId} onChange={(e) => setSaleForm({ ...saleForm, productId: e.target.value })} required>
-                      <option value="">Select product</option>
-                      {products.map((p) => (
-                        <option key={p.id} value={p.id}>{p.name} ({p.stock} left)</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="field">
-                    <span>Quantity</span>
-                    <input type="number" min={1} value={saleForm.qty} onChange={(e) => setSaleForm({ ...saleForm, qty: Number(e.target.value) })} required />
-                  </label>
-                  <button className="primary">Complete Sale</button>
-                </form>
+            <div>
+              <div className="filter-bar">
+                <div className="filter-group">
+                  <label>Filter by Date</label>
+                  <input type="date" value={salesDateFilter} onChange={(e) => setSalesDateFilter(e.target.value)} />
+                </div>
+                <button className="edit-btn" onClick={() => setSalesDateFilter(new Date().toISOString().split('T')[0])}>Today</button>
+                <button className="edit-btn" onClick={() => setSalesDateFilter('')}>All Time</button>
               </div>
 
-              <div>
-                <div className="filter-bar">
-                  <div className="filter-group">
-                    <label>Filter by Date</label>
-                    <input type="date" value={salesDateFilter} onChange={(e) => setSalesDateFilter(e.target.value)} />
-                  </div>
-                  <button className="edit-btn" onClick={() => setSalesDateFilter(new Date().toISOString().split('T')[0])}>Today</button>
-                  <button className="edit-btn" onClick={() => setSalesDateFilter('')}>All Time</button>
-                </div>
-
-                <div className="table-wrap">
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        <th>Date</th>
-                        <th>Item</th>
-                        <th>Qty</th>
-                        <th>Total</th>
-                        <th>Profit</th>
+              <div className="table-wrap">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Item</th>
+                      <th>Qty</th>
+                      <th>Total</th>
+                      <th>Profit</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredSales.map((s) => (
+                      <tr key={s.id}>
+                        <td>{new Date(s.createdAt).toLocaleDateString()}</td>
+                        <td style={{ fontWeight: 600 }}>{s.itemName}</td>
+                        <td>{s.qty}</td>
+                        <td>{formatUGX(s.amount)}</td>
+                        <td style={{ color: 'var(--success)' }}>{formatUGX(s.amount - s.cost)}</td>
                       </tr>
-                    </thead>
-                    <tbody>
-                      {filteredSales.map((s) => (
-                        <tr key={s.id}>
-                          <td>{new Date(s.createdAt).toLocaleDateString()}</td>
-                          <td style={{ fontWeight: 600 }}>{s.itemName}</td>
-                          <td>{s.qty}</td>
-                          <td>{formatUGX(s.amount)}</td>
-                          <td style={{ color: 'var(--success)' }}>{formatUGX(s.amount - s.cost)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             </div>
           </section>
@@ -1192,6 +1172,41 @@ export default function Page() {
               </div>
             </div>
           </section>
+        )}
+
+        {/* Sale Modal */}
+        {showSaleModal && (
+          <div className="modal-overlay">
+            <div className="modal-content" style={{ maxWidth: '400px' }}>
+              <div className="modal-header">
+                <h3>Record New Sale</h3>
+                <button className="modal-close" onClick={() => setShowSaleModal(false)}>&times;</button>
+              </div>
+              <form onSubmit={(e) => { makeProductSale(e); setShowSaleModal(false); }}>
+                <div className="modal-body">
+                  <div className="field" style={{ gap: '1rem' }}>
+                    <label className="field">
+                      <span>Product</span>
+                      <select value={saleForm.productId} onChange={(e) => setSaleForm({ ...saleForm, productId: e.target.value })} required>
+                        <option value="">Select product</option>
+                        {products.map((p) => (
+                          <option key={p.id} value={p.id}>{p.name} ({p.stock} left)</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Quantity</span>
+                      <input type="number" min={1} value={saleForm.qty} onChange={(e) => setSaleForm({ ...saleForm, qty: Number(e.target.value) })} required />
+                    </label>
+                  </div>
+                </div>
+                <div className="modal-footer">
+                  <button type="button" className="edit-btn" onClick={() => setShowSaleModal(false)}>Cancel</button>
+                  <button type="submit" className="primary">Complete Sale</button>
+                </div>
+              </form>
+            </div>
+          </div>
         )}
 
         {/* Product Modal */}
