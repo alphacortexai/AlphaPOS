@@ -299,7 +299,7 @@ body {
 /* Dashboard Metrics - Grid & Glass */
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  grid-template-columns: repeat(3, 1fr);
   gap: 1rem;
   margin-bottom: 2rem;
 }
@@ -308,8 +308,9 @@ body {
   background: var(--bg);
   border-radius: var(--radius-md);
   border: 1px solid var(--border);
-  padding: 1.25rem;
+  padding: 1rem;
   box-shadow: var(--shadow-subtle);
+  position: relative;
 }
 
 .card:hover {
@@ -321,11 +322,11 @@ body {
 .badge {
   display: inline-flex;
   align-items: center;
-  padding: 0.25rem 0.5rem;
-  border-radius: 6px;
-  font-size: 0.7rem;
+  padding: 0.2rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.6rem;
   font-weight: 600;
-  gap: 0.25rem;
+  gap: 0.15rem;
 }
 
 .badge-success { background: var(--success-bg); color: var(--success); }
@@ -437,22 +438,32 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+  min-height: 140px;
+}
+
+.dashboard-card .badge {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  margin: 0;
 }
 
 .dashboard-card h4 {
-  font-size: 0.75rem;
+  font-size: 0.7rem;
   font-weight: 600;
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   margin: 0;
+  padding-right: 3rem;
 }
 
 .card-value {
-  font-size: 1.5rem;
+  font-size: 1.25rem;
   font-weight: 700;
   letter-spacing: -0.02em;
   color: var(--text);
+  margin-top: 0.5rem;
 }
 
 /* Modern Forms */

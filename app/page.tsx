@@ -554,6 +554,50 @@ export default function Page() {
     </span>
   );
 
+  // Sales performance table state
+  const [salesPerformanceSearch, setSalesPerformanceSearch] = useState('');
+  const [salesPerformanceFilter, setSalesPerformanceFilter] = useState<'all' | 'product' | 'service'>('all');
+
+  type SalesItem = {
+    name: string;
+    type: 'product' | 'service';
+    qty: number;
+    revenue: number;
+    count: number;
+    avgPerTransaction: number;
+  };
+
+  const filteredSalesPerformance = useMemo(() => {
+    let filtered: SalesItem[] = Object.entries(chartData.productMap).map(([name, data]) => ({
+      name,
+      type: 'product' as const,
+      qty: data.qty,
+      revenue: data.revenue,
+      count: data.count,
+      avgPerTransaction: data.count > 0 ? data.revenue / data.count : 0,
+    }));
+
+    if (salesPerformanceFilter === 'service' || salesPerformanceFilter === 'all') {
+      const services: SalesItem[] = Object.entries(chartData.serviceMap).map(([name, data]) => ({
+        name,
+        type: 'service' as const,
+        qty: 0,
+        revenue: data.revenue,
+        count: data.count,
+        avgPerTransaction: data.count > 0 ? data.revenue / data.count : 0,
+      }));
+      if (salesPerformanceFilter === 'service') {
+        filtered = services;
+      } else {
+        filtered = [...filtered, ...services];
+      }
+    }
+
+    return filtered
+      .filter((item) => item.name.toLowerCase().includes(salesPerformanceSearch.toLowerCase()))
+      .sort((a, b) => b.revenue - a.revenue);
+  }, [chartData, salesPerformanceSearch, salesPerformanceFilter]);
+
   if (loading) return <div className="auth-container"><div className="status">Loading AlphaPOS...</div></div>;
   if (!authUser) {
     return (
@@ -702,59 +746,68 @@ export default function Page() {
               </div>
             </div>
 
-            {/* Product & Service Charts */}
-            <div style={{ marginTop: '3rem' }}>
-              <h3 style={{ marginBottom: '1.5rem', fontSize: '1.25rem', fontWeight: 700 }}>Product Sales Performance</h3>
-              <div className="chart-container">
-                {Object.entries(chartData.productMap).length > 0 ? (
-                  <div className="chart-grid">
-                    {Object.entries(chartData.productMap).map(([name, data]) => (
-                      <div key={name} className="chart-card">
-                        <div className="chart-title">{name}</div>
-                        <div className="chart-stat">
-                          <div className="stat-label">Units Sold</div>
-                          <div className="stat-value">{data.qty}</div>
-                        </div>
-                        <div className="chart-stat">
-                          <div className="stat-label">Revenue</div>
-                          <div className="stat-value">{formatUGX(data.revenue)}</div>
-                        </div>
-                        <div className="chart-stat">
-                          <div className="stat-label">Transactions</div>
-                          <div className="stat-value">{data.count}</div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="empty-state">No product sales data available for this period.</div>
-                )}
-              </div>
-            </div>
-
-            {/* Service Sales Chart */}
-            {Object.entries(chartData.serviceMap).length > 0 && (
-              <div style={{ marginTop: '3rem' }}>
-                <h3 style={{ marginBottom: '1.5rem', fontSize: '1.25rem', fontWeight: 700 }}>Service Sales Performance</h3>
-                <div className="chart-container">
-                  <div className="chart-grid">
-                    {Object.entries(chartData.serviceMap).map(([name, data]) => (
-                      <div key={name} className="chart-card">
-                        <div className="chart-title">{name}</div>
-                        <div className="chart-stat">
-                          <div className="stat-label">Revenue</div>
-                          <div className="stat-value">{formatUGX(data.revenue)}</div>
-                        </div>
-                        <div className="chart-stat">
-                          <div className="stat-label">Transactions</div>
-                          <div className="stat-value">{data.count}</div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+            {/* Sales Performance Table */}
+            <div style={{ marginTop: '2rem' }}>
+              <h3 style={{ marginBottom: '1rem', fontSize: '1.25rem', fontWeight: 700 }}>Sales Performance</h3>
+              <div className="filter-bar">
+                <div className="filter-group" style={{ flex: 1 }}>
+                  <label>Search Item</label>
+                  <input
+                    type="text"
+                    placeholder="Search by name..."
+                    value={salesPerformanceSearch}
+                    onChange={(e) => setSalesPerformanceSearch(e.target.value)}
+                  />
+                </div>
+                <div className="filter-group">
+                  <label>Type</label>
+                  <select value={salesPerformanceFilter} onChange={(e) => setSalesPerformanceFilter(e.target.value as 'all' | 'product' | 'service')}>
+                    <option value="all">All Items</option>
+                    <option value="product">Products</option>
+                    <option value="service">Services</option>
+                  </select>
                 </div>
               </div>
-            )}
+
+              <div className="table-wrap">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Item Name</th>
+                      <th>Type</th>
+                      <th>Units Sold</th>
+                      <th>Transactions</th>
+                      <th>Total Revenue</th>
+                      <th>Avg per Transaction</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredSalesPerformance.length > 0 ? (
+                      filteredSalesPerformance.map((item, idx) => (
+                        <tr key={`${item.type}-${item.name}-${idx}`}>
+                          <td style={{ fontWeight: 600 }}>{item.name}</td>
+                          <td>
+                            <span className={`badge ${item.type === 'product' ? 'badge-info' : 'badge-success'}`}>
+                              {item.type === 'product' ? 'Product' : 'Service'}
+                            </span>
+                          </td>
+                          <td>{item.qty}</td>
+                          <td>{item.count}</td>
+                          <td style={{ color: 'var(--success)', fontWeight: 600 }}>{formatUGX(item.revenue)}</td>
+                          <td>{formatUGX(item.avgPerTransaction)}</td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr>
+                        <td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>
+                          No sales data available for this period.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </section>
         )}
 
