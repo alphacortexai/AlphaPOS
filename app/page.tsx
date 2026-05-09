@@ -6,6 +6,7 @@ import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signO
 import { collection, doc, getDoc, getDocs, getFirestore, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
 
 type Role = 'shop_owner' | 'manager' | 'cashier' | 'stock';
+type View = 'dashboard' | 'products' | 'sales' | 'sales_history' | 'services' | 'expenses' | 'users' | 'branches' | 'reports' | 'settings' | 'profile';
 type View = 'dashboard' | 'sales_performance' | 'products' | 'sales' | 'services' | 'expenses' | 'users' | 'branches' | 'reports' | 'settings' | 'profile';
 type DashboardPeriod = 'daily' | 'weekly' | 'monthly' | 'yearly';
 
@@ -67,6 +68,7 @@ export default function Page() {
   const [salesDateFilter, setSalesDateFilter] = useState(new Date().toISOString().split('T')[0]);
   const [dashboardPeriod, setDashboardPeriod] = useState<DashboardPeriod>('weekly');
   const [productSearchQuery, setProductSearchQuery] = useState('');
+  const [salesDeskSearchQuery, setSalesDeskSearchQuery] = useState('');
   const [productBranchFilter, setProductBranchFilter] = useState('');
   const [productStockFilter, setProductStockFilter] = useState<'all' | 'low' | 'out'>('all');
 
@@ -99,6 +101,11 @@ export default function Page() {
   const cartTotal = useMemo(() => cart.reduce((sum, item) => sum + (item.unitPrice * item.qty), 0), [cart]);
   const cartCost = useMemo(() => cart.reduce((sum, item) => sum + (item.unitCost * item.qty), 0), [cart]);
   const cartProfit = useMemo(() => cartTotal - cartCost, [cartTotal, cartCost]);
+  const salesDeskProducts = useMemo(() => {
+    const inStockProducts = topSellingProducts.length > 0 ? topSellingProducts : products.filter((product) => product.stock > 0).slice(0, 24);
+    if (!salesDeskSearchQuery.trim()) return inStockProducts;
+    return inStockProducts.filter((product) => product.name.toLowerCase().includes(salesDeskSearchQuery.toLowerCase().trim()));
+  }, [products, salesDeskSearchQuery, topSellingProducts]);
   const db = firebaseApp ? getFirestore(firebaseApp) : null;
   const formatUGX = (value: number) => `UGX ${new Intl.NumberFormat('en-UG', { maximumFractionDigits: 0 }).format(Math.round(value))}`;
   const currentShop = availableShops.find((s) => s.ownerUid === activeShopOwnerUid);
@@ -765,6 +772,7 @@ export default function Page() {
         <nav className="sidebar-nav">
           <button className={`nav-button ${view === 'dashboard' ? 'active' : ''}`} onClick={() => { setView('dashboard'); setIsSidebarOpen(false); }}>📈 Dashboard</button>
           <button className={`nav-button ${view === 'sales' ? 'active' : ''}`} onClick={() => { setView('sales'); setIsSidebarOpen(false); }}>🛒 Sales Desk</button>
+          <button className={`nav-button ${view === 'sales_history' ? 'active' : ''}`} onClick={() => { setView('sales_history'); setIsSidebarOpen(false); }}>🧾 Sales History</button>
           <button className={`nav-button ${view === 'sales_performance' ? 'active' : ''}`} onClick={() => { setView('sales_performance'); setIsSidebarOpen(false); }}>📉 Sales Performance</button>
           <button className={`nav-button ${view === 'products' ? 'active' : ''}`} onClick={() => { setView('products'); setIsSidebarOpen(false); }}>📦 Inventory</button>
           <button className={`nav-button ${view === 'expenses' ? 'active' : ''}`} onClick={() => { setView('expenses'); setIsSidebarOpen(false); }}>💰 Expenses</button>
@@ -1051,12 +1059,19 @@ export default function Page() {
               <button className="primary" onClick={() => { setCart([]); setShowSaleModal(true); }}>+ New Sale</button>
             </div>
 
+            <div style={{ marginTop: '0.5rem', marginBottom: '2rem' }}>
             <div className="sales-desk-layout" style={{ marginTop: '0.5rem', marginBottom: '2rem' }}>
               {/* Products Selection */}
               <div>
                 <h3 style={{ marginBottom: '0.6rem', fontSize: '1.02rem', fontWeight: 700 }}>Available Products</h3>
+                <input
+                  placeholder="Search available products..."
+                  value={salesDeskSearchQuery}
+                  onChange={(e) => setSalesDeskSearchQuery(e.target.value)}
+                  style={{ marginBottom: '0.8rem' }}
+                />
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(145px, 1fr))', gap: '0.55rem', marginBottom: '1rem' }}>
-                  {topSellingProducts.map(p => (
+                  {salesDeskProducts.map(p => (
                     <div key={p.id} className="card" style={{ cursor: 'pointer', transition: 'all 0.2s ease', padding: '0.55rem' }} onClick={() => addToCart(p.id)}>
                       <div style={{ fontSize: '0.84rem', fontWeight: 600, color: 'var(--text)', marginBottom: '0.3rem' }}>{p.name}</div>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
@@ -1070,8 +1085,8 @@ export default function Page() {
               </div>
 
               {/* Cart Summary */}
-              <div>
-                <div className="card" style={{ position: 'sticky', top: '2rem' }}>
+              <div style={{ marginTop: '1rem' }}>
+                <div className="card">
                   <h3 style={{ margin: '0 0 1rem 0', fontSize: '1.1rem', fontWeight: 700 }}>Cart</h3>
                   {cart.length === 0 ? (
                     <div style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem 0' }}>Cart is empty</div>
@@ -1110,6 +1125,14 @@ export default function Page() {
               </div>
             </div>
 
+          </section>
+        )}
+
+        {view === 'sales_history' && (
+          <section>
+            <div className="page-header">
+              <h2>Sales History</h2>
+            </div>
             {/* Sales History */}
             <div>
               <h3 style={{ marginBottom: '1rem', fontSize: '1.1rem', fontWeight: 700 }}>Sales History</h3>
