@@ -579,7 +579,7 @@ body {
 
 .sales-desk-layout {
   display: grid;
-  grid-template-columns: 1fr 350px;
+  grid-template-columns: 1fr;
   gap: 2rem;
 }
 
