@@ -965,11 +965,13 @@ export default function Page() {
                 <tbody>
                   {filteredProducts.length > 0 ? (
                     filteredProducts.map((p) => (
-                      <tr key={p.id}>
+                      <tr key={p.id} style={{ opacity: p.stock === 0 ? 0.6 : 1 }}>
                         <td style={{ fontWeight: 600, color: 'var(--text)' }}>{p.name}</td>
                         <td>{branchMap[p.branchId]}</td>
                         <td>
-                          <span className={`badge ${p.stock < 10 ? 'badge-danger' : 'badge-info'}`}>{p.stock}</span>
+                          <span className={`badge ${p.stock === 0 ? 'badge-danger' : p.stock < 10 ? 'badge-warning' : 'badge-success'}`}>
+                            {p.stock === 0 ? '❌ Out' : p.stock < 10 ? '⚠️ Low' : '✅ ' + p.stock}
+                          </span>
                         </td>
                         <td>{formatUGX(p.purchasePrice)}</td>
                         <td>{formatUGX(p.salePrice)}</td>
