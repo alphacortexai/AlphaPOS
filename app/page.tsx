@@ -1116,16 +1116,42 @@ export default function Page() {
         {view === 'expenses' && (
           <section>
             <div className="page-header">
-              <h2>Expense Tracking</h2>
+              <h2>💰 Expense Tracking</h2>
               <button className="primary" onClick={() => { setExpenseForm({ id: '', title: '', branchId: branches[0]?.id || '', amount: 0 }); setShowExpenseModal(true); }}>
                 + Add Expense
               </button>
             </div>
+            
+            {/* Expense Summary */}
+            {expenses.length > 0 && (
+              <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', marginBottom: '2rem' }}>
+                <div className="card">
+                  <h4 style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', margin: 0, marginBottom: '0.5rem' }}>Total Expenses</h4>
+                  <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--danger)' }}>{formatUGX(expenses.reduce((sum, e) => sum + e.amount, 0))}</div>
+                  <span className="badge badge-danger" style={{ marginTop: '0.5rem' }}>All Time</span>
+                </div>
+                <div className="card">
+                  <h4 style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', margin: 0, marginBottom: '0.5rem' }}>This Month</h4>
+                  <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--danger)' }}>{formatUGX(expenses.filter(e => {
+                    const d = new Date(e.createdAt);
+                    const now = new Date();
+                    return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+                  }).reduce((sum, e) => sum + e.amount, 0))}</div>
+                  <span className="badge badge-warning" style={{ marginTop: '0.5rem' }}>Current Month</span>
+                </div>
+                <div className="card">
+                  <h4 style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', margin: 0, marginBottom: '0.5rem' }}>Total Records</h4>
+                  <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--text)' }}>{expenses.length}</div>
+                  <span className="badge badge-info" style={{ marginTop: '0.5rem' }}>Transactions</span>
+                </div>
+              </div>
+            )}
+            
             <div className="table-wrap">
               <table className="data-table">
                 <thead>
                   <tr>
-                    <th>Date</th>
+                    <th>Date & Time</th>
                     <th>Expense Title</th>
                     <th>Branch</th>
                     <th>Amount</th>
@@ -1133,18 +1159,24 @@ export default function Page() {
                   </tr>
                 </thead>
                 <tbody>
-                  {expenses.map((e) => (
-                    <tr key={e.id}>
-                      <td>{new Date(e.createdAt).toLocaleDateString()}</td>
-                      <td style={{ fontWeight: 600 }}>{e.title}</td>
-                      <td>{branchMap[e.branchId]}</td>
-                      <td style={{ color: 'var(--danger)' }}>{formatUGX(e.amount)}</td>
-                      <td>
-                        <button className="edit-btn" onClick={() => { setExpenseForm(e); setShowExpenseModal(true); }}>Edit</button>
-                        <button className="delete-btn" onClick={() => setExpenses(prev => prev.filter(x => x.id !== e.id))}>Delete</button>
-                      </td>
+                  {expenses.length > 0 ? (
+                    expenses.map((e) => (
+                      <tr key={e.id}>
+                        <td>{new Date(e.createdAt).toLocaleString()}</td>
+                        <td style={{ fontWeight: 600 }}>{e.title}</td>
+                        <td>{branchMap[e.branchId]}</td>
+                        <td style={{ color: 'var(--danger)', fontWeight: 600 }}>{formatUGX(e.amount)}</td>
+                        <td>
+                          <button className="edit-btn" onClick={() => { setExpenseForm(e); setShowExpenseModal(true); }}>Edit</button>
+                          <button className="delete-btn" onClick={() => setExpenses(prev => prev.filter(x => x.id !== e.id))}>Delete</button>
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>No expenses recorded yet</td>
                     </tr>
-                  ))}
+                  )}
                 </tbody>
               </table>
             </div>
