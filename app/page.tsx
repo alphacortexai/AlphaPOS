@@ -1186,48 +1186,80 @@ export default function Page() {
         {view === 'users' && (
           <section>
             <div className="page-header">
-              <h2>Staff Management</h2>
+              <h2>👥 Staff Management</h2>
               {canManageUsers && (
                 <button className="primary" onClick={() => { setUserForm({ id: '', name: '', email: '', role: 'cashier', branchId: branches[0]?.id || '' }); setShowUserModal(true); }}>
                   + Invite Staff
                 </button>
               )}
             </div>
+            
             {canManageUsers ? (
-              <div className="table-wrap">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Name</th>
-                      <th>Email</th>
-                      <th>Role</th>
-                      <th>Branch</th>
-                      <th>Added</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {users.map((u) => (
-                      <tr key={u.id}>
-                        <td style={{ fontWeight: 600 }}>{u.name}</td>
-                        <td>{u.email}</td>
-                        <td>
-                          <span className="badge badge-info">{u.role}</span>
-                        </td>
-                        <td>{branchMap[u.branchId]}</td>
-                        <td>{new Date(u.createdAt).toLocaleDateString()}</td>
-                        <td>
-                          <button className="edit-btn" onClick={() => { setUserForm(u); setShowUserModal(true); }}>Edit</button>
-                          <button className="delete-btn" onClick={() => setUsers(prev => prev.filter(x => x.id !== u.id))}>Remove</button>
-                        </td>
+              <>
+                {/* Staff Summary */}
+                {users.length > 0 && (
+                  <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', marginBottom: '2rem' }}>
+                    <div className="card">
+                      <h4 style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', margin: 0, marginBottom: '0.5rem' }}>Total Staff</h4>
+                      <div style={{ fontSize: '1.5rem', fontWeight: 700 }}>{users.length}</div>
+                      <span className="badge badge-info" style={{ marginTop: '0.5rem' }}>Members</span>
+                    </div>
+                    <div className="card">
+                      <h4 style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', margin: 0, marginBottom: '0.5rem' }}>Cashiers</h4>
+                      <div style={{ fontSize: '1.5rem', fontWeight: 700 }}>{users.filter(u => u.role === 'cashier').length}</div>
+                      <span className="badge badge-success" style={{ marginTop: '0.5rem' }}>Active</span>
+                    </div>
+                    <div className="card">
+                      <h4 style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', margin: 0, marginBottom: '0.5rem' }}>Managers</h4>
+                      <div style={{ fontSize: '1.5rem', fontWeight: 700 }}>{users.filter(u => u.role === 'manager').length}</div>
+                      <span className="badge badge-warning" style={{ marginTop: '0.5rem' }}>Supervisors</span>
+                    </div>
+                  </div>
+                )}
+                
+                <div className="table-wrap">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Name</th>
+                        <th>Email</th>
+                        <th>Role</th>
+                        <th>Branch</th>
+                        <th>Added</th>
+                        <th>Actions</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody>
+                      {users.length > 0 ? (
+                        users.map((u) => (
+                          <tr key={u.id}>
+                            <td style={{ fontWeight: 600 }}>{u.name}</td>
+                            <td>{u.email}</td>
+                            <td>
+                              <span className={`badge ${u.role === 'manager' ? 'badge-warning' : 'badge-success'}`}>
+                                {u.role === 'manager' ? '👔 Manager' : '💼 Cashier'}
+                              </span>
+                            </td>
+                            <td>{branchMap[u.branchId]}</td>
+                            <td>{new Date(u.createdAt).toLocaleDateString()}</td>
+                            <td>
+                              <button className="edit-btn" onClick={() => { setUserForm(u); setShowUserModal(true); }}>Edit</button>
+                              <button className="delete-btn" onClick={() => setUsers(prev => prev.filter(x => x.id !== u.id))}>Remove</button>
+                            </td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>No staff members added yet</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </>
             ) : (
               <div className="card">
-                <p>Only shop owners can manage staff members.</p>
+                <p style={{ margin: 0 }}>⚠️ Only shop owners can manage staff members.</p>
               </div>
             )}
           </section>
