@@ -7,6 +7,7 @@ import { collection, doc, getDoc, getDocs, getFirestore, query, serverTimestamp,
 
 type Role = 'shop_owner' | 'manager' | 'cashier' | 'stock';
 type View = 'dashboard' | 'products' | 'sales' | 'sales_history' | 'services' | 'expenses' | 'users' | 'branches' | 'reports' | 'settings' | 'profile';
+type View = 'dashboard' | 'sales_performance' | 'products' | 'sales' | 'services' | 'expenses' | 'users' | 'branches' | 'reports' | 'settings' | 'profile';
 type DashboardPeriod = 'daily' | 'weekly' | 'monthly' | 'yearly';
 
 type Branch = { id: string; name: string; location: string; createdAt?: string };
@@ -772,6 +773,7 @@ export default function Page() {
           <button className={`nav-button ${view === 'dashboard' ? 'active' : ''}`} onClick={() => { setView('dashboard'); setIsSidebarOpen(false); }}>📈 Dashboard</button>
           <button className={`nav-button ${view === 'sales' ? 'active' : ''}`} onClick={() => { setView('sales'); setIsSidebarOpen(false); }}>🛒 Sales Desk</button>
           <button className={`nav-button ${view === 'sales_history' ? 'active' : ''}`} onClick={() => { setView('sales_history'); setIsSidebarOpen(false); }}>🧾 Sales History</button>
+          <button className={`nav-button ${view === 'sales_performance' ? 'active' : ''}`} onClick={() => { setView('sales_performance'); setIsSidebarOpen(false); }}>📉 Sales Performance</button>
           <button className={`nav-button ${view === 'products' ? 'active' : ''}`} onClick={() => { setView('products'); setIsSidebarOpen(false); }}>📦 Inventory</button>
           <button className={`nav-button ${view === 'expenses' ? 'active' : ''}`} onClick={() => { setView('expenses'); setIsSidebarOpen(false); }}>💰 Expenses</button>
           <button className={`nav-button ${view === 'users' ? 'active' : ''}`} onClick={() => { setView('users'); setIsSidebarOpen(false); }}>👥 Staff</button>
@@ -886,70 +888,75 @@ export default function Page() {
               </div>
             </div>
 
-            {/* Sales Performance Table */}
-            <div style={{ marginTop: '2rem' }}>
-              <h3 style={{ marginBottom: '1rem', fontSize: '1.25rem', fontWeight: 700 }}>Sales Performance</h3>
-              <div className="filter-bar">
-                <div className="filter-group" style={{ flex: 1 }}>
-                  <label>Search Item</label>
-                  <input
-                    type="text"
-                    placeholder="Search by name..."
-                    value={salesPerformanceSearch}
-                    onChange={(e) => setSalesPerformanceSearch(e.target.value)}
-                  />
-                </div>
-                <div className="filter-group">
-                  <label>Type</label>
-                  <select value={salesPerformanceFilter} onChange={(e) => setSalesPerformanceFilter(e.target.value as 'all' | 'product' | 'service')}>
-                    <option value="all">All Items</option>
-                    <option value="product">Products</option>
-                    <option value="service">Services</option>
-                  </select>
-                </div>
-              </div>
+          </section>
+        )}
 
-              <div className="table-wrap">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Item Name</th>
-                      <th>Type</th>
-                      <th>Units Sold</th>
-                      <th>Transactions</th>
-                      <th>Total Revenue</th>
-                      <th>Avg per Transaction</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredSalesPerformance.length > 0 ? (
-                      filteredSalesPerformance.map((item, idx) => (
-                        <tr key={`${item.type}-${item.name}-${idx}`}>
-                          <td style={{ fontWeight: 600 }}>{item.name}</td>
-                          <td>
-                            <span className={`badge ${item.type === 'product' ? 'badge-info' : 'badge-success'}`}>
-                              {item.type === 'product' ? 'Product' : 'Service'}
-                            </span>
-                          </td>
-                          <td>{item.qty}</td>
-                          <td>{item.count}</td>
-                          <td style={{ color: 'var(--success)', fontWeight: 600 }}>{formatUGX(item.revenue)}</td>
-                          <td>{formatUGX(item.avgPerTransaction)}</td>
-                        </tr>
-                      ))
-                    ) : (
-                      <tr>
-                        <td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>
-                          No sales data available for this period.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
+        {view === 'sales_performance' && (
+          <section>
+            <div className="page-header">
+              <h2>Sales Performance</h2>
+            </div>
+            <div className="filter-bar">
+              <div className="filter-group sales-search-group">
+                <label>Search Item</label>
+                <input
+                  type="text"
+                  placeholder="Search by name..."
+                  value={salesPerformanceSearch}
+                  onChange={(e) => setSalesPerformanceSearch(e.target.value)}
+                />
               </div>
+              <div className="filter-group">
+                <label>Type</label>
+                <select value={salesPerformanceFilter} onChange={(e) => setSalesPerformanceFilter(e.target.value as 'all' | 'product' | 'service')}>
+                  <option value="all">All Items</option>
+                  <option value="product">Products</option>
+                  <option value="service">Services</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Item Name</th>
+                    <th>Type</th>
+                    <th>Units Sold</th>
+                    <th>Transactions</th>
+                    <th>Total Revenue</th>
+                    <th>Avg per Transaction</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredSalesPerformance.length > 0 ? (
+                    filteredSalesPerformance.map((item, idx) => (
+                      <tr key={`${item.type}-${item.name}-${idx}`}>
+                        <td style={{ fontWeight: 600 }}>{item.name}</td>
+                        <td>
+                          <span className={`badge ${item.type === 'product' ? 'badge-info' : 'badge-success'}`}>
+                            {item.type === 'product' ? 'Product' : 'Service'}
+                          </span>
+                        </td>
+                        <td>{item.qty}</td>
+                        <td>{item.count}</td>
+                        <td style={{ color: 'var(--success)', fontWeight: 600 }}>{formatUGX(item.revenue)}</td>
+                        <td>{formatUGX(item.avgPerTransaction)}</td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>
+                        No sales data available for this period.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
             </div>
           </section>
         )}
+
 
         {view === 'products' && (
           <section>
@@ -1053,6 +1060,7 @@ export default function Page() {
             </div>
 
             <div style={{ marginTop: '0.5rem', marginBottom: '2rem' }}>
+            <div className="sales-desk-layout" style={{ marginTop: '0.5rem', marginBottom: '2rem' }}>
               {/* Products Selection */}
               <div>
                 <h3 style={{ marginBottom: '0.6rem', fontSize: '1.02rem', fontWeight: 700 }}>Available Products</h3>
