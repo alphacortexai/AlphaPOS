@@ -41,6 +41,7 @@ export default function Page() {
   const [activeShopOwnerUid, setActiveShopOwnerUid] = useState('');
   const [availableShops, setAvailableShops] = useState<ShopMembership[]>([]);
   const [view, setView] = useState<View>('dashboard');
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [status, setStatus] = useState('Welcome to AlphaPOS Pro.');
   const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
   const hasLoadedUserDataRef = useRef(false);
@@ -706,7 +707,8 @@ export default function Page() {
 
   return (
     <div className="app">
-      <aside className="sidebar">
+      <div className={`sidebar-overlay ${isSidebarOpen ? 'show' : ''}`} onClick={() => setIsSidebarOpen(false)}></div>
+      <aside className={`sidebar ${isSidebarOpen ? 'open' : ''}`}>
         <div className="sidebar-header">
           <h2>📊 AlphaPOS</h2>
           <div className="sidebar-subtitle">v2.0 Pro</div>
@@ -724,13 +726,13 @@ export default function Page() {
         </div>
 
         <nav className="sidebar-nav">
-          <button className={`nav-button ${view === 'dashboard' ? 'active' : ''}`} onClick={() => setView('dashboard')}>📈 Dashboard</button>
-          <button className={`nav-button ${view === 'sales' ? 'active' : ''}`} onClick={() => setView('sales')}>🛒 Sales Desk</button>
-          <button className={`nav-button ${view === 'products' ? 'active' : ''}`} onClick={() => setView('products')}>📦 Inventory</button>
-          <button className={`nav-button ${view === 'expenses' ? 'active' : ''}`} onClick={() => setView('expenses')}>💰 Expenses</button>
-          <button className={`nav-button ${view === 'users' ? 'active' : ''}`} onClick={() => setView('users')}>👥 Staff</button>
-          <button className={`nav-button ${view === 'reports' ? 'active' : ''}`} onClick={() => setView('reports')}>📊 Reports</button>
-          {isShopOwner && <button className={`nav-button ${view === 'settings' ? 'active' : ''}`} onClick={() => setView('settings')}>⚙️ Settings</button>}
+          <button className={`nav-button ${view === 'dashboard' ? 'active' : ''}`} onClick={() => { setView('dashboard'); setIsSidebarOpen(false); }}>📈 Dashboard</button>
+          <button className={`nav-button ${view === 'sales' ? 'active' : ''}`} onClick={() => { setView('sales'); setIsSidebarOpen(false); }}>🛒 Sales Desk</button>
+          <button className={`nav-button ${view === 'products' ? 'active' : ''}`} onClick={() => { setView('products'); setIsSidebarOpen(false); }}>📦 Inventory</button>
+          <button className={`nav-button ${view === 'expenses' ? 'active' : ''}`} onClick={() => { setView('expenses'); setIsSidebarOpen(false); }}>💰 Expenses</button>
+          <button className={`nav-button ${view === 'users' ? 'active' : ''}`} onClick={() => { setView('users'); setIsSidebarOpen(false); }}>👥 Staff</button>
+          <button className={`nav-button ${view === 'reports' ? 'active' : ''}`} onClick={() => { setView('reports'); setIsSidebarOpen(false); }}>📊 Reports</button>
+          {isShopOwner && <button className={`nav-button ${view === 'settings' ? 'active' : ''}`} onClick={() => { setView('settings'); setIsSidebarOpen(false); }}>⚙️ Settings</button>}
         </nav>
 
         <div className="sidebar-footer">
@@ -771,7 +773,10 @@ export default function Page() {
 
       <main className="main">
         <header className="main-header">
-          <h1>{view.charAt(0).toUpperCase() + view.slice(1)}</h1>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-md)' }}>
+            <button className="mobile-menu-toggle" onClick={() => setIsSidebarOpen(true)}>☰</button>
+            <h1 style={{ margin: 0 }}>{view.charAt(0).toUpperCase() + view.slice(1)}</h1>
+          </div>
           <div className="status-container">
             <span className="status">{status}</span>
           </div>
