@@ -571,6 +571,18 @@ body {
   line-height: 1.2;
 }
 
+
+.sales-search-group {
+  flex: 1;
+  min-width: 220px;
+}
+
+.sales-desk-layout {
+  display: grid;
+  grid-template-columns: 1fr 350px;
+  gap: 2rem;
+}
+
 /* Modern Forms */
 .polished-form {
   background: var(--bg-subtle);
@@ -932,6 +944,11 @@ button.delete-btn:hover {
   .filter-group select {
     width: 100%;
     min-width: auto;
+  }
+
+  .sales-desk-layout {
+    grid-template-columns: 1fr;
+    gap: 1rem;
   }
 
   .dashboard-controls {
