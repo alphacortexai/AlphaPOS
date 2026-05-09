@@ -1061,11 +1061,11 @@ export default function Page() {
               <button className="primary" onClick={() => { setCart([]); setShowSaleModal(true); }}>+ New Sale</button>
             </div>
 
-            <div className="sales-desk-layout" style={{ marginTop: '0.5rem', marginBottom: '2rem' }}>
+            <div className="sales-desk-layout" style={{ marginTop: '0.2rem', marginBottom: '2rem' }}>
               {/* Products Selection */}
               <div>
-                <h3 style={{ marginBottom: '0.6rem', fontSize: '1.02rem', fontWeight: 700 }}>Available Products</h3>
-                <div className="filter-group" style={{ marginBottom: '0.8rem' }}>
+                <h3 style={{ margin: '0 0 0.45rem 0', fontSize: '1.02rem', fontWeight: 700 }}>Available Products</h3>
+                <div className="filter-group" style={{ marginBottom: '0.6rem' }}>
                   <label>Quick Search Item</label>
                   <input
                     type="text"
