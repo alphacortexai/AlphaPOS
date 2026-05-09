@@ -799,34 +799,41 @@ export default function Page() {
             {/* KPI Cards Grid */}
             <div className="grid">
               <div className="card dashboard-card">
-                <h4>Sales ({dashboardPeriod})</h4>
+                <h4>💵 Sales ({dashboardPeriod})</h4>
                 <div className="card-value">{formatUGX(dashboardMetrics.sales.value)}</div>
                 <Badge value={dashboardMetrics.sales.change} />
               </div>
               <div className="card dashboard-card">
-                <h4>Expenses ({dashboardPeriod})</h4>
+                <h4>💰 Expenses ({dashboardPeriod})</h4>
                 <div className="card-value">{formatUGX(dashboardMetrics.expenses.value)}</div>
                 <Badge value={dashboardMetrics.expenses.change} />
               </div>
               <div className="card dashboard-card">
-                <h4>Products in Shop</h4>
+                <h4>📈 Net Profit ({dashboardPeriod})</h4>
+                <div className="card-value" style={{ color: 'var(--success)' }}>{formatUGX(dashboardMetrics.netProfit.value)}</div>
+                <Badge value={dashboardMetrics.netProfit.change} />
+              </div>
+              <div className="card dashboard-card">
+                <h4>📦 Products in Stock</h4>
                 <div className="card-value">{dashboardMetrics.products}</div>
-                <span className="badge badge-info">Total Stock</span>
+                <span className="badge badge-info">Total Items</span>
               </div>
               <div className="card dashboard-card">
-                <h4>Net Profit ({dashboardPeriod})</h4>
-                <div className="card-value">{formatUGX(dashboardMetrics.profits.value)}</div>
-                <Badge value={dashboardMetrics.profits.change} />
-              </div>
-              <div className="card dashboard-card">
-                <h4>Gross Profit ({dashboardPeriod})</h4>
+                <h4>📊 Gross Profit ({dashboardPeriod})</h4>
                 <div className="card-value">{formatUGX(dashboardMetrics.grossProfit.value)}</div>
                 <Badge value={dashboardMetrics.grossProfit.change} />
               </div>
               <div className="card dashboard-card">
-                <h4>Net Profit ({dashboardPeriod})</h4>
-                <div className="card-value">{formatUGX(dashboardMetrics.netProfit.value)}</div>
-                <Badge value={dashboardMetrics.netProfit.change} />
+                <h4>🎯 Transactions ({dashboardPeriod})</h4>
+                <div className="card-value">{sales.filter(s => {
+                  const d = new Date(s.createdAt);
+                  const now = new Date();
+                  if (dashboardPeriod === 'daily') return d.toDateString() === now.toDateString();
+                  if (dashboardPeriod === 'weekly') return d.getTime() >= new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay()).getTime();
+                  if (dashboardPeriod === 'monthly') return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+                  return d.getFullYear() === now.getFullYear();
+                }).length}</div>
+                <span className="badge badge-success">Total</span>
               </div>
             </div>
 
