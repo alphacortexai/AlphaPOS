@@ -97,6 +97,11 @@ export default function Page() {
 
     return rankedProducts.slice(0, 12);
   }, [products, sales]);
+  const filteredQuickSaleProducts = useMemo(() => {
+    const query = quickSaleSearchQuery.trim().toLowerCase();
+    if (!query) return topSellingProducts;
+    return topSellingProducts.filter((product) => product.name.toLowerCase().includes(query));
+  }, [quickSaleSearchQuery, topSellingProducts]);
   const cartTotal = useMemo(() => cart.reduce((sum, item) => sum + (item.unitPrice * item.qty), 0), [cart]);
   const cartCost = useMemo(() => cart.reduce((sum, item) => sum + (item.unitCost * item.qty), 0), [cart]);
   const cartProfit = useMemo(() => cartTotal - cartCost, [cartTotal, cartCost]);
@@ -1759,8 +1764,3 @@ export default function Page() {
     </div>
   );
 }
-  const filteredQuickSaleProducts = useMemo(() => {
-    const query = quickSaleSearchQuery.trim().toLowerCase();
-    if (!query) return topSellingProducts;
-    return topSellingProducts.filter((product) => product.name.toLowerCase().includes(query));
-  }, [quickSaleSearchQuery, topSellingProducts]);
