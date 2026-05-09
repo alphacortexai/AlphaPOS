@@ -569,6 +569,29 @@ export default function Page() {
     setStatus('Sale recorded.');
   };
 
+
+  const restockProduct = (productId: string) => {
+    const product = products.find((p) => p.id === productId);
+    if (!product) {
+      showNotification('Product not found', 'error');
+      return;
+    }
+
+    const stockInput = window.prompt(`Add stock for ${product.name}. Current stock: ${product.stock}`, '0');
+    if (stockInput === null) return;
+
+    const qtyToAdd = Number(stockInput);
+    if (!Number.isFinite(qtyToAdd) || qtyToAdd <= 0) {
+      showNotification('Enter a valid stock quantity greater than 0', 'error');
+      return;
+    }
+
+    setProducts((prev) =>
+      prev.map((p) => (p.id === productId ? { ...p, stock: p.stock + qtyToAdd, ...updatedAuditStamp() } : p))
+    );
+    showNotification(`${qtyToAdd} units added to ${product.name}`, 'success');
+  };
+
   const filteredSales = useMemo(() => {
     if (!salesDateFilter) return sales;
     return sales.filter(s => s.createdAt.startsWith(salesDateFilter));
@@ -983,6 +1006,7 @@ export default function Page() {
                         <td style={{ color: 'var(--success)', fontWeight: 600 }}>{formatUGX(p.salePrice - p.purchasePrice)}</td>
                         <td>
                           <button className="edit-btn" onClick={() => { setProductForm(p); setShowProductModal(true); }}>Edit</button>
+                          <button className="edit-btn" onClick={() => restockProduct(p.id)}>+ Stock</button>
                           <button className="delete-btn" onClick={() => setProducts(prev => prev.filter(x => x.id !== p.id))}>Delete</button>
                         </td>
                       </tr>
@@ -1011,21 +1035,21 @@ export default function Page() {
               {/* Products Selection */}
               <div>
                 <h3 style={{ marginBottom: '1rem', fontSize: '1.1rem', fontWeight: 700 }}>Available Products</h3>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '1rem', marginBottom: '2rem' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '0.7rem', marginBottom: '1.5rem' }}>
                   {products.filter(p => p.stock > 0).map(p => (
-                    <div key={p.id} className="card" style={{ cursor: 'pointer', transition: 'all 0.2s ease' }} onClick={() => addToCart(p.id)}>
+                    <div key={p.id} className="card" style={{ cursor: 'pointer', transition: 'all 0.2s ease', padding: '0.75rem' }} onClick={() => addToCart(p.id)}>
                       <div style={{ marginBottom: '0.5rem' }}>
                         <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Product</div>
-                        <div style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--text)' }}>{p.name}</div>
+                        <div style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text)' }}>{p.name}</div>
                       </div>
                       <div style={{ marginBottom: '0.5rem' }}>
                         <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Price</div>
-                        <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--success)' }}>{formatUGX(p.salePrice)}</div>
+                        <div style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--success)' }}>{formatUGX(p.salePrice)}</div>
                       </div>
                       <div style={{ marginBottom: '0.5rem' }}>
                         <span className="badge badge-info">Stock: {p.stock}</span>
                       </div>
-                      <button className="primary" style={{ width: '100%', marginTop: '0.5rem', fontSize: '0.8rem' }}>Add to Cart</button>
+                      <button className="primary" style={{ width: '100%', marginTop: '0.35rem', fontSize: '0.72rem', padding: '0.45rem 0.6rem' }}>Add to Cart</button>
                     </div>
                   ))}
                 </div>
