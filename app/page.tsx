@@ -1131,13 +1131,13 @@ export default function Page() {
             {expenses.length > 0 && (
               <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', marginBottom: '2rem' }}>
                 <div className="card">
-                  <h4 style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', margin: 0, marginBottom: '0.5rem' }}>Total Expenses</h4>
-                  <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--danger)' }}>{formatUGX(expenses.reduce((sum, e) => sum + e.amount, 0))}</div>
+                  <h4 style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase', margin: 0, marginBottom: '0.5rem' }}>Total Expenses</h4>
+                  <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--danger)' }}>{formatUGX(expenses.reduce((sum, e) => sum + e.amount, 0))}</div>
                   <span className="badge badge-danger" style={{ marginTop: '0.5rem' }}>All Time</span>
                 </div>
                 <div className="card">
-                  <h4 style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', margin: 0, marginBottom: '0.5rem' }}>This Month</h4>
-                  <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--danger)' }}>{formatUGX(expenses.filter(e => {
+                  <h4 style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase', margin: 0, marginBottom: '0.5rem' }}>This Month</h4>
+                  <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--danger)' }}>{formatUGX(expenses.filter(e => {
                     const d = new Date(e.createdAt);
                     const now = new Date();
                     return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
@@ -1145,8 +1145,8 @@ export default function Page() {
                   <span className="badge badge-warning" style={{ marginTop: '0.5rem' }}>Current Month</span>
                 </div>
                 <div className="card">
-                  <h4 style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', margin: 0, marginBottom: '0.5rem' }}>Total Records</h4>
-                  <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--text)' }}>{expenses.length}</div>
+                  <h4 style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase', margin: 0, marginBottom: '0.5rem' }}>Total Records</h4>
+                  <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text)' }}>{expenses.length}</div>
                   <span className="badge badge-info" style={{ marginTop: '0.5rem' }}>Transactions</span>
                 </div>
               </div>
@@ -1205,18 +1205,18 @@ export default function Page() {
                 {users.length > 0 && (
                   <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', marginBottom: '2rem' }}>
                     <div className="card">
-                      <h4 style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', margin: 0, marginBottom: '0.5rem' }}>Total Staff</h4>
-                      <div style={{ fontSize: '1.5rem', fontWeight: 700 }}>{users.length}</div>
+                    <h4 style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase', margin: 0, marginBottom: '0.5rem' }}>Total Staff</h4>
+                    <div style={{ fontSize: '1.1rem', fontWeight: 700 }}>{users.length}</div>
                       <span className="badge badge-info" style={{ marginTop: '0.5rem' }}>Members</span>
                     </div>
                     <div className="card">
-                      <h4 style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', margin: 0, marginBottom: '0.5rem' }}>Cashiers</h4>
-                      <div style={{ fontSize: '1.5rem', fontWeight: 700 }}>{users.filter(u => u.role === 'cashier').length}</div>
+                    <h4 style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase', margin: 0, marginBottom: '0.5rem' }}>Cashiers</h4>
+                    <div style={{ fontSize: '1.1rem', fontWeight: 700 }}>{users.filter(u => u.role === 'cashier').length}</div>
                       <span className="badge badge-success" style={{ marginTop: '0.5rem' }}>Active</span>
                     </div>
                     <div className="card">
-                      <h4 style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', margin: 0, marginBottom: '0.5rem' }}>Managers</h4>
-                      <div style={{ fontSize: '1.5rem', fontWeight: 700 }}>{users.filter(u => u.role === 'manager').length}</div>
+                    <h4 style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase', margin: 0, marginBottom: '0.5rem' }}>Managers</h4>
+                    <div style={{ fontSize: '1.1rem', fontWeight: 700 }}>{users.filter(u => u.role === 'manager').length}</div>
                       <span className="badge badge-warning" style={{ marginTop: '0.5rem' }}>Supervisors</span>
                     </div>
                   </div>
@@ -1281,16 +1281,16 @@ export default function Page() {
                 <h4>Daily Summary</h4>
                 <div style={{ marginTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                   <div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Today's Sales</div>
-                    <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--text)' }}>{formatUGX(getMetrics('day', 0).revenue)}</div>
+                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Today's Sales</div>
+                    <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text)' }}>{formatUGX(getMetrics('day', 0).revenue)}</div>
                   </div>
                   <div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Today's Expenses</div>
-                    <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--danger)' }}>{formatUGX(getMetrics('day', 0).expenseTotal)}</div>
+                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Today's Expenses</div>
+                    <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--danger)' }}>{formatUGX(getMetrics('day', 0).expenseTotal)}</div>
                   </div>
                   <div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Today's Net Profit</div>
-                    <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--success)' }}>{formatUGX(getMetrics('day', 0).netProfit)}</div>
+                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Today's Net Profit</div>
+                    <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--success)' }}>{formatUGX(getMetrics('day', 0).netProfit)}</div>
                   </div>
                 </div>
               </div>
@@ -1299,16 +1299,16 @@ export default function Page() {
                 <h4>Weekly Summary</h4>
                 <div style={{ marginTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                   <div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Week's Sales</div>
-                    <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--text)' }}>{formatUGX(getMetrics('week', 0).revenue)}</div>
+                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Week's Sales</div>
+                    <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text)' }}>{formatUGX(getMetrics('week', 0).revenue)}</div>
                   </div>
                   <div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Week's Expenses</div>
-                    <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--danger)' }}>{formatUGX(getMetrics('week', 0).expenseTotal)}</div>
+                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Week's Expenses</div>
+                    <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--danger)' }}>{formatUGX(getMetrics('week', 0).expenseTotal)}</div>
                   </div>
                   <div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Week's Net Profit</div>
-                    <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--success)' }}>{formatUGX(getMetrics('week', 0).netProfit)}</div>
+                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Week's Net Profit</div>
+                    <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--success)' }}>{formatUGX(getMetrics('week', 0).netProfit)}</div>
                   </div>
                 </div>
               </div>
@@ -1317,16 +1317,16 @@ export default function Page() {
                 <h4>Monthly Summary</h4>
                 <div style={{ marginTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                   <div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Month's Sales</div>
-                    <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--text)' }}>{formatUGX(getMetrics('month', 0).revenue)}</div>
+                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Month's Sales</div>
+                    <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text)' }}>{formatUGX(getMetrics('month', 0).revenue)}</div>
                   </div>
                   <div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Month's Expenses</div>
-                    <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--danger)' }}>{formatUGX(getMetrics('month', 0).expenseTotal)}</div>
+                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Month's Expenses</div>
+                    <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--danger)' }}>{formatUGX(getMetrics('month', 0).expenseTotal)}</div>
                   </div>
                   <div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Month's Gross Profit</div>
-                    <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--success)' }}>{formatUGX(getMetrics('month', 0).grossProfit)}</div>
+                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Month's Gross Profit</div>
+                    <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--success)' }}>{formatUGX(getMetrics('month', 0).grossProfit)}</div>
                   </div>
                 </div>
               </div>
@@ -1335,16 +1335,16 @@ export default function Page() {
                 <h4>Inventory Status</h4>
                 <div style={{ marginTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                   <div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Total Products</div>
-                    <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--text)' }}>{products.length}</div>
+                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Total Products</div>
+                    <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text)' }}>{products.length}</div>
                   </div>
                   <div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Low Stock Items</div>
-                    <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--warning)' }}>{products.filter(p => p.stock < 10).length}</div>
+                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Low Stock Items</div>
+                    <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--warning)' }}>{products.filter(p => p.stock < 10).length}</div>
                   </div>
                   <div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Total Stock Value</div>
-                    <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--info)' }}>{formatUGX(products.reduce((a, p) => a + (p.stock * p.purchasePrice), 0))}</div>
+                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Total Stock Value</div>
+                    <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--info)' }}>{formatUGX(products.reduce((a, p) => a + (p.stock * p.purchasePrice), 0))}</div>
                   </div>
                 </div>
               </div>
