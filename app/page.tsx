@@ -1387,34 +1387,60 @@ export default function Page() {
         {/* Sale Modal */}
         {showSaleModal && (
           <div className="modal-overlay">
-            <div className="modal-content" style={{ maxWidth: '400px' }}>
+            <div className="modal-content" style={{ maxWidth: '500px' }}>
               <div className="modal-header">
-                <h3>Record New Sale</h3>
+                <h3>🛒 Quick Sale</h3>
                 <button className="modal-close" onClick={() => setShowSaleModal(false)}>&times;</button>
               </div>
-              <form onSubmit={(e) => { makeProductSale(e); setShowSaleModal(false); }}>
-                <div className="modal-body">
-                  <div className="field" style={{ gap: '1rem' }}>
+              <div className="modal-body">
+                <div style={{ padding: '1rem', backgroundColor: 'var(--info-light)', borderRadius: 'var(--radius)', marginBottom: '1rem', border: '1px solid var(--info-bg)' }}>
+                  <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--info)' }}>💡 Use the Sales Desk for multi-item transactions. This form is for quick single-item sales.</p>
+                </div>
+                <form onSubmit={(e) => { makeProductSale(e); setShowSaleModal(false); }}>
+                  <div className="form">
                     <label className="field">
                       <span>Product</span>
                       <select value={saleForm.productId} onChange={(e) => setSaleForm({ ...saleForm, productId: e.target.value })} required>
                         <option value="">Select product</option>
-                        {products.map((p) => (
-                          <option key={p.id} value={p.id}>{p.name} ({p.stock} left)</option>
+                        {products.filter(p => p.stock > 0).map((p) => (
+                          <option key={p.id} value={p.id}>{p.name} ({p.stock} available)</option>
                         ))}
                       </select>
                     </label>
                     <label className="field">
                       <span>Quantity</span>
-                      <input type="number" min={1} value={saleForm.qty} onChange={(e) => setSaleForm({ ...saleForm, qty: Number(e.target.value) })} required />
+                      <input type="number" min={1} max={products.find(p => p.id === saleForm.productId)?.stock || 1} value={saleForm.qty} onChange={(e) => setSaleForm({ ...saleForm, qty: Number(e.target.value) })} required />
                     </label>
                   </div>
-                </div>
-                <div className="modal-footer">
-                  <button type="button" className="edit-btn" onClick={() => setShowSaleModal(false)}>Cancel</button>
-                  <button type="submit" className="primary">Complete Sale</button>
-                </div>
-              </form>
+                  {saleForm.productId && (
+                    <div style={{ marginTop: '1rem', padding: '1rem', backgroundColor: 'var(--bg-subtle)', borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}>
+                      {(() => {
+                        const p = products.find(x => x.id === saleForm.productId);
+                        return p ? (
+                          <>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem', fontSize: '0.9rem' }}>
+                              <span>Unit Price:</span>
+                              <span style={{ fontWeight: 600 }}>{formatUGX(p.salePrice)}</span>
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem', fontSize: '0.9rem' }}>
+                              <span>Total:</span>
+                              <span style={{ fontWeight: 700, fontSize: '1.1rem', color: 'var(--success)' }}>{formatUGX(p.salePrice * saleForm.qty)}</span>
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                              <span>Profit:</span>
+                              <span style={{ fontWeight: 600 }}>{formatUGX((p.salePrice - p.purchasePrice) * saleForm.qty)}</span>
+                            </div>
+                          </>
+                        ) : null;
+                      })()}
+                    </div>
+                  )}
+                  <div className="modal-footer" style={{ marginTop: '1.5rem' }}>
+                    <button type="button" className="edit-btn" onClick={() => setShowSaleModal(false)}>Cancel</button>
+                    <button type="submit" className="primary">Complete Sale</button>
+                  </div>
+                </form>
+              </div>
             </div>
           </div>
         )}
