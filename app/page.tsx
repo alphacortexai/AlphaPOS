@@ -1058,21 +1058,23 @@ export default function Page() {
           <section>
             <div className="page-header">
               <h2>Sales Desk</h2>
-              <button className="primary" onClick={() => { setCart([]); setShowSaleModal(true); }}>+ New Sale</button>
             </div>
 
             <div className="sales-desk-layout" style={{ marginTop: '0.2rem', marginBottom: '2rem' }}>
               {/* Products Selection */}
               <div>
                 <h3 style={{ margin: '0 0 0.45rem 0', fontSize: '1.02rem', fontWeight: 700 }}>Available Products</h3>
-                <div className="filter-group" style={{ marginBottom: '0.6rem' }}>
-                  <label>Quick Search Item</label>
-                  <input
-                    type="text"
-                    placeholder="Search item to sell..."
-                    value={quickSaleSearchQuery}
-                    onChange={(e) => setQuickSaleSearchQuery(e.target.value)}
-                  />
+                <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'end', marginBottom: '0.6rem', flexWrap: 'wrap' }}>
+                  <div className="filter-group" style={{ marginBottom: 0, flex: '1 1 240px' }}>
+                    <label>Quick Search Item</label>
+                    <input
+                      type="text"
+                      placeholder="Search item to sell..."
+                      value={quickSaleSearchQuery}
+                      onChange={(e) => setQuickSaleSearchQuery(e.target.value)}
+                    />
+                  </div>
+                  <button className="primary" onClick={() => { setCart([]); setShowSaleModal(true); }}>+ New Sale</button>
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(145px, 1fr))', gap: '0.55rem', marginBottom: '1rem' }}>
                   {filteredQuickSaleProducts.map(p => (
