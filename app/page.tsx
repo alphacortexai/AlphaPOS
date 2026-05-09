@@ -24,6 +24,7 @@ type Sale = { id: string; type: 'product' | 'service'; itemName: string; branchI
 type Expense = { id: string; title: string; branchId: string; amount: number } & AuditStamp;
 type StaffUser = { id: string; name: string; email: string; role: Role; branchId: string } & AuditStamp;
 type ShopMembership = { ownerUid: string; shopName: string; role: Role };
+type CartItem = { productId: string; productName: string; qty: number; unitPrice: number; unitCost: number; branchId: string };
 
 const periodStart = (period: 'day' | 'week' | 'month' | 'year', date: Date = new Date()) => {
   const d = new Date(date);
@@ -72,12 +73,17 @@ export default function Page() {
   const [productForm, setProductForm] = useState({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0 });
   const [serviceForm, setServiceForm] = useState({ name: '', branchId: '', amount: 0 });
   const [saleForm, setSaleForm] = useState({ productId: '', qty: 1 });
+  const [cart, setCart] = useState<CartItem[]>([]);
+  const [selectedBranchForSale, setSelectedBranchForSale] = useState('');
   const [expenseForm, setExpenseForm] = useState({ id: '', title: '', branchId: '', amount: 0 });
   const [userForm, setUserForm] = useState({ id: '', name: '', email: '', role: 'cashier' as Role, branchId: '' });
   const [shopNameForm, setShopNameForm] = useState('');
   const [settingsTab, setSettingsTab] = useState<'shop' | 'branches'>('shop');
 
   const branchMap = useMemo(() => Object.fromEntries(branches.map((b) => [b.id, b.name])), [branches]);
+  const cartTotal = useMemo(() => cart.reduce((sum, item) => sum + (item.unitPrice * item.qty), 0), [cart]);
+  const cartCost = useMemo(() => cart.reduce((sum, item) => sum + (item.unitCost * item.qty), 0), [cart]);
+  const cartProfit = useMemo(() => cartTotal - cartCost, [cartTotal, cartCost]);
   const db = firebaseApp ? getFirestore(firebaseApp) : null;
   const formatUGX = (value: number) => `UGX ${new Intl.NumberFormat('en-UG', { maximumFractionDigits: 0 }).format(Math.round(value))}`;
   const currentShop = availableShops.find((s) => s.ownerUid === activeShopOwnerUid);
@@ -461,6 +467,84 @@ export default function Page() {
     setShowUserModal(false);
   };
 
+  const addToCart = (productId: string) => {
+    const product = products.find(p => p.id === productId);
+    if (!product) {
+      showNotification('Product not found', 'error');
+      return;
+    }
+    if (product.stock <= 0) {
+      showNotification('Product out of stock', 'error');
+      return;
+    }
+    const existingItem = cart.find(item => item.productId === productId);
+    if (existingItem) {
+      if (existingItem.qty + 1 > product.stock) {
+        showNotification('Insufficient stock for this quantity', 'error');
+        return;
+      }
+      setCart(prev => prev.map(item => 
+        item.productId === productId ? { ...item, qty: item.qty + 1 } : item
+      ));
+    } else {
+      setCart(prev => [...prev, {
+        productId: product.id,
+        productName: product.name,
+        qty: 1,
+        unitPrice: product.salePrice,
+        unitCost: product.purchasePrice,
+        branchId: product.branchId
+      }]);
+    }
+    showNotification(`${product.name} added to cart`, 'success', 2000);
+  };
+
+  const updateCartItemQty = (productId: string, qty: number) => {
+    if (qty <= 0) {
+      removeFromCart(productId);
+      return;
+    }
+    const product = products.find(p => p.id === productId);
+    if (product && qty > product.stock) {
+      showNotification(`Only ${product.stock} units available`, 'error');
+      return;
+    }
+    setCart(prev => prev.map(item => 
+      item.productId === productId ? { ...item, qty } : item
+    ));
+  };
+
+  const removeFromCart = (productId: string) => {
+    setCart(prev => prev.filter(item => item.productId !== productId));
+    showNotification('Item removed from cart', 'info', 1500);
+  };
+
+  const completeCartSale = () => {
+    if (cart.length === 0) {
+      showNotification('Cart is empty', 'error');
+      return;
+    }
+    const newSales = cart.map(item => ({
+      id: crypto.randomUUID(),
+      type: 'product' as const,
+      itemName: item.productName,
+      branchId: item.branchId,
+      qty: item.qty,
+      amount: item.unitPrice * item.qty,
+      cost: item.unitCost * item.qty,
+      ...currentAuditStamp(),
+    }));
+    setSales(prev => [...newSales, ...prev]);
+    const updatedProducts = products.map(p => {
+      const cartItem = cart.find(ci => ci.productId === p.id);
+      return cartItem ? { ...p, stock: p.stock - cartItem.qty } : p;
+    });
+    setProducts(updatedProducts);
+    showNotification(`Sale completed! ${cart.length} item(s) sold.`, 'success');
+    setCart([]);
+    setShowSaleModal(false);
+  };
+
   const makeProductSale = (e: React.FormEvent) => {
     e.preventDefault();
     const p = products.find((x) => x.id === saleForm.productId);
@@ -624,8 +708,8 @@ export default function Page() {
     <div className="app">
       <aside className="sidebar">
         <div className="sidebar-header">
-          <h2>AlphaPOS</h2>
-          <div className="sidebar-subtitle">Business Intelligence</div>
+          <h2>📊 AlphaPOS</h2>
+          <div className="sidebar-subtitle">v2.0 Pro</div>
         </div>
 
         <div className="sidebar-section">
@@ -640,13 +724,13 @@ export default function Page() {
         </div>
 
         <nav className="sidebar-nav">
-          <button className={`nav-button ${view === 'dashboard' ? 'active' : ''}`} onClick={() => setView('dashboard')}>Dashboard</button>
-          <button className={`nav-button ${view === 'products' ? 'active' : ''}`} onClick={() => setView('products')}>Inventory</button>
-          <button className={`nav-button ${view === 'sales' ? 'active' : ''}`} onClick={() => setView('sales')}>Sales Desk</button>
-          <button className={`nav-button ${view === 'expenses' ? 'active' : ''}`} onClick={() => setView('expenses')}>Expenses</button>
-          <button className={`nav-button ${view === 'users' ? 'active' : ''}`} onClick={() => setView('users')}>Staff</button>
-          <button className={`nav-button ${view === 'reports' ? 'active' : ''}`} onClick={() => setView('reports')}>Reports</button>
-          {isShopOwner && <button className={`nav-button ${view === 'settings' ? 'active' : ''}`} onClick={() => setView('settings')}>Settings</button>}
+          <button className={`nav-button ${view === 'dashboard' ? 'active' : ''}`} onClick={() => setView('dashboard')}>📈 Dashboard</button>
+          <button className={`nav-button ${view === 'sales' ? 'active' : ''}`} onClick={() => setView('sales')}>🛒 Sales Desk</button>
+          <button className={`nav-button ${view === 'products' ? 'active' : ''}`} onClick={() => setView('products')}>📦 Inventory</button>
+          <button className={`nav-button ${view === 'expenses' ? 'active' : ''}`} onClick={() => setView('expenses')}>💰 Expenses</button>
+          <button className={`nav-button ${view === 'users' ? 'active' : ''}`} onClick={() => setView('users')}>👥 Staff</button>
+          <button className={`nav-button ${view === 'reports' ? 'active' : ''}`} onClick={() => setView('reports')}>📊 Reports</button>
+          {isShopOwner && <button className={`nav-button ${view === 'settings' ? 'active' : ''}`} onClick={() => setView('settings')}>⚙️ Settings</button>}
         </nav>
 
         <div className="sidebar-footer">
@@ -905,11 +989,78 @@ export default function Page() {
         {view === 'sales' && (
           <section>
             <div className="page-header">
-              <h2>Sales Records</h2>
-              <button className="primary" onClick={() => setShowSaleModal(true)}>+ Record Sale</button>
+              <h2>Sales Desk</h2>
+              <button className="primary" onClick={() => { setCart([]); setShowSaleModal(true); }}>+ New Sale</button>
             </div>
 
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 350px', gap: '2rem', marginBottom: '2rem' }}>
+              {/* Products Selection */}
+              <div>
+                <h3 style={{ marginBottom: '1rem', fontSize: '1.1rem', fontWeight: 700 }}>Available Products</h3>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '1rem', marginBottom: '2rem' }}>
+                  {products.filter(p => p.stock > 0).map(p => (
+                    <div key={p.id} className="card" style={{ cursor: 'pointer', transition: 'all 0.2s ease' }} onClick={() => addToCart(p.id)}>
+                      <div style={{ marginBottom: '0.5rem' }}>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Product</div>
+                        <div style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--text)' }}>{p.name}</div>
+                      </div>
+                      <div style={{ marginBottom: '0.5rem' }}>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Price</div>
+                        <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--success)' }}>{formatUGX(p.salePrice)}</div>
+                      </div>
+                      <div style={{ marginBottom: '0.5rem' }}>
+                        <span className="badge badge-info">Stock: {p.stock}</span>
+                      </div>
+                      <button className="primary" style={{ width: '100%', marginTop: '0.5rem', fontSize: '0.8rem' }}>Add to Cart</button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Cart Summary */}
+              <div>
+                <div className="card" style={{ position: 'sticky', top: '2rem' }}>
+                  <h3 style={{ margin: '0 0 1rem 0', fontSize: '1.1rem', fontWeight: 700 }}>Cart</h3>
+                  {cart.length === 0 ? (
+                    <div style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem 0' }}>Cart is empty</div>
+                  ) : (
+                    <>
+                      <div style={{ maxHeight: '400px', overflowY: 'auto', marginBottom: '1rem' }}>
+                        {cart.map(item => (
+                          <div key={item.productId} style={{ padding: '0.75rem', borderBottom: '1px solid var(--border)', marginBottom: '0.5rem' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                              <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>{item.productName}</div>
+                              <button className="delete-btn" onClick={() => removeFromCart(item.productId)}>Remove</button>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                              <button className="edit-btn" onClick={() => updateCartItemQty(item.productId, item.qty - 1)}>−</button>
+                              <input type="number" value={item.qty} onChange={(e) => updateCartItemQty(item.productId, Number(e.target.value))} style={{ width: '50px', textAlign: 'center', padding: '0.25rem' }} />
+                              <button className="edit-btn" onClick={() => updateCartItemQty(item.productId, item.qty + 1)}>+</button>
+                              <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>{formatUGX(item.unitPrice * item.qty)}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      <div style={{ borderTop: '2px solid var(--border)', paddingTop: '1rem', marginTop: '1rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem', fontSize: '0.9rem' }}>
+                          <span>Subtotal:</span>
+                          <span style={{ fontWeight: 600 }}>{formatUGX(cartTotal)}</span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem', fontSize: '0.9rem', color: 'var(--success)' }}>
+                          <span>Profit:</span>
+                          <span style={{ fontWeight: 600 }}>{formatUGX(cartProfit)}</span>
+                        </div>
+                        <button className="primary" style={{ width: '100%', fontWeight: 700 }} onClick={completeCartSale}>Complete Sale</button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Sales History */}
             <div>
+              <h3 style={{ marginBottom: '1rem', fontSize: '1.1rem', fontWeight: 700 }}>Sales History</h3>
               <div className="filter-bar">
                 <div className="filter-group">
                   <label>Filter by Date</label>
@@ -923,7 +1074,7 @@ export default function Page() {
                 <table className="data-table">
                   <thead>
                     <tr>
-                      <th>Date</th>
+                      <th>Date & Time</th>
                       <th>Item</th>
                       <th>Qty</th>
                       <th>Total</th>
@@ -931,15 +1082,21 @@ export default function Page() {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredSales.map((s) => (
-                      <tr key={s.id}>
-                        <td>{new Date(s.createdAt).toLocaleDateString()}</td>
-                        <td style={{ fontWeight: 600 }}>{s.itemName}</td>
-                        <td>{s.qty}</td>
-                        <td>{formatUGX(s.amount)}</td>
-                        <td style={{ color: 'var(--success)' }}>{formatUGX(s.amount - s.cost)}</td>
+                    {filteredSales.length > 0 ? (
+                      filteredSales.map((s) => (
+                        <tr key={s.id}>
+                          <td>{new Date(s.createdAt).toLocaleString()}</td>
+                          <td style={{ fontWeight: 600 }}>{s.itemName}</td>
+                          <td>{s.qty}</td>
+                          <td>{formatUGX(s.amount)}</td>
+                          <td style={{ color: 'var(--success)', fontWeight: 600 }}>{formatUGX(s.amount - s.cost)}</td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr>
+                        <td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>No sales recorded for this period</td>
                       </tr>
-                    ))}
+                    )}
                   </tbody>
                 </table>
               </div>
