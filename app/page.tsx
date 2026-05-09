@@ -100,8 +100,11 @@ export default function Page() {
   const filteredQuickSaleProducts = useMemo(() => {
     const query = quickSaleSearchQuery.trim().toLowerCase();
     if (!query) return topSellingProducts;
-    return topSellingProducts.filter((product) => product.name.toLowerCase().includes(query));
-  }, [quickSaleSearchQuery, topSellingProducts]);
+
+    return products
+      .filter((product) => product.stock > 0 && product.name.toLowerCase().includes(query))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [products, quickSaleSearchQuery, topSellingProducts]);
   const cartTotal = useMemo(() => cart.reduce((sum, item) => sum + (item.unitPrice * item.qty), 0), [cart]);
   const cartCost = useMemo(() => cart.reduce((sum, item) => sum + (item.unitCost * item.qty), 0), [cart]);
   const cartProfit = useMemo(() => cartTotal - cartCost, [cartTotal, cartCost]);
