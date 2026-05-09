@@ -82,6 +82,20 @@ export default function Page() {
   const [settingsTab, setSettingsTab] = useState<'shop' | 'branches'>('shop');
 
   const branchMap = useMemo(() => Object.fromEntries(branches.map((b) => [b.id, b.name])), [branches]);
+  const topSellingProducts = useMemo(() => {
+    const productAccessCount = new Map<string, number>();
+    sales
+      .filter((sale) => sale.type === 'product')
+      .forEach((sale) => {
+        productAccessCount.set(sale.itemName, (productAccessCount.get(sale.itemName) || 0) + sale.qty);
+      });
+
+    const rankedProducts = products
+      .filter((product) => product.stock > 0)
+      .sort((a, b) => (productAccessCount.get(b.name) || 0) - (productAccessCount.get(a.name) || 0));
+
+    return rankedProducts.slice(0, 12);
+  }, [products, sales]);
   const cartTotal = useMemo(() => cart.reduce((sum, item) => sum + (item.unitPrice * item.qty), 0), [cart]);
   const cartCost = useMemo(() => cart.reduce((sum, item) => sum + (item.unitCost * item.qty), 0), [cart]);
   const cartProfit = useMemo(() => cartTotal - cartCost, [cartTotal, cartCost]);
@@ -1031,25 +1045,19 @@ export default function Page() {
               <button className="primary" onClick={() => { setCart([]); setShowSaleModal(true); }}>+ New Sale</button>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 350px', gap: '2rem', marginBottom: '2rem' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 350px', gap: '2rem', marginTop: '0.5rem', marginBottom: '2rem' }}>
               {/* Products Selection */}
               <div>
-                <h3 style={{ marginBottom: '1rem', fontSize: '1.1rem', fontWeight: 700 }}>Available Products</h3>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '0.7rem', marginBottom: '1.5rem' }}>
-                  {products.filter(p => p.stock > 0).map(p => (
-                    <div key={p.id} className="card" style={{ cursor: 'pointer', transition: 'all 0.2s ease', padding: '0.75rem' }} onClick={() => addToCart(p.id)}>
-                      <div style={{ marginBottom: '0.5rem' }}>
-                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Product</div>
-                        <div style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text)' }}>{p.name}</div>
+                <h3 style={{ marginBottom: '0.6rem', fontSize: '1.02rem', fontWeight: 700 }}>Available Products</h3>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(145px, 1fr))', gap: '0.55rem', marginBottom: '1rem' }}>
+                  {topSellingProducts.map(p => (
+                    <div key={p.id} className="card" style={{ cursor: 'pointer', transition: 'all 0.2s ease', padding: '0.55rem' }} onClick={() => addToCart(p.id)}>
+                      <div style={{ fontSize: '0.84rem', fontWeight: 600, color: 'var(--text)', marginBottom: '0.3rem' }}>{p.name}</div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
+                        <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--success)' }}>{formatUGX(p.salePrice)}</span>
+                        <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>x{p.stock}</span>
                       </div>
-                      <div style={{ marginBottom: '0.5rem' }}>
-                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Price</div>
-                        <div style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--success)' }}>{formatUGX(p.salePrice)}</div>
-                      </div>
-                      <div style={{ marginBottom: '0.5rem' }}>
-                        <span className="badge badge-info">Stock: {p.stock}</span>
-                      </div>
-                      <button className="primary" style={{ width: '100%', marginTop: '0.35rem', fontSize: '0.72rem', padding: '0.45rem 0.6rem' }}>Add to Cart</button>
+                      <button className="primary" style={{ width: '100%', fontSize: '0.68rem', padding: '0.35rem 0.45rem' }}>Add</button>
                     </div>
                   ))}
                 </div>
