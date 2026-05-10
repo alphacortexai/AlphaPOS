@@ -235,15 +235,91 @@ export default function Page() {
     void loadUserData();
   }, [loadUserData]);
 
+  const recalculateSystemData = useCallback((payload: { products: Product[]; services: Service[]; sales: Sale[]; expenses: Expense[] }) => {
+    const productCostByName = new Map(payload.products.map((product) => [product.name.trim().toLowerCase(), product.purchasePrice]));
+    const serviceCostByName = new Map(
+      payload.services.map((service) => [
+        service.name.trim().toLowerCase(),
+        service.serviceType === 'shared_cost' ? 0 : service.directCost,
+      ])
+    );
+
+    const recalculatedSales = payload.sales.map((sale) => {
+      const itemKey = sale.itemName.trim().toLowerCase();
+      const unitCost = sale.type === 'product' ? (productCostByName.get(itemKey) ?? 0) : (serviceCostByName.get(itemKey) ?? 0);
+      return { ...sale, cost: unitCost * sale.qty };
+    });
+
+    const totalInventoryValue = payload.products.reduce((sum, product) => sum + product.stock * product.purchasePrice, 0);
+    const monthlySharedCostTotal = payload.services
+      .filter((service) => service.serviceType === 'shared_cost')
+      .reduce((sum, service) => sum + service.monthlySharedCost, 0);
+    const totalExpenseValue = payload.expenses.reduce((sum, expense) => sum + expense.amount, 0);
+
+    return {
+      sales: recalculatedSales,
+      stats: {
+        totalInventoryValue,
+        monthlySharedCostTotal,
+        totalExpenseValue,
+      },
+    };
+  }, []);
+
   const handleDashboardRefresh = async () => {
     if (!authUser || !db || isRefreshingDashboard) return;
     setIsRefreshingDashboard(true);
-    const didRefresh = await loadUserData();
-    if (didRefresh) {
-      showNotification('Dashboard updated with latest database values.', 'success');
-      setStatus('Dashboard refreshed from the database.');
+    try {
+      const didRefresh = await loadUserData();
+      if (!didRefresh) return;
+
+      const userDataRef = doc(db, 'users', activeShopOwnerUid, 'pos', 'data');
+      const freshSnap = await getDoc(userDataRef);
+      if (!freshSnap.exists()) {
+        showNotification('No stored records found for this shop yet.', 'info');
+        return;
+      }
+
+      const data = freshSnap.data();
+      const latestProducts = Array.isArray(data.products) ? (data.products as Product[]) : [];
+      const latestServices = Array.isArray(data.services) ? (data.services as Service[]) : [];
+      const latestSales = Array.isArray(data.sales) ? (data.sales as Sale[]) : [];
+      const latestExpenses = Array.isArray(data.expenses) ? (data.expenses as Expense[]) : [];
+
+      const recalculated = recalculateSystemData({
+        products: latestProducts,
+        services: latestServices,
+        sales: latestSales,
+        expenses: latestExpenses,
+      });
+
+      setProducts(latestProducts);
+      setServices(latestServices);
+      setExpenses(latestExpenses);
+      setSales(recalculated.sales);
+
+      await setDoc(
+        userDataRef,
+        {
+          products: latestProducts,
+          services: latestServices,
+          expenses: latestExpenses,
+          sales: recalculated.sales,
+          recalculatedAt: serverTimestamp(),
+          recalculatedSummary: recalculated.stats,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+
+      showNotification('Dashboard fully recalculated and updated successfully.', 'success');
+      setStatus('Dashboard recalculated from source data and synced to database.');
+    } catch (error) {
+      showNotification('Dashboard update failed. Please retry.', 'error');
+      setStatus(`Dashboard recalculation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setIsRefreshingDashboard(false);
     }
-    setIsRefreshingDashboard(false);
   };
 
   useEffect(() => {
@@ -1091,8 +1167,9 @@ export default function Page() {
                   <option value="yearly">Yearly</option>
                 </select>
               </div>
-              <button className="secondary" onClick={handleDashboardRefresh} disabled={isRefreshingDashboard}>
-                {isRefreshingDashboard ? 'Updating…' : '🔄 Update Dashboard'}
+              <button className="dashboard-refresh-btn" onClick={handleDashboardRefresh} disabled={isRefreshingDashboard}>
+                <span className="refresh-btn-icon" aria-hidden="true">{isRefreshingDashboard ? '⏳' : '🧮'}</span>
+                <span>{isRefreshingDashboard ? 'Recalculating…' : 'Recalculate & Update Dashboard'}</span>
               </button>
             </div>
 
