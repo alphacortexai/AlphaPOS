@@ -987,3 +987,33 @@ button.delete-btn:hover {
     padding: var(--space-sm) var(--space-md);
   }
 }
+
+.dashboard-refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-sm);
+  border: 1px solid color-mix(in srgb, var(--primary) 25%, var(--border));
+  border-radius: var(--radius);
+  background: linear-gradient(135deg, var(--primary), var(--primary-hover));
+  color: var(--primary-foreground);
+  font-weight: 700;
+  font-size: 0.82rem;
+  letter-spacing: 0.01em;
+  padding: 0.62rem 0.95rem;
+  box-shadow: var(--shadow-premium);
+}
+
+.dashboard-refresh-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+}
+
+.dashboard-refresh-btn:disabled {
+  opacity: 0.72;
+  cursor: not-allowed;
+}
+
+.refresh-btn-icon {
+  font-size: 0.95rem;
+  line-height: 1;
+}
