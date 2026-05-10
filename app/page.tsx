@@ -68,6 +68,10 @@ export default function Page() {
 
   // Filters
   const [salesDateFilter, setSalesDateFilter] = useState(new Date().toISOString().split('T')[0]);
+  const [salesHistoryViewMode, setSalesHistoryViewMode] = useState<'day' | 'week' | 'month' | 'range'>('day');
+  const [salesRangeStart, setSalesRangeStart] = useState(new Date().toISOString().split('T')[0]);
+  const [salesRangeEnd, setSalesRangeEnd] = useState(new Date().toISOString().split('T')[0]);
+  const [salesHistoryPage, setSalesHistoryPage] = useState(1);
   const [dashboardPeriod, setDashboardPeriod] = useState<DashboardPeriod>('weekly');
   const [productSearchQuery, setProductSearchQuery] = useState('');
   const [quickSaleSearchQuery, setQuickSaleSearchQuery] = useState('');
@@ -725,9 +729,60 @@ export default function Page() {
   };
 
   const filteredSales = useMemo(() => {
-    if (!salesDateFilter) return sales;
-    return sales.filter(s => s.createdAt.startsWith(salesDateFilter));
-  }, [sales, salesDateFilter]);
+    const baseDate = salesDateFilter ? new Date(`${salesDateFilter}T00:00:00`) : new Date();
+
+    const startOfWeek = (date: Date) => {
+      const d = new Date(date);
+      const day = d.getDay();
+      const diff = day === 0 ? -6 : 1 - day;
+      d.setDate(d.getDate() + diff);
+      d.setHours(0, 0, 0, 0);
+      return d;
+    };
+
+    return sales.filter((sale) => {
+      const saleDate = new Date(sale.createdAt);
+      if (Number.isNaN(saleDate.getTime())) return false;
+
+      if (salesHistoryViewMode === 'day') {
+        return saleDate.toISOString().slice(0, 10) === salesDateFilter;
+      }
+
+      if (salesHistoryViewMode === 'week') {
+        const start = startOfWeek(baseDate);
+        const end = new Date(start);
+        end.setDate(end.getDate() + 7);
+        return saleDate >= start && saleDate < end;
+      }
+
+      if (salesHistoryViewMode === 'month') {
+        return saleDate.getFullYear() === baseDate.getFullYear() && saleDate.getMonth() === baseDate.getMonth();
+      }
+
+      if (!salesRangeStart || !salesRangeEnd) return true;
+      const rangeStart = new Date(`${salesRangeStart}T00:00:00`);
+      const rangeEnd = new Date(`${salesRangeEnd}T23:59:59`);
+      return saleDate >= rangeStart && saleDate <= rangeEnd;
+    });
+  }, [sales, salesDateFilter, salesHistoryViewMode, salesRangeEnd, salesRangeStart]);
+
+  const salesHistoryPageSize = 10;
+  const salesHistoryTotalPages = Math.max(1, Math.ceil(filteredSales.length / salesHistoryPageSize));
+  const paginatedSales = useMemo(() => {
+    const safePage = Math.min(salesHistoryPage, salesHistoryTotalPages);
+    const start = (safePage - 1) * salesHistoryPageSize;
+    return filteredSales.slice(start, start + salesHistoryPageSize);
+  }, [filteredSales, salesHistoryPage, salesHistoryTotalPages]);
+
+  useEffect(() => {
+    setSalesHistoryPage(1);
+  }, [salesHistoryViewMode, salesDateFilter, salesRangeStart, salesRangeEnd]);
+
+  useEffect(() => {
+    if (salesHistoryPage > salesHistoryTotalPages) {
+      setSalesHistoryPage(salesHistoryTotalPages);
+    }
+  }, [salesHistoryPage, salesHistoryTotalPages]);
 
   const canManageUsers = role === 'shop_owner' && activeShopOwnerUid === authUser?.uid;
   const canChangeRole = activeShopOwnerUid === authUser?.uid;
@@ -1352,11 +1407,36 @@ export default function Page() {
             <div>
               <div className="filter-bar">
                 <div className="filter-group">
-                  <label>Filter by Date</label>
-                  <input type="date" value={salesDateFilter} onChange={(e) => setSalesDateFilter(e.target.value)} />
+                  <label>View</label>
+                  <select value={salesHistoryViewMode} onChange={(e) => setSalesHistoryViewMode(e.target.value as 'day' | 'week' | 'month' | 'range')}>
+                    <option value="day">Per Day</option>
+                    <option value="week">Per Week</option>
+                    <option value="month">Per Month</option>
+                    <option value="range">Date Range</option>
+                  </select>
                 </div>
-                <button className="edit-btn" onClick={() => setSalesDateFilter(new Date().toISOString().split('T')[0])}>Today</button>
-                <button className="edit-btn" onClick={() => setSalesDateFilter('')}>All Time</button>
+
+                {(salesHistoryViewMode === 'day' || salesHistoryViewMode === 'week' || salesHistoryViewMode === 'month') && (
+                  <div className="filter-group">
+                    <label>{salesHistoryViewMode === 'day' ? 'Date' : salesHistoryViewMode === 'week' ? 'Week of' : 'Month of'}</label>
+                    <input type="date" value={salesDateFilter} onChange={(e) => setSalesDateFilter(e.target.value)} />
+                  </div>
+                )}
+
+                {salesHistoryViewMode === 'range' && (
+                  <>
+                    <div className="filter-group">
+                      <label>Start Date</label>
+                      <input type="date" value={salesRangeStart} onChange={(e) => setSalesRangeStart(e.target.value)} />
+                    </div>
+                    <div className="filter-group">
+                      <label>End Date</label>
+                      <input type="date" value={salesRangeEnd} onChange={(e) => setSalesRangeEnd(e.target.value)} />
+                    </div>
+                  </>
+                )}
+
+                <button className="edit-btn" onClick={() => { const today = new Date().toISOString().split('T')[0]; setSalesDateFilter(today); setSalesRangeStart(today); setSalesRangeEnd(today); setSalesHistoryViewMode('day'); }}>Today</button>
               </div>
 
               <div className="table-wrap">
@@ -1372,7 +1452,7 @@ export default function Page() {
                   </thead>
                   <tbody>
                     {filteredSales.length > 0 ? (
-                      filteredSales.map((s) => (
+                      paginatedSales.map((s) => (
                         <tr key={s.id}>
                           <td>{new Date(s.createdAt).toLocaleString()}</td>
                           <td style={{ fontWeight: 600 }}>{s.itemName}</td>
@@ -1388,6 +1468,17 @@ export default function Page() {
                     )}
                   </tbody>
                 </table>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.75rem', gap: '0.75rem', flexWrap: 'wrap' }}>
+                <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                  Showing {filteredSales.length === 0 ? 0 : (salesHistoryPage - 1) * salesHistoryPageSize + 1}–{Math.min(salesHistoryPage * salesHistoryPageSize, filteredSales.length)} of {filteredSales.length}
+                </span>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button className="edit-btn" disabled={salesHistoryPage <= 1} onClick={() => setSalesHistoryPage((prev) => Math.max(1, prev - 1))}>Previous</button>
+                  <span style={{ alignSelf: 'center', fontSize: '0.85rem' }}>Page {salesHistoryPage} / {salesHistoryTotalPages}</span>
+                  <button className="edit-btn" disabled={salesHistoryPage >= salesHistoryTotalPages} onClick={() => setSalesHistoryPage((prev) => Math.min(salesHistoryTotalPages, prev + 1))}>Next</button>
+                </div>
               </div>
             </div>
           </section>
