@@ -388,14 +388,35 @@ export default function Page() {
   };
 
   // Enhanced Metric Calculation Utilities
-  const getSharedServiceCostForPeriod = (period: DashboardPeriod) => {
-    const monthlySharedTotal = services
-      .filter((service) => service.serviceType === 'shared_cost')
-      .reduce((sum, service) => sum + service.monthlySharedCost, 0);
-    if (period === 'daily') return monthlySharedTotal / 30;
-    if (period === 'weekly') return monthlySharedTotal / 4;
-    if (period === 'yearly') return monthlySharedTotal * 12;
-    return monthlySharedTotal;
+  const getSharedServiceCostForRange = (periodSales: Sale[]) => {
+    const sharedServices = services.filter((service) => service.serviceType === 'shared_cost');
+    if (sharedServices.length === 0 || periodSales.length === 0) return 0;
+
+    const sharedCostByService = new Map(
+      sharedServices.map((service) => [
+        `${service.branchId}::${service.name.trim().toLowerCase()}`,
+        service.monthlySharedCost / 30,
+      ])
+    );
+
+    const activeServiceDays = new Set<string>();
+
+    periodSales
+      .filter((sale) => sale.type === 'service')
+      .forEach((sale) => {
+        const serviceKey = `${sale.branchId}::${sale.itemName.trim().toLowerCase()}`;
+        if (!sharedCostByService.has(serviceKey)) return;
+        const saleDay = new Date(sale.createdAt).toISOString().slice(0, 10);
+        activeServiceDays.add(`${serviceKey}::${saleDay}`);
+      });
+
+    let allocatedSharedCost = 0;
+    activeServiceDays.forEach((activeDayKey) => {
+      const [serviceKey] = activeDayKey.split('::', 2);
+      allocatedSharedCost += sharedCostByService.get(serviceKey) ?? 0;
+    });
+
+    return allocatedSharedCost;
   };
 
   const getMetricsForPeriod = (period: DashboardPeriod, offset: number = 0) => {
@@ -429,7 +450,7 @@ export default function Page() {
     const revenue = periodSales.reduce((a, s) => a + s.amount, 0);
     const cost = periodSales.reduce((a, s) => a + s.cost, 0);
     const expenseTotal = periodExpenses.reduce((a, e) => a + e.amount, 0);
-    const sharedServiceCost = getSharedServiceCostForPeriod(period);
+    const sharedServiceCost = getSharedServiceCostForRange(periodSales);
     const grossProfit = revenue - cost - sharedServiceCost;
     const netProfit = grossProfit - expenseTotal;
 
