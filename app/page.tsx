@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { firebaseApp } from '../lib.firebase';
 import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth';
 import { collection, doc, getDoc, getDocs, getFirestore, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
@@ -81,6 +81,12 @@ export default function Page() {
   const [salesRangeStart, setSalesRangeStart] = useState(new Date().toISOString().split('T')[0]);
   const [salesRangeEnd, setSalesRangeEnd] = useState(new Date().toISOString().split('T')[0]);
   const [salesHistoryPage, setSalesHistoryPage] = useState(1);
+  const [productsPage, setProductsPage] = useState(1);
+  const [servicesPage, setServicesPage] = useState(1);
+  const [expensesPage, setExpensesPage] = useState(1);
+  const [usersPage, setUsersPage] = useState(1);
+  const [reportsSalesPage, setReportsSalesPage] = useState(1);
+  const [activityLogsPage, setActivityLogsPage] = useState(1);
   const [dashboardPeriod, setDashboardPeriod] = useState<DashboardPeriod>('weekly');
   const [productSearchQuery, setProductSearchQuery] = useState('');
   const [quickSaleSearchQuery, setQuickSaleSearchQuery] = useState('');
@@ -799,6 +805,7 @@ export default function Page() {
   }, [sales, salesDateFilter, salesHistoryViewMode, salesRangeEnd, salesRangeStart]);
 
   const salesHistoryPageSize = 10;
+  const sharedTablePageSize = 10;
   const salesHistoryTotalPages = Math.max(1, Math.ceil(filteredSales.length / salesHistoryPageSize));
   const paginatedSales = useMemo(() => {
     const safePage = Math.min(salesHistoryPage, salesHistoryTotalPages);
@@ -815,6 +822,41 @@ export default function Page() {
       setSalesHistoryPage(salesHistoryTotalPages);
     }
   }, [salesHistoryPage, salesHistoryTotalPages]);
+
+  const paginateData = <T,>(items: T[], page: number, setPage: Dispatch<SetStateAction<number>>, pageSize: number = sharedTablePageSize) => {
+    const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
+    const safePage = Math.min(page, totalPages);
+    if (page > totalPages) setPage(totalPages);
+    const start = (safePage - 1) * pageSize;
+    return {
+      totalPages,
+      pageSize,
+      safePage,
+      start,
+      end: Math.min(start + pageSize, items.length),
+      rows: items.slice(start, start + pageSize),
+    };
+  };
+
+  const productsPagination = paginateData(filteredProducts, productsPage, setProductsPage);
+  const servicesPagination = paginateData(services, servicesPage, setServicesPage);
+  const expensesPagination = paginateData(expenses, expensesPage, setExpensesPage);
+  const usersPagination = paginateData(users, usersPage, setUsersPage);
+  const reportsSalesPagination = paginateData(sales, reportsSalesPage, setReportsSalesPage);
+  const activityLogsPagination = paginateData(activityLogs, activityLogsPage, setActivityLogsPage);
+
+  const PaginationControls = ({ totalItems, totalPages, page, start, end, onPrevious, onNext }: { totalItems: number; totalPages: number; page: number; start: number; end: number; onPrevious: () => void; onNext: () => void }) => (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.75rem', gap: '0.75rem', flexWrap: 'wrap' }}>
+      <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+        Showing {totalItems === 0 ? 0 : start + 1}–{end} of {totalItems}
+      </span>
+      <div style={{ display: 'flex', gap: '0.5rem' }}>
+        <button className="edit-btn" disabled={page <= 1} onClick={onPrevious}>Previous</button>
+        <span style={{ alignSelf: 'center', fontSize: '0.85rem' }}>Page {page} / {totalPages}</span>
+        <button className="edit-btn" disabled={page >= totalPages} onClick={onNext}>Next</button>
+      </div>
+    </div>
+  );
 
   const canManageUsers = (role === 'shop_owner' || role === 'admin') && activeShopOwnerUid === authUser?.uid;
   const canManageSalesAndExpenses = role === 'shop_owner' || role === 'admin' || role === 'manager';
@@ -1142,7 +1184,7 @@ export default function Page() {
                 </thead>
                 <tbody>
                   {filteredProducts.length > 0 ? (
-                    filteredProducts.map((p) => (
+                    productsPagination.rows.map((p) => (
                       <tr key={p.id} style={{ opacity: p.stock === 0 ? 0.6 : 1 }}>
                         <td style={{ fontWeight: 600, color: 'var(--text)' }}>{p.name}</td>
                         <td>{branchMap[p.branchId]}</td>
@@ -1171,6 +1213,15 @@ export default function Page() {
                 </tbody>
               </table>
             </div>
+            <PaginationControls
+              totalItems={filteredProducts.length}
+              totalPages={productsPagination.totalPages}
+              page={productsPagination.safePage}
+              start={productsPagination.start}
+              end={productsPagination.end}
+              onPrevious={() => setProductsPage((prev) => Math.max(1, prev - 1))}
+              onNext={() => setProductsPage((prev) => Math.min(productsPagination.totalPages, prev + 1))}
+            />
           </section>
         )}
 
@@ -1317,7 +1368,7 @@ export default function Page() {
                   </tr>
                 </thead>
                 <tbody>
-                  {services.length > 0 ? services.map((service) => (
+                  {services.length > 0 ? servicesPagination.rows.map((service) => (
                     <tr key={service.id}>
                       <td style={{ fontWeight: 600 }}>{service.name}</td>
                       <td>{branchMap[service.branchId]}</td>
@@ -1351,6 +1402,15 @@ export default function Page() {
                 </tbody>
               </table>
             </div>
+            <PaginationControls
+              totalItems={services.length}
+              totalPages={servicesPagination.totalPages}
+              page={servicesPagination.safePage}
+              start={servicesPagination.start}
+              end={servicesPagination.end}
+              onPrevious={() => setServicesPage((prev) => Math.max(1, prev - 1))}
+              onNext={() => setServicesPage((prev) => Math.min(servicesPagination.totalPages, prev + 1))}
+            />
           </section>
         )}
 
@@ -1494,7 +1554,7 @@ export default function Page() {
                 </thead>
                 <tbody>
                   {expenses.length > 0 ? (
-                    expenses.map((e) => (
+                    expensesPagination.rows.map((e) => (
                       <tr key={e.id}>
                         <td>{new Date(e.createdAt).toLocaleString()}</td>
                         <td style={{ fontWeight: 600 }}>{e.title}</td>
@@ -1520,6 +1580,15 @@ export default function Page() {
                 </tbody>
               </table>
             </div>
+            <PaginationControls
+              totalItems={expenses.length}
+              totalPages={expensesPagination.totalPages}
+              page={expensesPagination.safePage}
+              start={expensesPagination.start}
+              end={expensesPagination.end}
+              onPrevious={() => setExpensesPage((prev) => Math.max(1, prev - 1))}
+              onNext={() => setExpensesPage((prev) => Math.min(expensesPagination.totalPages, prev + 1))}
+            />
           </section>
         )}
 
@@ -1571,7 +1640,7 @@ export default function Page() {
                     </thead>
                     <tbody>
                       {users.length > 0 ? (
-                        users.map((u) => (
+                        usersPagination.rows.map((u) => (
                           <tr key={u.id}>
                             <td style={{ fontWeight: 600 }}>{u.name}</td>
                             <td>{u.email}</td>
@@ -1596,6 +1665,15 @@ export default function Page() {
                     </tbody>
                   </table>
                 </div>
+                <PaginationControls
+                  totalItems={users.length}
+                  totalPages={usersPagination.totalPages}
+                  page={usersPagination.safePage}
+                  start={usersPagination.start}
+                  end={usersPagination.end}
+                  onPrevious={() => setUsersPage((prev) => Math.max(1, prev - 1))}
+                  onNext={() => setUsersPage((prev) => Math.min(usersPagination.totalPages, prev + 1))}
+                />
               </>
             ) : (
               <div className="card">
@@ -1703,7 +1781,7 @@ export default function Page() {
                     </tr>
                   </thead>
                   <tbody>
-                    {sales.map((s) => (
+                    {reportsSalesPagination.rows.map((s) => (
                       <tr key={s.id}>
                         <td>{new Date(s.createdAt).toLocaleDateString()}</td>
                         <td><span className="badge badge-info">{s.type}</span></td>
@@ -1718,23 +1796,32 @@ export default function Page() {
                   </tbody>
                 </table>
               </div>
+              <PaginationControls
+                totalItems={sales.length}
+                totalPages={reportsSalesPagination.totalPages}
+                page={reportsSalesPagination.safePage}
+                start={reportsSalesPagination.start}
+                end={reportsSalesPagination.end}
+                onPrevious={() => setReportsSalesPage((prev) => Math.max(1, prev - 1))}
+                onNext={() => setReportsSalesPage((prev) => Math.min(reportsSalesPagination.totalPages, prev + 1))}
+              />
             </div>
           </section>
         )}
 
         {view === 'activity_logs' && (
-          <section className="card" style={{ marginTop: '1rem' }}>
+          <section className="card activity-log-card" style={{ marginTop: '1rem' }}>
             <h2 style={{ marginTop: 0 }}>All User Activities</h2>
             <p style={{ color: 'var(--text-muted)' }}>Sale, add inventory, add stock, delete, edit, and add user actions for all roles.</p>
-            <div style={{ overflowX: 'auto' }}>
-              <table>
+            <div className="table-wrap">
+              <table className="data-table">
                 <thead>
                   <tr>
                     <th>Time</th><th>User</th><th>Role</th><th>Action</th><th>Details</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {activityLogs.length > 0 ? activityLogs.map((log) => (
+                  {activityLogs.length > 0 ? activityLogsPagination.rows.map((log) => (
                     <tr key={log.id}>
                       <td>{new Date(log.createdAt).toLocaleString()}</td>
                       <td>{log.userEmail}</td>
@@ -1746,6 +1833,15 @@ export default function Page() {
                 </tbody>
               </table>
             </div>
+            <PaginationControls
+              totalItems={activityLogs.length}
+              totalPages={activityLogsPagination.totalPages}
+              page={activityLogsPagination.safePage}
+              start={activityLogsPagination.start}
+              end={activityLogsPagination.end}
+              onPrevious={() => setActivityLogsPage((prev) => Math.max(1, prev - 1))}
+              onNext={() => setActivityLogsPage((prev) => Math.min(activityLogsPagination.totalPages, prev + 1))}
+            />
           </section>
         )}
 
