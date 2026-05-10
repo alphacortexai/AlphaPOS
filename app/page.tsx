@@ -20,7 +20,8 @@ type AuditStamp = {
 };
 
 type Product = { id: string; name: string; branchId: string; stock: number; purchasePrice: number; salePrice: number } & AuditStamp;
-type Service = { id: string; name: string; branchId: string; salePrice: number } & AuditStamp;
+type ServiceType = 'direct_cost' | 'shared_cost';
+type Service = { id: string; name: string; branchId: string; salePrice: number; serviceType: ServiceType; directCost: number; monthlySharedCost: number } & AuditStamp;
 type Sale = { id: string; type: 'product' | 'service'; itemName: string; branchId: string; qty: number; amount: number; cost: number } & AuditStamp;
 type Expense = { id: string; title: string; branchId: string; amount: number } & AuditStamp;
 type StaffUser = { id: string; name: string; email: string; role: Role; branchId: string } & AuditStamp;
@@ -75,7 +76,7 @@ export default function Page() {
 
   const [branchForm, setBranchForm] = useState({ name: '', location: '', id: '' });
   const [productForm, setProductForm] = useState({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0 });
-  const [serviceForm, setServiceForm] = useState({ name: '', branchId: '', amount: 0 });
+  const [serviceForm, setServiceForm] = useState({ name: '', branchId: '', amount: 0, serviceType: 'direct_cost' as ServiceType, directCost: 0, monthlySharedCost: 0 });
   const [saleForm, setSaleForm] = useState({ productId: '', qty: 1 });
   const [cart, setCart] = useState<CartItem[]>([]);
   const [selectedBranchForSale, setSelectedBranchForSale] = useState('');
@@ -252,7 +253,7 @@ export default function Page() {
     setUsers([]);
     setBranchForm({ name: '', location: '', id: '' });
     setProductForm({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0 });
-    setServiceForm({ name: '', branchId: '', amount: 0 });
+    setServiceForm({ name: '', branchId: '', amount: 0, serviceType: 'direct_cost', directCost: 0, monthlySharedCost: 0 });
     setSaleForm({ productId: '', qty: 1 });
     setExpenseForm({ id: '', title: '', branchId: '', amount: 0 });
     setUserForm({ id: '', name: '', email: '', role: 'cashier', branchId: '' });
@@ -268,6 +269,16 @@ export default function Page() {
   };
 
   // Enhanced Metric Calculation Utilities
+  const getSharedServiceCostForPeriod = (period: DashboardPeriod) => {
+    const monthlySharedTotal = services
+      .filter((service) => service.serviceType === 'shared_cost')
+      .reduce((sum, service) => sum + service.monthlySharedCost, 0);
+    if (period === 'daily') return monthlySharedTotal / 30;
+    if (period === 'weekly') return monthlySharedTotal / 4;
+    if (period === 'yearly') return monthlySharedTotal * 12;
+    return monthlySharedTotal;
+  };
+
   const getMetricsForPeriod = (period: DashboardPeriod, offset: number = 0) => {
     const now = new Date();
     let start: Date, end: Date;
@@ -299,10 +310,11 @@ export default function Page() {
     const revenue = periodSales.reduce((a, s) => a + s.amount, 0);
     const cost = periodSales.reduce((a, s) => a + s.cost, 0);
     const expenseTotal = periodExpenses.reduce((a, e) => a + e.amount, 0);
-    const grossProfit = revenue - cost;
+    const sharedServiceCost = getSharedServiceCostForPeriod(period);
+    const grossProfit = revenue - cost - sharedServiceCost;
     const netProfit = grossProfit - expenseTotal;
 
-    return { revenue, cost, expenseTotal, grossProfit, netProfit, salesCount: periodSales.length };
+    return { revenue, cost: cost + sharedServiceCost, expenseTotal, grossProfit, netProfit, salesCount: periodSales.length };
   };
 
   const getMetrics = (period: 'day' | 'week' | 'month', offset: number = 0) => {
@@ -377,7 +389,7 @@ export default function Page() {
         period: dashboardPeriod
       }
     };
-  }, [sales, expenses, products, dashboardPeriod]);
+  }, [sales, expenses, products, dashboardPeriod, services]);
 
   // Product & Service Chart Data
   const chartData = useMemo(() => {
@@ -449,21 +461,40 @@ export default function Page() {
   const saveService = (e: React.FormEvent) => {
     e.preventDefault();
     if (!serviceForm.name || !serviceForm.branchId || serviceForm.amount <= 0) return;
+    if (serviceForm.serviceType === 'direct_cost' && serviceForm.directCost < 0) return;
+    if (serviceForm.serviceType === 'shared_cost' && serviceForm.monthlySharedCost <= 0) return;
 
     setServices((prev) => {
       const existing = prev.find((service) => service.name.toLowerCase() === serviceForm.name.trim().toLowerCase() && service.branchId === serviceForm.branchId);
       if (existing) {
         return prev.map((service) =>
           service.id === existing.id
-            ? { ...service, name: serviceForm.name.trim(), salePrice: serviceForm.amount, ...updatedAuditStamp() }
+            ? {
+                ...service,
+                name: serviceForm.name.trim(),
+                salePrice: serviceForm.amount,
+                serviceType: serviceForm.serviceType,
+                directCost: serviceForm.serviceType === 'direct_cost' ? serviceForm.directCost : 0,
+                monthlySharedCost: serviceForm.serviceType === 'shared_cost' ? serviceForm.monthlySharedCost : 0,
+                ...updatedAuditStamp()
+              }
             : service
         );
       }
-      return [...prev, { id: crypto.randomUUID(), name: serviceForm.name.trim(), branchId: serviceForm.branchId, salePrice: serviceForm.amount, ...currentAuditStamp() }];
+      return [...prev, {
+        id: crypto.randomUUID(),
+        name: serviceForm.name.trim(),
+        branchId: serviceForm.branchId,
+        salePrice: serviceForm.amount,
+        serviceType: serviceForm.serviceType,
+        directCost: serviceForm.serviceType === 'direct_cost' ? serviceForm.directCost : 0,
+        monthlySharedCost: serviceForm.serviceType === 'shared_cost' ? serviceForm.monthlySharedCost : 0,
+        ...currentAuditStamp()
+      }];
     });
 
     showNotification('Service saved successfully!', 'success');
-    setServiceForm({ name: '', branchId: '', amount: 0 });
+    setServiceForm({ name: '', branchId: '', amount: 0, serviceType: 'direct_cost', directCost: 0, monthlySharedCost: 0 });
   };
 
   const sellService = (serviceId: string) => {
@@ -479,7 +510,7 @@ export default function Page() {
       branchId: service.branchId,
       qty: 1,
       amount: service.salePrice,
-      cost: 0,
+      cost: service.serviceType === 'direct_cost' ? service.directCost : 0,
       ...currentAuditStamp(),
     };
     setSales((prev) => [newSale, ...prev]);
@@ -1199,6 +1230,24 @@ export default function Page() {
                   <label>Price</label>
                   <input type="number" min={0} value={serviceForm.amount} onChange={(e) => setServiceForm((prev) => ({ ...prev, amount: Number(e.target.value) }))} />
                 </div>
+                <div className="field">
+                  <label>Service Type</label>
+                  <select value={serviceForm.serviceType} onChange={(e) => setServiceForm((prev) => ({ ...prev, serviceType: e.target.value as ServiceType }))}>
+                    <option value="direct_cost">Direct Cost Service</option>
+                    <option value="shared_cost">Shared Cost Service</option>
+                  </select>
+                </div>
+                {serviceForm.serviceType === 'direct_cost' ? (
+                  <div className="field">
+                    <label>Direct Cost</label>
+                    <input type="number" min={0} value={serviceForm.directCost} onChange={(e) => setServiceForm((prev) => ({ ...prev, directCost: Number(e.target.value) }))} />
+                  </div>
+                ) : (
+                  <div className="field">
+                    <label>Monthly Shared Cost</label>
+                    <input type="number" min={0} value={serviceForm.monthlySharedCost} onChange={(e) => setServiceForm((prev) => ({ ...prev, monthlySharedCost: Number(e.target.value) }))} />
+                  </div>
+                )}
                 <button className="primary" type="submit">Save Service</button>
               </form>
             </div>
@@ -1208,7 +1257,9 @@ export default function Page() {
                   <tr>
                     <th>Service</th>
                     <th>Branch</th>
+                    <th>Type</th>
                     <th>Price</th>
+                    <th>Cost Model</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
@@ -1217,16 +1268,29 @@ export default function Page() {
                     <tr key={service.id}>
                       <td style={{ fontWeight: 600 }}>{service.name}</td>
                       <td>{branchMap[service.branchId]}</td>
+                      <td>{service.serviceType === 'direct_cost' ? 'Direct Cost' : 'Shared Cost'}</td>
                       <td>{formatUGX(service.salePrice)}</td>
                       <td>
-                        <button className="edit-btn" onClick={() => setServiceForm({ name: service.name, branchId: service.branchId, amount: service.salePrice })}>Edit</button>
+                        {service.serviceType === 'direct_cost'
+                          ? `Unit cost: ${formatUGX(service.directCost)}`
+                          : `Monthly: ${formatUGX(service.monthlySharedCost)} | Weekly: ${formatUGX(service.monthlySharedCost / 4)} | Daily: ${formatUGX(service.monthlySharedCost / 30)}`}
+                      </td>
+                      <td>
+                        <button className="edit-btn" onClick={() => setServiceForm({
+                          name: service.name,
+                          branchId: service.branchId,
+                          amount: service.salePrice,
+                          serviceType: service.serviceType || 'direct_cost',
+                          directCost: service.directCost || 0,
+                          monthlySharedCost: service.monthlySharedCost || 0
+                        })}>Edit</button>
                         <button className="primary" onClick={() => sellService(service.id)}>Sell</button>
                         <button className="delete-btn" onClick={() => setServices((prev) => prev.filter((item) => item.id !== service.id))}>Delete</button>
                       </td>
                     </tr>
                   )) : (
                     <tr>
-                      <td colSpan={4} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>
+                      <td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>
                         No services added yet.
                       </td>
                     </tr>
