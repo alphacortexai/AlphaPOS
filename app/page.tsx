@@ -6,7 +6,7 @@ import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signO
 import { collection, doc, getDoc, getDocs, getFirestore, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
 
 type Role = 'shop_owner' | 'admin' | 'manager' | 'cashier' | 'stock';
-type View = 'dashboard' | 'sales_performance' | 'sales_history' | 'products' | 'sales' | 'services' | 'expenses' | 'users' | 'branches' | 'reports' | 'settings' | 'profile' | 'activity_logs';
+type View = 'dashboard' | 'sales_history' | 'products' | 'sales' | 'services' | 'expenses' | 'users' | 'branches' | 'reports' | 'settings' | 'profile' | 'activity_logs';
 type DashboardPeriod = 'daily' | 'weekly' | 'monthly' | 'yearly';
 
 type Branch = { id: string; name: string; location: string; createdAt?: string };
@@ -914,49 +914,6 @@ export default function Page() {
     </span>
   );
 
-  // Sales performance table state
-  const [salesPerformanceSearch, setSalesPerformanceSearch] = useState('');
-  const [salesPerformanceFilter, setSalesPerformanceFilter] = useState<'all' | 'product' | 'service'>('all');
-
-  type SalesItem = {
-    name: string;
-    type: 'product' | 'service';
-    qty: number;
-    revenue: number;
-    count: number;
-    avgPerTransaction: number;
-  };
-
-  const filteredSalesPerformance = useMemo(() => {
-    let filtered: SalesItem[] = Object.entries(chartData.productMap).map(([name, data]) => ({
-      name,
-      type: 'product' as const,
-      qty: data.qty,
-      revenue: data.revenue,
-      count: data.count,
-      avgPerTransaction: data.count > 0 ? data.revenue / data.count : 0,
-    }));
-
-    if (salesPerformanceFilter === 'service' || salesPerformanceFilter === 'all') {
-      const services: SalesItem[] = Object.entries(chartData.serviceMap).map(([name, data]) => ({
-        name,
-        type: 'service' as const,
-        qty: 0,
-        revenue: data.revenue,
-        count: data.count,
-        avgPerTransaction: data.count > 0 ? data.revenue / data.count : 0,
-      }));
-      if (salesPerformanceFilter === 'service') {
-        filtered = services;
-      } else {
-        filtered = [...filtered, ...services];
-      }
-    }
-
-    return filtered
-      .filter((item) => item.name.toLowerCase().includes(salesPerformanceSearch.toLowerCase()))
-      .sort((a, b) => b.revenue - a.revenue);
-  }, [chartData, salesPerformanceSearch, salesPerformanceFilter]);
 
   if (loading) return <div className="auth-container"><div className="status">Loading AlphaPOS...</div></div>;
   if (!authUser) {
@@ -1004,7 +961,6 @@ export default function Page() {
           <button className={`nav-button ${view === 'dashboard' ? 'active' : ''}`} onClick={() => { setView('dashboard'); setIsSidebarOpen(false); }}>📈 Dashboard</button>
           <button className={`nav-button ${view === 'sales' ? 'active' : ''}`} onClick={() => { setView('sales'); setIsSidebarOpen(false); }}>🛒 Sales Desk</button>
           <button className={`nav-button ${view === 'sales_history' ? 'active' : ''}`} onClick={() => { setView('sales_history'); setIsSidebarOpen(false); }}>🧾 Sales History</button>
-          <button className={`nav-button ${view === 'sales_performance' ? 'active' : ''}`} onClick={() => { setView('sales_performance'); setIsSidebarOpen(false); }}>📉 Sales Performance</button>
           <button className={`nav-button ${view === 'products' ? 'active' : ''}`} onClick={() => { setView('products'); setIsSidebarOpen(false); }}>📦 Inventory</button>
           <button className={`nav-button ${view === 'services' ? 'active' : ''}`} onClick={() => { setView('services'); setIsSidebarOpen(false); }}>🧰 Services</button>
           <button className={`nav-button ${view === 'expenses' ? 'active' : ''}`} onClick={() => { setView('expenses'); setIsSidebarOpen(false); }}>💰 Expenses</button>
@@ -1123,73 +1079,6 @@ export default function Page() {
 
           </section>
         )}
-
-        {view === 'sales_performance' && (
-          <section>
-            <div className="page-header">
-              <h2>Sales Performance</h2>
-            </div>
-            <div className="filter-bar">
-              <div className="filter-group sales-search-group">
-                <label>Search Item</label>
-                <input
-                  type="text"
-                  placeholder="Search by name..."
-                  value={salesPerformanceSearch}
-                  onChange={(e) => setSalesPerformanceSearch(e.target.value)}
-                />
-              </div>
-              <div className="filter-group">
-                <label>Type</label>
-                <select value={salesPerformanceFilter} onChange={(e) => setSalesPerformanceFilter(e.target.value as 'all' | 'product' | 'service')}>
-                  <option value="all">All Items</option>
-                  <option value="product">Products</option>
-                  <option value="service">Services</option>
-                </select>
-              </div>
-            </div>
-
-            <div className="table-wrap">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Item Name</th>
-                    <th>Type</th>
-                    <th>Units Sold</th>
-                    <th>Transactions</th>
-                    <th>Total Revenue</th>
-                    <th>Avg per Transaction</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredSalesPerformance.length > 0 ? (
-                    filteredSalesPerformance.map((item, idx) => (
-                      <tr key={`${item.type}-${item.name}-${idx}`}>
-                        <td style={{ fontWeight: 600 }}>{item.name}</td>
-                        <td>
-                          <span className={`badge ${item.type === 'product' ? 'badge-info' : 'badge-success'}`}>
-                            {item.type === 'product' ? 'Product' : 'Service'}
-                          </span>
-                        </td>
-                        <td>{item.qty}</td>
-                        <td>{item.count}</td>
-                        <td style={{ color: 'var(--success)', fontWeight: 600 }}>{formatUGX(item.revenue)}</td>
-                        <td>{formatUGX(item.avgPerTransaction)}</td>
-                      </tr>
-                    ))
-                  ) : (
-                    <tr>
-                      <td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>
-                        No sales data available for this period.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </section>
-        )}
-
 
         {view === 'products' && (
           <section>
