@@ -5,8 +5,8 @@ import { firebaseApp } from '../lib.firebase';
 import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth';
 import { collection, doc, getDoc, getDocs, getFirestore, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
 
-type Role = 'shop_owner' | 'manager' | 'cashier' | 'stock';
-type View = 'dashboard' | 'sales_performance' | 'sales_history' | 'products' | 'sales' | 'services' | 'expenses' | 'users' | 'branches' | 'reports' | 'settings' | 'profile';
+type Role = 'shop_owner' | 'admin' | 'manager' | 'cashier' | 'stock';
+type View = 'dashboard' | 'sales_performance' | 'sales_history' | 'products' | 'sales' | 'services' | 'expenses' | 'users' | 'branches' | 'reports' | 'settings' | 'profile' | 'activity_logs';
 type DashboardPeriod = 'daily' | 'weekly' | 'monthly' | 'yearly';
 
 type Branch = { id: string; name: string; location: string; createdAt?: string };
@@ -26,6 +26,14 @@ type Sale = { id: string; type: 'product' | 'service'; itemName: string; branchI
 type Expense = { id: string; title: string; branchId: string; amount: number } & AuditStamp;
 type StaffUser = { id: string; name: string; email: string; role: Role; branchId: string } & AuditStamp;
 type ShopMembership = { ownerUid: string; shopName: string; role: Role };
+type ActivityLog = {
+  id: string;
+  action: string;
+  details: string;
+  role: Role;
+  userEmail: string;
+  createdAt: string;
+};
 type CartItem = { itemId: string; itemType: 'product' | 'service'; itemName: string; qty: number; unitPrice: number; unitCost: number; branchId: string; maxQty?: number };
 
 const periodStart = (period: 'day' | 'week' | 'month' | 'year', date: Date = new Date()) => {
@@ -56,6 +64,7 @@ export default function Page() {
   const [sales, setSales] = useState<Sale[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [users, setUsers] = useState<StaffUser[]>([]);
+  const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
 
   // Modals
   const [showProductModal, setShowProductModal] = useState(false);
@@ -205,6 +214,7 @@ export default function Page() {
         setExpenses(Array.isArray(data.expenses) ? data.expenses : []);
         setUsers(Array.isArray(data.users) ? data.users : []);
         setRole(selectedShop?.role || (data.role as Role) || 'shop_owner');
+        setActivityLogs(Array.isArray(data.activityLogs) ? data.activityLogs : []);
         hasLoadedUserDataRef.current = true;
         isSwitchingShopRef.current = false;
         setStatus(`Viewing ${selectedShop?.shopName || 'selected shop'} as ${selectedShop?.role || role}.`);
@@ -222,7 +232,7 @@ export default function Page() {
         const userDataRef = doc(db, 'users', activeShopOwnerUid, 'pos', 'data');
         await setDoc(
           userDataRef,
-          { role, branches, products, services, sales, expenses, users, updatedAt: serverTimestamp() },
+          { role, branches, products, services, sales, expenses, users, activityLogs, updatedAt: serverTimestamp() },
           { merge: true }
         );
       } catch (error) {
@@ -230,7 +240,7 @@ export default function Page() {
       }
     };
     void saveUserData();
-  }, [activeShopOwnerUid, authUser, db, role, branches, products, services, sales, expenses, users]);
+  }, [activeShopOwnerUid, authUser, db, role, branches, products, services, sales, expenses, users, activityLogs]);
 
   const handleLogin = async () => {
     if (!firebaseApp) return;
@@ -262,6 +272,7 @@ export default function Page() {
     setSales([]);
     setExpenses([]);
     setUsers([]);
+    setActivityLogs([]);
     setBranchForm({ name: '', location: '', id: '' });
     setProductForm({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0 });
     setServiceForm({ name: '', branchId: '', amount: 0, serviceType: 'direct_cost', directCost: 0, monthlySharedCost: 0 });
@@ -455,15 +466,28 @@ export default function Page() {
     updatedByEmail: authUser?.email || 'unknown',
   });
 
+  const logActivity = (action: string, details: string) => {
+    setActivityLogs((prev) => [{
+      id: crypto.randomUUID(),
+      action,
+      details,
+      role,
+      userEmail: authUser?.email || 'unknown',
+      createdAt: new Date().toISOString(),
+    }, ...prev].slice(0, 500));
+  };
+
   const saveProduct = (e: React.FormEvent) => {
     e.preventDefault();
     if (!productForm.name || !productForm.branchId) return;
     if (productForm.id) {
       setProducts((prev) => prev.map((p) => (p.id === productForm.id ? { ...p, ...productForm, ...updatedAuditStamp() } : p)));
       setStatus('Product updated.');
+      logActivity('edit_inventory', `Updated product "${productForm.name}"`);
     } else {
       setProducts((prev) => [...prev, { ...productForm, id: crypto.randomUUID(), ...currentAuditStamp() }]);
       setStatus('Product added.');
+      logActivity('add_inventory', `Added product "${productForm.name}"`);
     }
     setProductForm({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0 });
     setShowProductModal(false);
@@ -525,6 +549,7 @@ export default function Page() {
       ...currentAuditStamp(),
     };
     setSales((prev) => [newSale, ...prev]);
+    logActivity('sale', `Sold service "${service.name}"`);
     showNotification(`${service.name} sold successfully`, 'success');
   };
 
@@ -534,9 +559,11 @@ export default function Page() {
     if (expenseForm.id) {
       setExpenses((prev) => prev.map((ex) => (ex.id === expenseForm.id ? { ...ex, ...expenseForm, ...updatedAuditStamp() } : ex)));
       setStatus('Expense updated.');
+      logActivity('edit_expense', `Updated expense "${expenseForm.title}"`);
     } else {
       setExpenses((prev) => [...prev, { ...expenseForm, id: crypto.randomUUID(), ...currentAuditStamp() }]);
       setStatus('Expense recorded.');
+      logActivity('add_expense', `Added expense "${expenseForm.title}"`);
     }
     setExpenseForm({ id: '', title: '', branchId: '', amount: 0 });
     setShowExpenseModal(false);
@@ -549,6 +576,7 @@ export default function Page() {
     if (userForm.id) {
       setUsers((prev) => prev.map((u) => (u.id === userForm.id ? { ...u, ...userForm, ...updatedAuditStamp() } : u)));
       setStatus('User updated.');
+      logActivity('edit_user', `Updated user "${userForm.email}"`);
     } else {
       const newUser: StaffUser = {
         id: crypto.randomUUID(),
@@ -559,6 +587,7 @@ export default function Page() {
         ...currentAuditStamp(),
       };
       setUsers((prev) => [...prev, newUser]);
+      logActivity('add_user', `Added user "${userForm.email}" with role "${userForm.role}"`);
 
       // Save shop membership for email-based invitation
       if (db) {
@@ -677,6 +706,7 @@ export default function Page() {
       return cartItem ? { ...p, stock: p.stock - cartItem.qty } : p;
     });
     setProducts(updatedProducts);
+    logActivity('sale', `Completed cart sale with ${cart.length} item(s)`);
     showNotification(`Sale completed! ${cart.length} item(s) sold.`, 'success');
     setCart([]);
     setShowSaleModal(false);
@@ -701,6 +731,7 @@ export default function Page() {
     };
     setSales((prev) => [newSale, ...prev]);
     setProducts((prev) => prev.map((x) => (x.id === p.id ? { ...x, stock: x.stock - saleForm.qty } : x)));
+    logActivity('sale', `Sold ${saleForm.qty} of "${p.name}"`);
     setSaleForm({ productId: '', qty: 1 });
     setStatus('Sale recorded.');
   };
@@ -725,6 +756,7 @@ export default function Page() {
     setProducts((prev) =>
       prev.map((p) => (p.id === productId ? { ...p, stock: p.stock + qtyToAdd, ...updatedAuditStamp() } : p))
     );
+    logActivity('add_stock', `Added ${qtyToAdd} stock to "${product.name}"`);
     showNotification(`${qtyToAdd} units added to ${product.name}`, 'success');
   };
 
@@ -784,8 +816,8 @@ export default function Page() {
     }
   }, [salesHistoryPage, salesHistoryTotalPages]);
 
-  const canManageUsers = role === 'shop_owner' && activeShopOwnerUid === authUser?.uid;
-  const canManageSalesAndExpenses = role === 'shop_owner' || role === 'manager';
+  const canManageUsers = (role === 'shop_owner' || role === 'admin') && activeShopOwnerUid === authUser?.uid;
+  const canManageSalesAndExpenses = role === 'shop_owner' || role === 'admin' || role === 'manager';
 
   const deleteSale = (id: string) => {
     if (!canManageSalesAndExpenses) {
@@ -793,6 +825,7 @@ export default function Page() {
       return;
     }
     setSales((prev) => prev.filter((sale) => sale.id !== id));
+    logActivity('delete_sale', `Deleted sale id "${id}"`);
     showNotification('Sale deleted successfully!', 'success');
   };
 
@@ -811,6 +844,7 @@ export default function Page() {
       return;
     }
     setExpenses((prev) => prev.filter((expense) => expense.id !== id));
+    logActivity('delete_expense', `Deleted expense id "${id}"`);
     showNotification('Expense deleted successfully!', 'success');
   };
   const canChangeRole = activeShopOwnerUid === authUser?.uid;
@@ -854,9 +888,11 @@ export default function Page() {
     if (branchForm.id) {
       setBranches((prev) => prev.map((b) => (b.id === branchForm.id ? { ...b, name: branchForm.name, location: branchForm.location } : b)));
       showNotification('Branch updated successfully!', 'success');
+      logActivity('edit_branch', `Updated branch "${branchForm.name}"`);
     } else {
       setBranches((prev) => [...prev, { id: crypto.randomUUID(), name: branchForm.name, location: branchForm.location, createdAt: new Date().toISOString() }]);
       showNotification('Branch added successfully!', 'success');
+      logActivity('add_branch', `Added branch "${branchForm.name}"`);
     }
     setBranchForm({ name: '', location: '', id: '' });
     setShowBranchFormModal(false);
@@ -868,6 +904,7 @@ export default function Page() {
       return;
     }
     setBranches((prev) => prev.filter((b) => b.id !== id));
+    logActivity('delete_branch', `Deleted branch id "${id}"`);
     showNotification('Branch deleted successfully!', 'success');
   };
 
@@ -972,6 +1009,7 @@ export default function Page() {
           <button className={`nav-button ${view === 'services' ? 'active' : ''}`} onClick={() => { setView('services'); setIsSidebarOpen(false); }}>🧰 Services</button>
           <button className={`nav-button ${view === 'expenses' ? 'active' : ''}`} onClick={() => { setView('expenses'); setIsSidebarOpen(false); }}>💰 Expenses</button>
           <button className={`nav-button ${view === 'users' ? 'active' : ''}`} onClick={() => { setView('users'); setIsSidebarOpen(false); }}>👥 Staff</button>
+          <button className={`nav-button ${view === 'activity_logs' ? 'active' : ''}`} onClick={() => { setView('activity_logs'); setIsSidebarOpen(false); }}>🧾 Activity Logs</button>
           <button className={`nav-button ${view === 'reports' ? 'active' : ''}`} onClick={() => { setView('reports'); setIsSidebarOpen(false); }}>📊 Reports</button>
           {isShopOwner && <button className={`nav-button ${view === 'settings' ? 'active' : ''}`} onClick={() => { setView('settings'); setIsSidebarOpen(false); }}>⚙️ Settings</button>}
         </nav>
@@ -1230,7 +1268,7 @@ export default function Page() {
                         <td>
                           <button className="edit-btn" onClick={() => { setProductForm(p); setShowProductModal(true); }}>Edit</button>
                           <button className="edit-btn" onClick={() => restockProduct(p.id)}>+ Stock</button>
-                          <button className="delete-btn" onClick={() => setProducts(prev => prev.filter(x => x.id !== p.id))}>Delete</button>
+                          <button className="delete-btn" onClick={() => { setProducts(prev => prev.filter(x => x.id !== p.id)); logActivity('delete_inventory', `Deleted product "${p.name}"`); }}>Delete</button>
                         </td>
                       </tr>
                     ))
@@ -1411,7 +1449,7 @@ export default function Page() {
                           monthlySharedCost: service.monthlySharedCost || 0
                         })}>Edit</button>
                         <button className="primary" onClick={() => sellService(service.id)}>Sell</button>
-                        <button className="delete-btn" onClick={() => setServices((prev) => prev.filter((item) => item.id !== service.id))}>Delete</button>
+                        <button className="delete-btn" onClick={() => { setServices((prev) => prev.filter((item) => item.id !== service.id)); logActivity('delete_service', `Deleted service "${service.name}"`); }}>Delete</button>
                       </td>
                     </tr>
                   )) : (
@@ -1650,14 +1688,14 @@ export default function Page() {
                             <td>{u.email}</td>
                             <td>
                               <span className={`badge ${u.role === 'manager' ? 'badge-warning' : 'badge-success'}`}>
-                                {u.role === 'manager' ? '👔 Manager' : '💼 Cashier'}
+                                {u.role === 'manager' ? '👔 Manager' : u.role === 'admin' ? '🛡️ Admin' : '💼 Cashier'}
                               </span>
                             </td>
                             <td>{branchMap[u.branchId]}</td>
                             <td>{new Date(u.createdAt).toLocaleDateString()}</td>
                             <td>
                               <button className="edit-btn" onClick={() => { setUserForm(u); setShowUserModal(true); }}>Edit</button>
-                              <button className="delete-btn" onClick={() => setUsers(prev => prev.filter(x => x.id !== u.id))}>Remove</button>
+                              <button className="delete-btn" onClick={() => { setUsers(prev => prev.filter(x => x.id !== u.id)); logActivity('delete_user', `Removed user "${u.email}"`); }}>Remove</button>
                             </td>
                           </tr>
                         ))
@@ -1791,6 +1829,33 @@ export default function Page() {
                   </tbody>
                 </table>
               </div>
+            </div>
+          </section>
+        )}
+
+        {view === 'activity_logs' && (
+          <section className="card" style={{ marginTop: '1rem' }}>
+            <h2 style={{ marginTop: 0 }}>All User Activities</h2>
+            <p style={{ color: 'var(--text-muted)' }}>Sale, add inventory, add stock, delete, edit, and add user actions for all roles.</p>
+            <div style={{ overflowX: 'auto' }}>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Time</th><th>User</th><th>Role</th><th>Action</th><th>Details</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {activityLogs.length > 0 ? activityLogs.map((log) => (
+                    <tr key={log.id}>
+                      <td>{new Date(log.createdAt).toLocaleString()}</td>
+                      <td>{log.userEmail}</td>
+                      <td>{log.role}</td>
+                      <td>{log.action}</td>
+                      <td>{log.details}</td>
+                    </tr>
+                  )) : <tr><td colSpan={5}>No activity logs yet.</td></tr>}
+                </tbody>
+              </table>
             </div>
           </section>
         )}
@@ -2037,6 +2102,7 @@ export default function Page() {
                       <span>Role</span>
                       <select value={userForm.role} onChange={(e) => setUserForm({ ...userForm, role: e.target.value as Role })} required>
                         <option value="cashier">Cashier</option>
+                        <option value="admin">Admin</option>
                         <option value="manager">Manager</option>
                         <option value="stock">Stock Manager</option>
                       </select>
