@@ -20,6 +20,7 @@ type AuditStamp = {
 };
 
 type Product = { id: string; name: string; branchId: string; stock: number; purchasePrice: number; salePrice: number } & AuditStamp;
+type Service = { id: string; name: string; branchId: string; salePrice: number } & AuditStamp;
 type Sale = { id: string; type: 'product' | 'service'; itemName: string; branchId: string; qty: number; amount: number; cost: number } & AuditStamp;
 type Expense = { id: string; title: string; branchId: string; amount: number } & AuditStamp;
 type StaffUser = { id: string; name: string; email: string; role: Role; branchId: string } & AuditStamp;
@@ -50,6 +51,7 @@ export default function Page() {
 
   const [branches, setBranches] = useState<Branch[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  const [services, setServices] = useState<Service[]>([]);
   const [sales, setSales] = useState<Sale[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [users, setUsers] = useState<StaffUser[]>([]);
@@ -140,6 +142,7 @@ export default function Page() {
         setAvailableShops([]);
         setBranches([]);
         setProducts([]);
+        setServices([]);
         setSales([]);
         setExpenses([]);
         setUsers([]);
@@ -185,6 +188,7 @@ export default function Page() {
         const data = snap.data();
         setBranches(Array.isArray(data.branches) ? data.branches : []);
         setProducts(Array.isArray(data.products) ? data.products : []);
+        setServices(Array.isArray(data.services) ? data.services : []);
         setSales(Array.isArray(data.sales) ? data.sales : []);
         setExpenses(Array.isArray(data.expenses) ? data.expenses : []);
         setUsers(Array.isArray(data.users) ? data.users : []);
@@ -206,7 +210,7 @@ export default function Page() {
         const userDataRef = doc(db, 'users', activeShopOwnerUid, 'pos', 'data');
         await setDoc(
           userDataRef,
-          { role, branches, products, sales, expenses, users, updatedAt: serverTimestamp() },
+          { role, branches, products, services, sales, expenses, users, updatedAt: serverTimestamp() },
           { merge: true }
         );
       } catch (error) {
@@ -214,7 +218,7 @@ export default function Page() {
       }
     };
     void saveUserData();
-  }, [activeShopOwnerUid, authUser, db, role, branches, products, sales, expenses, users]);
+  }, [activeShopOwnerUid, authUser, db, role, branches, products, services, sales, expenses, users]);
 
   const handleLogin = async () => {
     if (!firebaseApp) return;
@@ -242,6 +246,7 @@ export default function Page() {
   const resetShopScopedState = () => {
     setBranches([]);
     setProducts([]);
+    setServices([]);
     setSales([]);
     setExpenses([]);
     setUsers([]);
@@ -439,6 +444,46 @@ export default function Page() {
     }
     setProductForm({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0 });
     setShowProductModal(false);
+  };
+
+  const saveService = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!serviceForm.name || !serviceForm.branchId || serviceForm.amount <= 0) return;
+
+    setServices((prev) => {
+      const existing = prev.find((service) => service.name.toLowerCase() === serviceForm.name.trim().toLowerCase() && service.branchId === serviceForm.branchId);
+      if (existing) {
+        return prev.map((service) =>
+          service.id === existing.id
+            ? { ...service, name: serviceForm.name.trim(), salePrice: serviceForm.amount, ...updatedAuditStamp() }
+            : service
+        );
+      }
+      return [...prev, { id: crypto.randomUUID(), name: serviceForm.name.trim(), branchId: serviceForm.branchId, salePrice: serviceForm.amount, ...currentAuditStamp() }];
+    });
+
+    showNotification('Service saved successfully!', 'success');
+    setServiceForm({ name: '', branchId: '', amount: 0 });
+  };
+
+  const sellService = (serviceId: string) => {
+    const service = services.find((item) => item.id === serviceId);
+    if (!service) {
+      showNotification('Service not found', 'error');
+      return;
+    }
+    const newSale: Sale = {
+      id: crypto.randomUUID(),
+      type: 'service',
+      itemName: service.name,
+      branchId: service.branchId,
+      qty: 1,
+      amount: service.salePrice,
+      cost: 0,
+      ...currentAuditStamp(),
+    };
+    setSales((prev) => [newSale, ...prev]);
+    showNotification(`${service.name} sold successfully`, 'success');
   };
 
   const saveExpense = (e: React.FormEvent) => {
@@ -777,6 +822,7 @@ export default function Page() {
           <button className={`nav-button ${view === 'sales_history' ? 'active' : ''}`} onClick={() => { setView('sales_history'); setIsSidebarOpen(false); }}>🧾 Sales History</button>
           <button className={`nav-button ${view === 'sales_performance' ? 'active' : ''}`} onClick={() => { setView('sales_performance'); setIsSidebarOpen(false); }}>📉 Sales Performance</button>
           <button className={`nav-button ${view === 'products' ? 'active' : ''}`} onClick={() => { setView('products'); setIsSidebarOpen(false); }}>📦 Inventory</button>
+          <button className={`nav-button ${view === 'services' ? 'active' : ''}`} onClick={() => { setView('services'); setIsSidebarOpen(false); }}>🧰 Services</button>
           <button className={`nav-button ${view === 'expenses' ? 'active' : ''}`} onClick={() => { setView('expenses'); setIsSidebarOpen(false); }}>💰 Expenses</button>
           <button className={`nav-button ${view === 'users' ? 'active' : ''}`} onClick={() => { setView('users'); setIsSidebarOpen(false); }}>👥 Staff</button>
           <button className={`nav-button ${view === 'reports' ? 'active' : ''}`} onClick={() => { setView('reports'); setIsSidebarOpen(false); }}>📊 Reports</button>
@@ -1125,6 +1171,68 @@ export default function Page() {
                   )}
                 </div>
               </div>
+            </div>
+          </section>
+        )}
+
+        {view === 'services' && (
+          <section>
+            <div className="page-header">
+              <h2>Service Catalog</h2>
+            </div>
+            <div className="card" style={{ marginBottom: '1rem' }}>
+              <form onSubmit={saveService} style={{ display: 'grid', gap: '0.75rem', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', alignItems: 'end' }}>
+                <div className="field">
+                  <label>Service Name</label>
+                  <input type="text" value={serviceForm.name} onChange={(e) => setServiceForm((prev) => ({ ...prev, name: e.target.value }))} placeholder="e.g. Phone Repair" />
+                </div>
+                <div className="field">
+                  <label>Branch</label>
+                  <select value={serviceForm.branchId} onChange={(e) => setServiceForm((prev) => ({ ...prev, branchId: e.target.value }))}>
+                    <option value="">Select Branch</option>
+                    {branches.map((b) => (
+                      <option key={b.id} value={b.id}>{b.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="field">
+                  <label>Price</label>
+                  <input type="number" min={0} value={serviceForm.amount} onChange={(e) => setServiceForm((prev) => ({ ...prev, amount: Number(e.target.value) }))} />
+                </div>
+                <button className="primary" type="submit">Save Service</button>
+              </form>
+            </div>
+            <div className="table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Service</th>
+                    <th>Branch</th>
+                    <th>Price</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {services.length > 0 ? services.map((service) => (
+                    <tr key={service.id}>
+                      <td style={{ fontWeight: 600 }}>{service.name}</td>
+                      <td>{branchMap[service.branchId]}</td>
+                      <td>{formatUGX(service.salePrice)}</td>
+                      <td>
+                        <button className="edit-btn" onClick={() => setServiceForm({ name: service.name, branchId: service.branchId, amount: service.salePrice })}>Edit</button>
+                        <button className="primary" onClick={() => sellService(service.id)}>Sell</button>
+                        <button className="delete-btn" onClick={() => setServices((prev) => prev.filter((item) => item.id !== service.id))}>Delete</button>
+                      </td>
+                    </tr>
+                  )) : (
+                    <tr>
+                      <td colSpan={4} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>
+                        No services added yet.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
             </div>
           </section>
         )}
