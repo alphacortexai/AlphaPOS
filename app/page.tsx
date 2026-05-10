@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { firebaseApp } from '../lib.firebase';
 import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth';
 import { collection, doc, getDoc, getDocs, getFirestore, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
@@ -92,6 +92,7 @@ export default function Page() {
   const [quickSaleSearchQuery, setQuickSaleSearchQuery] = useState('');
   const [productBranchFilter, setProductBranchFilter] = useState('');
   const [productStockFilter, setProductStockFilter] = useState<'all' | 'low' | 'out'>('all');
+  const [isRefreshingDashboard, setIsRefreshingDashboard] = useState(false);
 
   const [branchForm, setBranchForm] = useState({ name: '', location: '', id: '' });
   const [productForm, setProductForm] = useState({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0 });
@@ -177,9 +178,8 @@ export default function Page() {
     });
   }, []);
 
-  useEffect(() => {
-    const loadUserData = async () => {
-      if (!authUser || !db) return;
+  const loadUserData = useCallback(async () => {
+      if (!authUser || !db) return false;
       try {
         const normalizedEmail = authUser.email?.toLowerCase().trim();
         const memberships: ShopMembership[] = [{ ownerUid: authUser.uid, shopName: 'My Shop', role: 'shop_owner' }];
@@ -210,7 +210,7 @@ export default function Page() {
           hasLoadedUserDataRef.current = true;
           isSwitchingShopRef.current = false;
           setStatus(`Viewing ${selectedShop?.shopName || 'selected shop'} as ${selectedShop?.role || role}.`);
-          return;
+          return true;
         }
         const data = snap.data();
         setBranches(Array.isArray(data.branches) ? data.branches : []);
@@ -224,12 +224,27 @@ export default function Page() {
         hasLoadedUserDataRef.current = true;
         isSwitchingShopRef.current = false;
         setStatus(`Viewing ${selectedShop?.shopName || 'selected shop'} as ${selectedShop?.role || role}.`);
+        return true;
       } catch (error) {
         setStatus(`Failed to load your data: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        return false;
       }
-    };
+    }, [activeShopOwnerUid, authUser, db, role]);
+
+  useEffect(() => {
     void loadUserData();
-  }, [activeShopOwnerUid, authUser, db]);
+  }, [loadUserData]);
+
+  const handleDashboardRefresh = async () => {
+    if (!authUser || !db || isRefreshingDashboard) return;
+    setIsRefreshingDashboard(true);
+    const didRefresh = await loadUserData();
+    if (didRefresh) {
+      showNotification('Dashboard updated with latest database values.', 'success');
+      setStatus('Dashboard refreshed from the database.');
+    }
+    setIsRefreshingDashboard(false);
+  };
 
   useEffect(() => {
     const saveUserData = async () => {
@@ -1076,6 +1091,9 @@ export default function Page() {
                   <option value="yearly">Yearly</option>
                 </select>
               </div>
+              <button className="secondary" onClick={handleDashboardRefresh} disabled={isRefreshingDashboard}>
+                {isRefreshingDashboard ? 'Updating…' : '🔄 Update Dashboard'}
+              </button>
             </div>
 
             {/* KPI Cards Grid */}
