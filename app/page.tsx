@@ -785,6 +785,34 @@ export default function Page() {
   }, [salesHistoryPage, salesHistoryTotalPages]);
 
   const canManageUsers = role === 'shop_owner' && activeShopOwnerUid === authUser?.uid;
+  const canManageSalesAndExpenses = role === 'shop_owner' || role === 'manager';
+
+  const deleteSale = (id: string) => {
+    if (!canManageSalesAndExpenses) {
+      setStatus('Only the shop owner or admin can delete sales.');
+      return;
+    }
+    setSales((prev) => prev.filter((sale) => sale.id !== id));
+    showNotification('Sale deleted successfully!', 'success');
+  };
+
+  const editExpense = (expense: Expense) => {
+    if (!canManageSalesAndExpenses) {
+      setStatus('Only the shop owner or admin can edit expenses.');
+      return;
+    }
+    setExpenseForm(expense);
+    setShowExpenseModal(true);
+  };
+
+  const deleteExpense = (id: string) => {
+    if (!canManageSalesAndExpenses) {
+      setStatus('Only the shop owner or admin can delete expenses.');
+      return;
+    }
+    setExpenses((prev) => prev.filter((expense) => expense.id !== id));
+    showNotification('Expense deleted successfully!', 'success');
+  };
   const canChangeRole = activeShopOwnerUid === authUser?.uid;
 
   const saveShopName = async (e: React.FormEvent) => {
@@ -1448,6 +1476,7 @@ export default function Page() {
                       <th>Qty</th>
                       <th>Total</th>
                       <th>Profit</th>
+                      <th>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1459,11 +1488,18 @@ export default function Page() {
                           <td>{s.qty}</td>
                           <td>{formatUGX(s.amount)}</td>
                           <td style={{ color: 'var(--success)', fontWeight: 600 }}>{formatUGX(s.amount - s.cost)}</td>
+                          <td>
+                            {canManageSalesAndExpenses ? (
+                              <button className="delete-btn" onClick={() => deleteSale(s.id)}>Delete</button>
+                            ) : (
+                              <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>Owner/Admin only</span>
+                            )}
+                          </td>
                         </tr>
                       ))
                     ) : (
                       <tr>
-                        <td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>No sales recorded for this period</td>
+                        <td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>No sales recorded for this period</td>
                       </tr>
                     )}
                   </tbody>
@@ -1538,8 +1574,14 @@ export default function Page() {
                         <td>{branchMap[e.branchId]}</td>
                         <td style={{ color: 'var(--danger)', fontWeight: 600 }}>{formatUGX(e.amount)}</td>
                         <td>
-                          <button className="edit-btn" onClick={() => { setExpenseForm(e); setShowExpenseModal(true); }}>Edit</button>
-                          <button className="delete-btn" onClick={() => setExpenses(prev => prev.filter(x => x.id !== e.id))}>Delete</button>
+                          {canManageSalesAndExpenses ? (
+                            <>
+                              <button className="edit-btn" onClick={() => editExpense(e)}>Edit</button>
+                              <button className="delete-btn" onClick={() => deleteExpense(e.id)}>Delete</button>
+                            </>
+                          ) : (
+                            <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>Owner/Admin only</span>
+                          )}
                         </td>
                       </tr>
                     ))
@@ -1730,6 +1772,7 @@ export default function Page() {
                       <th>Revenue</th>
                       <th>Cost</th>
                       <th>Profit</th>
+                      <th>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
