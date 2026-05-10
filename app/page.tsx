@@ -26,7 +26,7 @@ type Sale = { id: string; type: 'product' | 'service'; itemName: string; branchI
 type Expense = { id: string; title: string; branchId: string; amount: number } & AuditStamp;
 type StaffUser = { id: string; name: string; email: string; role: Role; branchId: string } & AuditStamp;
 type ShopMembership = { ownerUid: string; shopName: string; role: Role };
-type CartItem = { productId: string; productName: string; qty: number; unitPrice: number; unitCost: number; branchId: string };
+type CartItem = { itemId: string; itemType: 'product' | 'service'; itemName: string; qty: number; unitPrice: number; unitCost: number; branchId: string; maxQty?: number };
 
 const periodStart = (period: 'day' | 'week' | 'month' | 'year', date: Date = new Date()) => {
   const d = new Date(date);
@@ -108,6 +108,13 @@ export default function Page() {
       .filter((product) => product.stock > 0 && product.name.toLowerCase().includes(query))
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [products, quickSaleSearchQuery, topSellingProducts]);
+  const filteredQuickSaleServices = useMemo(() => {
+    const query = quickSaleSearchQuery.trim().toLowerCase();
+    const branchIdsWithStockProducts = new Set(products.filter((product) => product.stock > 0).map((product) => product.branchId));
+    return services
+      .filter((service) => branchIdsWithStockProducts.has(service.branchId) && (!query || service.name.toLowerCase().includes(query)))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [products, quickSaleSearchQuery, services]);
   const cartTotal = useMemo(() => cart.reduce((sum, item) => sum + (item.unitPrice * item.qty), 0), [cart]);
   const cartCost = useMemo(() => cart.reduce((sum, item) => sum + (item.unitCost * item.qty), 0), [cart]);
   const cartProfit = useMemo(() => cartTotal - cartCost, [cartTotal, cartCost]);
@@ -567,7 +574,7 @@ export default function Page() {
     setShowUserModal(false);
   };
 
-  const addToCart = (productId: string) => {
+  const addProductToCart = (productId: string) => {
     const product = products.find(p => p.id === productId);
     if (!product) {
       showNotification('Product not found', 'error');
@@ -577,45 +584,71 @@ export default function Page() {
       showNotification('Product out of stock', 'error');
       return;
     }
-    const existingItem = cart.find(item => item.productId === productId);
+    const existingItem = cart.find(item => item.itemType === 'product' && item.itemId === productId);
     if (existingItem) {
       if (existingItem.qty + 1 > product.stock) {
         showNotification('Insufficient stock for this quantity', 'error');
         return;
       }
       setCart(prev => prev.map(item => 
-        item.productId === productId ? { ...item, qty: item.qty + 1 } : item
+        item.itemType === 'product' && item.itemId === productId ? { ...item, qty: item.qty + 1 } : item
       ));
     } else {
       setCart(prev => [...prev, {
-        productId: product.id,
-        productName: product.name,
+        itemId: product.id,
+        itemType: 'product',
+        itemName: product.name,
         qty: 1,
         unitPrice: product.salePrice,
         unitCost: product.purchasePrice,
-        branchId: product.branchId
+        branchId: product.branchId,
+        maxQty: product.stock
       }]);
     }
     showNotification(`${product.name} added to cart`, 'success', 2000);
   };
 
-  const updateCartItemQty = (productId: string, qty: number) => {
-    if (qty <= 0) {
-      removeFromCart(productId);
+  const addServiceToCart = (serviceId: string) => {
+    const service = services.find((item) => item.id === serviceId);
+    if (!service) {
+      showNotification('Service not found', 'error');
       return;
     }
-    const product = products.find(p => p.id === productId);
-    if (product && qty > product.stock) {
-      showNotification(`Only ${product.stock} units available`, 'error');
+    const existingItem = cart.find((item) => item.itemType === 'service' && item.itemId === serviceId);
+    if (existingItem) {
+      setCart((prev) => prev.map((item) => item.itemType === 'service' && item.itemId === serviceId ? { ...item, qty: item.qty + 1 } : item));
+    } else {
+      setCart((prev) => [...prev, {
+        itemId: service.id,
+        itemType: 'service',
+        itemName: service.name,
+        qty: 1,
+        unitPrice: service.salePrice,
+        unitCost: service.serviceType === 'direct_cost' ? service.directCost : 0,
+        branchId: service.branchId,
+      }]);
+    }
+    showNotification(`${service.name} added to cart`, 'success', 2000);
+  };
+
+  const updateCartItemQty = (itemId: string, itemType: 'product' | 'service', qty: number) => {
+    if (qty <= 0) {
+      removeFromCart(itemId, itemType);
+      return;
+    }
+    const cartItem = cart.find((item) => item.itemId === itemId && item.itemType === itemType);
+    if (!cartItem) return;
+    if (itemType === 'product' && cartItem.maxQty && qty > cartItem.maxQty) {
+      showNotification(`Only ${cartItem.maxQty} units available`, 'error');
       return;
     }
     setCart(prev => prev.map(item => 
-      item.productId === productId ? { ...item, qty } : item
+      item.itemId === itemId && item.itemType === itemType ? { ...item, qty } : item
     ));
   };
 
-  const removeFromCart = (productId: string) => {
-    setCart(prev => prev.filter(item => item.productId !== productId));
+  const removeFromCart = (itemId: string, itemType: 'product' | 'service') => {
+    setCart(prev => prev.filter(item => !(item.itemId === itemId && item.itemType === itemType)));
     showNotification('Item removed from cart', 'info', 1500);
   };
 
@@ -626,8 +659,8 @@ export default function Page() {
     }
     const newSales = cart.map(item => ({
       id: crypto.randomUUID(),
-      type: 'product' as const,
-      itemName: item.productName,
+      type: item.itemType,
+      itemName: item.itemName,
       branchId: item.branchId,
       qty: item.qty,
       amount: item.unitPrice * item.qty,
@@ -636,7 +669,7 @@ export default function Page() {
     }));
     setSales(prev => [...newSales, ...prev]);
     const updatedProducts = products.map(p => {
-      const cartItem = cart.find(ci => ci.productId === p.id);
+      const cartItem = cart.find(ci => ci.itemType === 'product' && ci.itemId === p.id);
       return cartItem ? { ...p, stock: p.stock - cartItem.qty } : p;
     });
     setProducts(updatedProducts);
@@ -1155,13 +1188,23 @@ export default function Page() {
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(145px, 1fr))', gap: '0.55rem', marginBottom: '1rem' }}>
                   {filteredQuickSaleProducts.map(p => (
-                    <div key={p.id} className="card" style={{ cursor: 'pointer', transition: 'all 0.2s ease', padding: '0.55rem' }} onClick={() => addToCart(p.id)}>
+                    <div key={p.id} className="card" style={{ cursor: 'pointer', transition: 'all 0.2s ease', padding: '0.55rem' }} onClick={() => addProductToCart(p.id)}>
                       <div style={{ fontSize: '0.84rem', fontWeight: 600, color: 'var(--text)', marginBottom: '0.3rem' }}>{p.name}</div>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
                         <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--success)' }}>{formatUGX(p.salePrice)}</span>
                         <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>x{p.stock}</span>
                       </div>
                       <button className="primary" style={{ width: '100%', fontSize: '0.68rem', padding: '0.35rem 0.45rem' }}>Add</button>
+                    </div>
+                  ))}
+                  {filteredQuickSaleServices.map((service) => (
+                    <div key={service.id} className="card" style={{ cursor: 'pointer', transition: 'all 0.2s ease', padding: '0.55rem', border: '1px dashed var(--border)' }} onClick={() => addServiceToCart(service.id)}>
+                      <div style={{ fontSize: '0.84rem', fontWeight: 600, color: 'var(--text)', marginBottom: '0.3rem' }}>{service.name}</div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
+                        <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--info)' }}>{formatUGX(service.salePrice)}</span>
+                        <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Service</span>
+                      </div>
+                      <button className="primary" style={{ width: '100%', fontSize: '0.68rem', padding: '0.35rem 0.45rem' }}>Add Service</button>
                     </div>
                   ))}
                 </div>
@@ -1173,15 +1216,15 @@ export default function Page() {
                     <>
                       <div style={{ maxHeight: '400px', overflowY: 'auto', marginBottom: '1rem' }}>
                         {cart.map(item => (
-                          <div key={item.productId} style={{ padding: '0.75rem', borderBottom: '1px solid var(--border)', marginBottom: '0.5rem' }}>
+                          <div key={`${item.itemType}-${item.itemId}`} style={{ padding: '0.75rem', borderBottom: '1px solid var(--border)', marginBottom: '0.5rem' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-                              <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>{item.productName}</div>
-                              <button className="delete-btn" onClick={() => removeFromCart(item.productId)}>Remove</button>
+                              <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>{item.itemName} <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>({item.itemType})</span></div>
+                              <button className="delete-btn" onClick={() => removeFromCart(item.itemId, item.itemType)}>Remove</button>
                             </div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
-                              <button className="edit-btn" onClick={() => updateCartItemQty(item.productId, item.qty - 1)}>−</button>
-                              <input type="number" value={item.qty} onChange={(e) => updateCartItemQty(item.productId, Number(e.target.value))} style={{ width: '50px', textAlign: 'center', padding: '0.25rem' }} />
-                              <button className="edit-btn" onClick={() => updateCartItemQty(item.productId, item.qty + 1)}>+</button>
+                              <button className="edit-btn" onClick={() => updateCartItemQty(item.itemId, item.itemType, item.qty - 1)}>−</button>
+                              <input type="number" value={item.qty} onChange={(e) => updateCartItemQty(item.itemId, item.itemType, Number(e.target.value))} style={{ width: '50px', textAlign: 'center', padding: '0.25rem' }} />
+                              <button className="edit-btn" onClick={() => updateCartItemQty(item.itemId, item.itemType, item.qty + 1)}>+</button>
                               <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>{formatUGX(item.unitPrice * item.qty)}</span>
                             </div>
                           </div>
