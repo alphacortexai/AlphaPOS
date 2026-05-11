@@ -1248,7 +1248,7 @@ export default function Page() {
             </div>
 
             {/* Inventory Search & Filter */}
-            <div className="filter-bar">
+            <div className="filter-bar inventory-filter-bar">
               <div className="filter-group">
                 <label>Search Product</label>
                 <input 
