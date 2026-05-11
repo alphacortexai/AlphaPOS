@@ -821,6 +821,43 @@ button.delete-btn:hover {
   box-shadow: 0 0 0 3px var(--info-light);
 }
 
+.insight-card {
+  border: 1px solid var(--border);
+}
+
+.insight-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: var(--space-md);
+}
+
+.insight-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--space-md);
+  margin-top: var(--space-md);
+}
+
+.insight-trend-chart {
+  height: 180px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, var(--bg-subtle), var(--bg));
+  padding: var(--space-sm);
+}
+
+.insight-trend-chart svg {
+  width: 100%;
+  height: 100%;
+}
+
+.insight-trend-meta {
+  margin: var(--space-sm) 0 0;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
 /* Chart Container & Grid */
 .chart-container {
   margin: var(--space-2xl) 0;
