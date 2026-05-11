@@ -8,6 +8,7 @@ import { collection, doc, getDoc, getDocs, getFirestore, query, serverTimestamp,
 type Role = 'shop_owner' | 'admin' | 'manager' | 'cashier' | 'stock';
 type View = 'dashboard' | 'sales_history' | 'products' | 'sales' | 'services' | 'expenses' | 'users' | 'branches' | 'reports' | 'settings' | 'profile' | 'activity_logs';
 type DashboardPeriod = 'daily' | 'weekly' | 'monthly' | 'yearly';
+type InsightTrendRange = 7 | 14 | 30 | 60 | 100;
 
 type Branch = { id: string; name: string; location: string; createdAt?: string };
 type AuditStamp = {
@@ -88,6 +89,7 @@ export default function Page() {
   const [reportsSalesPage, setReportsSalesPage] = useState(1);
   const [activityLogsPage, setActivityLogsPage] = useState(1);
   const [dashboardPeriod, setDashboardPeriod] = useState<DashboardPeriod>('weekly');
+  const [insightTrendRange, setInsightTrendRange] = useState<InsightTrendRange>(30);
   const [productSearchQuery, setProductSearchQuery] = useState('');
   const [quickSaleSearchQuery, setQuickSaleSearchQuery] = useState('');
   const [productBranchFilter, setProductBranchFilter] = useState('');
@@ -558,6 +560,51 @@ export default function Page() {
 
     return { productMap, serviceMap };
   }, [sales]);
+
+  const dashboardInsights = useMemo(() => {
+    const itemMap = new Map<string, { name: string; type: 'product' | 'service'; qty: number; revenue: number }>();
+
+    sales.forEach((sale) => {
+      const key = `${sale.type}:${sale.itemName}`;
+      if (!itemMap.has(key)) {
+        itemMap.set(key, { name: sale.itemName, type: sale.type, qty: 0, revenue: 0 });
+      }
+      const item = itemMap.get(key)!;
+      item.qty += sale.qty;
+      item.revenue += sale.amount;
+    });
+
+    const ranked = Array.from(itemMap.values());
+    const mostSold = ranked.sort((a, b) => b.qty - a.qty)[0] || null;
+    const topRevenue = ranked.sort((a, b) => b.revenue - a.revenue)[0] || null;
+
+    const today = new Date();
+    const trendDays = Array.from({ length: insightTrendRange }, (_, idx) => {
+      const d = new Date(today);
+      d.setHours(0, 0, 0, 0);
+      d.setDate(today.getDate() - (insightTrendRange - 1 - idx));
+      const key = d.toISOString().slice(0, 10);
+      return { date: key, revenue: 0 };
+    });
+    const trendMap = new Map(trendDays.map((item) => [item.date, item]));
+
+    sales.forEach((sale) => {
+      const key = new Date(sale.createdAt).toISOString().slice(0, 10);
+      const bucket = trendMap.get(key);
+      if (bucket) bucket.revenue += sale.amount;
+    });
+
+    const maxRevenue = trendDays.reduce((max, day) => Math.max(max, day.revenue), 0);
+    const points = trendDays
+      .map((day, idx) => {
+        const x = trendDays.length === 1 ? 0 : (idx / (trendDays.length - 1)) * 100;
+        const y = maxRevenue > 0 ? 100 - (day.revenue / maxRevenue) * 100 : 100;
+        return `${x},${y}`;
+      })
+      .join(' ');
+
+    return { mostSold, topRevenue, trendDays, maxRevenue, points };
+  }, [insightTrendRange, sales]);
 
   // Filtered products for inventory
   const filteredProducts = useMemo(() => {
@@ -1232,6 +1279,51 @@ export default function Page() {
                   return d.getFullYear() === now.getFullYear();
                 }).length}</div>
                 <span className="badge badge-success">Total</span>
+              </div>
+            </div>
+
+            <div className="card insight-card" style={{ marginTop: '1rem' }}>
+              <div className="insight-header-row">
+                <h3 style={{ margin: 0 }}>📌 Insights</h3>
+                <div className="filter-group" style={{ marginBottom: 0 }}>
+                  <label>Sales Trend Window</label>
+                  <select value={insightTrendRange} onChange={(e) => setInsightTrendRange(Number(e.target.value) as InsightTrendRange)}>
+                    <option value={7}>Last 7 days</option>
+                    <option value={14}>Last 14 days</option>
+                    <option value={30}>Last 30 days</option>
+                    <option value={60}>Last 60 days</option>
+                    <option value={100}>Last 100 days</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="insight-stats-grid">
+                <div>
+                  <h4>1) Most sold product/service</h4>
+                  {dashboardInsights.mostSold ? (
+                    <p style={{ margin: 0 }}>
+                      <strong>{dashboardInsights.mostSold.name}</strong> ({dashboardInsights.mostSold.type}) — {dashboardInsights.mostSold.qty} units
+                    </p>
+                  ) : <p style={{ margin: 0 }}>No sales data yet.</p>}
+                </div>
+                <div>
+                  <h4>2) Product/service with most revenue</h4>
+                  {dashboardInsights.topRevenue ? (
+                    <p style={{ margin: 0 }}>
+                      <strong>{dashboardInsights.topRevenue.name}</strong> ({dashboardInsights.topRevenue.type}) — {formatUGX(dashboardInsights.topRevenue.revenue)}
+                    </p>
+                  ) : <p style={{ margin: 0 }}>No revenue data yet.</p>}
+                </div>
+              </div>
+
+              <div style={{ marginTop: '1rem' }}>
+                <h4 style={{ marginTop: 0 }}>3) Sales trend (last {insightTrendRange} days)</h4>
+                <div className="insight-trend-chart">
+                  <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-label={`Sales trend for last ${insightTrendRange} days`}>
+                    <polyline points={dashboardInsights.points} fill="none" stroke="var(--info)" strokeWidth="2" vectorEffect="non-scaling-stroke" />
+                  </svg>
+                </div>
+                <p className="insight-trend-meta">Peak day revenue: {formatUGX(dashboardInsights.maxRevenue)}</p>
               </div>
             </div>
 
