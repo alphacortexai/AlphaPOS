@@ -539,6 +539,7 @@ body {
 
 .inventory-filter-bar {
   align-items: stretch;
+  gap: var(--space-sm);
 }
 
 .inventory-filter-bar .filter-group {
