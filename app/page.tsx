@@ -1190,7 +1190,7 @@ export default function Page() {
               </div>
               <button className="dashboard-refresh-btn" onClick={handleDashboardRefresh} disabled={isRefreshingDashboard}>
                 <span className="refresh-btn-icon" aria-hidden="true">{isRefreshingDashboard ? '⏳' : '🧮'}</span>
-                <span>{isRefreshingDashboard ? 'Recalculating…' : 'Recalculate & Update Dashboard'}</span>
+                <span>{isRefreshingDashboard ? 'Refreshing data…' : 'Refresh Data'}</span>
               </button>
             </div>
 

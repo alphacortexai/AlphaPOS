@@ -953,7 +953,21 @@ button.delete-btn:hover {
 
   .dashboard-controls {
     flex-direction: column;
+    align-items: stretch;
     gap: var(--space-md);
+  }
+
+  .dashboard-controls .filter-group {
+    width: 100%;
+  }
+
+  .dashboard-controls .period-select {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .dashboard-controls .dashboard-refresh-btn {
+    align-self: flex-start;
   }
 
   .chart-grid {
