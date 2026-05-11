@@ -1039,6 +1039,29 @@ button.delete-btn:hover {
     min-width: auto;
   }
 
+  .inventory-filter-bar {
+    gap: var(--space-xs);
+  }
+
+  .inventory-filter-bar .filter-group {
+    gap: 0.3rem;
+  }
+
+  .inventory-filter-bar .filter-group label {
+    font-size: 0.66rem;
+    line-height: 1.1;
+  }
+
+  .inventory-filter-bar .filter-group input,
+  .inventory-filter-bar .filter-group select {
+    padding: 0.45rem 0.65rem;
+    font-size: 0.82rem;
+  }
+
+  .inventory-filter-bar > .edit-btn {
+    padding: 0.45rem 0.65rem;
+  }
+
   .sales-desk-layout {
     grid-template-columns: 1fr;
     gap: 1rem;
