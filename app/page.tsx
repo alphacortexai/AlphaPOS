@@ -1536,7 +1536,7 @@ export default function Page() {
               <h2>Sales History</h2>
             </div>
             <div>
-              <div className="filter-bar">
+              <div className="filter-bar sales-history-filter-bar">
                 <div className="filter-group">
                   <label>View</label>
                   <select value={salesHistoryViewMode} onChange={(e) => setSalesHistoryViewMode(e.target.value as 'day' | 'week' | 'month' | 'range')}>

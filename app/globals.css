@@ -535,6 +535,26 @@ body {
   min-width: 150px;
 }
 
+
+.sales-history-filter-bar {
+  align-items: stretch;
+}
+
+.sales-history-filter-bar .filter-group {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+
+.sales-history-filter-bar .filter-group input,
+.sales-history-filter-bar .filter-group select {
+  width: 100%;
+  min-width: 0;
+}
+
+.sales-history-filter-bar > .edit-btn {
+  align-self: flex-end;
+}
+
 .dashboard-card {
   display: flex;
   flex-direction: column;
@@ -938,6 +958,16 @@ button.delete-btn:hover {
 
   .filter-bar {
     flex-direction: column;
+    align-items: stretch;
+  }
+
+  .filter-group,
+  .sales-history-filter-bar > .edit-btn {
+    width: 100%;
+  }
+
+  .sales-history-filter-bar > .edit-btn {
+    align-self: stretch;
   }
 
   .filter-group input,
