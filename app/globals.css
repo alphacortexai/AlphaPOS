@@ -536,6 +536,27 @@ body {
 }
 
 
+
+.inventory-filter-bar {
+  align-items: stretch;
+}
+
+.inventory-filter-bar .filter-group {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.inventory-filter-bar .filter-group input,
+.inventory-filter-bar .filter-group select {
+  width: 100%;
+  min-width: 0;
+}
+
+.inventory-filter-bar > .edit-btn {
+  align-self: flex-end;
+}
+
+
 .sales-history-filter-bar {
   align-items: stretch;
 }
