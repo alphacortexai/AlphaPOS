@@ -987,6 +987,10 @@ button.delete-btn:hover {
     width: 100%;
   }
 
+  .sales-history-filter-bar .filter-group {
+    flex: 0 0 auto;
+  }
+
   .sales-history-filter-bar > .edit-btn {
     align-self: stretch;
   }
