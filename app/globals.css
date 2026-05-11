@@ -1147,3 +1147,95 @@ button.delete-btn:hover {
   font-size: 0.95rem;
   line-height: 1;
 }
+
+/* Notification Toast - Modern & Responsive */
+.notification-toast {
+  position: fixed;
+  bottom: 2rem;
+  right: 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  min-width: 320px;
+  max-width: 420px;
+  padding: 1rem 1.25rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-glass), 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+  z-index: 2000;
+  animation: slideInUp 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.notification-toast.success { border-left: 4px solid var(--success); }
+.notification-toast.error { border-left: 4px solid var(--danger); }
+.notification-toast.info { border-left: 4px solid var(--info); }
+
+.notification-content {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex: 1;
+}
+
+.notification-icon {
+  font-size: 1.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.notification-message {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text);
+  line-height: 1.4;
+}
+
+.notification-close {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0.25rem;
+  font-size: 0.75rem;
+  border-radius: var(--radius-sm);
+  transition: all 0.2s ease;
+}
+
+.notification-close:hover {
+  background: var(--bg-accent);
+  color: var(--text);
+}
+
+@keyframes slideInUp {
+  from { transform: translateY(100%) scale(0.95); opacity: 0; }
+  to { transform: translateY(0) scale(1); opacity: 1; }
+}
+
+/* Mobile Adjustments for Notifications */
+@media (max-width: 640px) {
+  .notification-toast {
+    bottom: 1rem;
+    left: 1rem;
+    right: 1rem;
+    min-width: 0;
+    max-width: none;
+  }
+}
+
+/* Main Content Padding Fixes */
+.main {
+  padding: 0 !important; /* Reset default padding to handle sticky header better */
+}
+
+.main > section {
+  padding: var(--space-xl) var(--space-2xl);
+}
+
+@media (max-width: 768px) {
+  .main > section {
+    padding: var(--space-lg) var(--space-md);
+  }
+}

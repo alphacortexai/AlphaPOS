@@ -575,8 +575,8 @@ export default function Page() {
     });
 
     const ranked = Array.from(itemMap.values());
-    const mostSold = ranked.sort((a, b) => b.qty - a.qty)[0] || null;
-    const topRevenue = ranked.sort((a, b) => b.revenue - a.revenue)[0] || null;
+    const mostSold = ranked.sort((a, b) => b.qty - a.qty).slice(0, 3);
+    const topRevenue = ranked.sort((a, b) => b.revenue - a.revenue).slice(0, 3);
 
     const today = new Date();
     const trendDays = Array.from({ length: insightTrendRange }, (_, idx) => {
@@ -603,7 +603,7 @@ export default function Page() {
       })
       .join(' ');
 
-    return { mostSold, topRevenue, trendDays, maxRevenue, points };
+    return { mostSold, topRevenue, trendDays, maxRevenue, points, trendMap };
   }, [insightTrendRange, sales]);
 
   // Filtered products for inventory
@@ -1182,39 +1182,38 @@ export default function Page() {
         </div>
 
         {notification && (
-          <div style={{
-            position: 'fixed',
-            bottom: '20px',
-            right: '20px',
-            padding: '12px 20px',
-            borderRadius: '8px',
-            backgroundColor: notification.type === 'success' ? 'var(--success)' : notification.type === 'error' ? 'var(--danger)' : 'var(--info)',
-            color: 'white',
-            fontSize: '0.875rem',
-            fontWeight: 600,
-            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
-            zIndex: 1000,
-            animation: 'slideIn 0.3s ease-out'
-          }}>
-            {notification.message}
+          <div className={`notification-toast ${notification.type}`}>
+            <div className="notification-content">
+              <span className="notification-icon">
+                {notification.type === 'success' ? '✅' : notification.type === 'error' ? '❌' : 'ℹ️'}
+              </span>
+              <span className="notification-message">{notification.message}</span>
+            </div>
+            <button className="notification-close" onClick={() => setNotification(null)}>✕</button>
           </div>
         )}
-        <style>{`
-          @keyframes slideIn {
-            from { transform: translateX(400px); opacity: 0; }
-            to { transform: translateX(0); opacity: 1; }
-          }
-        `}</style>
       </aside>
 
-      <main className="main">
-        <header className="main-header">
+      <main className="main" style={{ display: 'flex', flexDirection: 'column' }}>
+        <header className="main-header" style={{ padding: 'var(--space-lg) var(--space-xl)', margin: '0 0 var(--space-xl) 0', borderBottom: '1px solid var(--border)', background: 'var(--bg)', position: 'sticky', top: 0, zIndex: 40 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-md)' }}>
             <button className="mobile-menu-toggle" onClick={() => setIsSidebarOpen(true)}>☰</button>
-            <h1 style={{ margin: 0 }}>{view.charAt(0).toUpperCase() + view.slice(1)}</h1>
+            <h1 style={{ margin: 0, fontSize: '1.5rem', fontWeight: 700, letterSpacing: '-0.02em' }}>
+              {view === 'dashboard' ? '📊 Dashboard Overview' : 
+               view === 'sales' ? '🛒 Sales Desk' :
+               view === 'sales_history' ? '🧾 Sales History' :
+               view === 'products' ? '📦 Inventory Management' :
+               view === 'services' ? '🧰 Service Catalog' :
+               view === 'expenses' ? '💰 Expense Tracking' :
+               view === 'users' ? '👥 Staff Management' :
+               view === 'activity_logs' ? '🧾 Activity Logs' :
+               view === 'reports' ? '📈 Business Reports' :
+               view === 'settings' ? '⚙️ System Settings' :
+               view.charAt(0).toUpperCase() + view.slice(1)}
+            </h1>
           </div>
-          <div className="status-container">
-            <span className="status">{status}</span>
+          <div className="status-container" style={{ margin: 0 }}>
+            <span className="status" style={{ fontSize: '0.75rem', padding: '0.4rem 0.8rem' }}>{status}</span>
           </div>
         </header>
 
@@ -1300,30 +1299,60 @@ export default function Page() {
               <div className="insight-stats-grid">
                 <div>
                   <h4>1) Most sold product/service</h4>
-                  {dashboardInsights.mostSold ? (
-                    <p style={{ margin: 0 }}>
-                      <strong>{dashboardInsights.mostSold.name}</strong> ({dashboardInsights.mostSold.type}) — {dashboardInsights.mostSold.qty} units
-                    </p>
+                  {dashboardInsights.mostSold.length > 0 ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                      {dashboardInsights.mostSold.map((item, i) => (
+                        <p key={i} style={{ margin: 0, fontSize: '0.9rem' }}>
+                          <span style={{ color: 'var(--text-muted)', marginRight: '0.5rem' }}>#{i+1}</span>
+                          <strong>{item.name}</strong> <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>({item.type})</span> — {item.qty} units
+                        </p>
+                      ))}
+                    </div>
                   ) : <p style={{ margin: 0 }}>No sales data yet.</p>}
                 </div>
                 <div>
                   <h4>2) Product/service with most revenue</h4>
-                  {dashboardInsights.topRevenue ? (
-                    <p style={{ margin: 0 }}>
-                      <strong>{dashboardInsights.topRevenue.name}</strong> ({dashboardInsights.topRevenue.type}) — {formatUGX(dashboardInsights.topRevenue.revenue)}
-                    </p>
+                  {dashboardInsights.topRevenue.length > 0 ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                      {dashboardInsights.topRevenue.map((item, i) => (
+                        <p key={i} style={{ margin: 0, fontSize: '0.9rem' }}>
+                          <span style={{ color: 'var(--text-muted)', marginRight: '0.5rem' }}>#{i+1}</span>
+                          <strong>{item.name}</strong> <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>({item.type})</span> — {formatUGX(item.revenue)}
+                        </p>
+                      ))}
+                    </div>
                   ) : <p style={{ margin: 0 }}>No revenue data yet.</p>}
                 </div>
               </div>
 
-              <div style={{ marginTop: '1rem' }}>
-                <h4 style={{ marginTop: 0 }}>3) Sales trend (last {insightTrendRange} days)</h4>
-                <div className="insight-trend-chart">
-                  <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-label={`Sales trend for last ${insightTrendRange} days`}>
-                    <polyline points={dashboardInsights.points} fill="none" stroke="var(--info)" strokeWidth="2" vectorEffect="non-scaling-stroke" />
+              <div style={{ marginTop: '1.5rem', borderTop: '1px solid var(--border)', paddingTop: '1.5rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                  <h4 style={{ margin: 0 }}>3) Sales trend (last {insightTrendRange} days)</h4>
+                  <div style={{ display: 'flex', gap: '1rem', fontSize: '0.75rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                      <div style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: 'var(--info)' }}></div>
+                      <span>Daily Revenue</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="insight-trend-chart" style={{ height: '180px', background: 'var(--bg-subtle)', borderRadius: 'var(--radius)', padding: '1rem', position: 'relative' }}>
+                  <svg viewBox="0 0 100 100" preserveAspectRatio="none" style={{ width: '100%', height: '100%', overflow: 'visible' }} aria-label={`Sales trend for last ${insightTrendRange} days`}>
+                    {/* Grid lines */}
+                    {[0, 25, 50, 75, 100].map(y => (
+                      <line key={y} x1="0" y1={y} x2="100" y2={y} stroke="var(--border)" strokeWidth="0.5" strokeDasharray="2,2" />
+                    ))}
+                    <polyline points={dashboardInsights.points} fill="none" stroke="var(--info)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+                    {/* Data points */}
+                    {dashboardInsights.points.split(' ').map((p, i) => {
+                      const [x, y] = p.split(',');
+                      return <circle key={i} cx={x} cy={y} r="1.5" fill="var(--bg)" stroke="var(--info)" strokeWidth="1" />;
+                    })}
                   </svg>
                 </div>
-                <p className="insight-trend-meta">Peak day revenue: {formatUGX(dashboardInsights.maxRevenue)}</p>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '0.75rem' }}>
+                  <p className="insight-trend-meta" style={{ margin: 0 }}>Peak day: <strong>{formatUGX(dashboardInsights.maxRevenue)}</strong></p>
+                  <p className="insight-trend-meta" style={{ margin: 0, color: 'var(--text-muted)' }}>Average: <strong>{formatUGX(dashboardInsights.trendDays.reduce((acc, d) => acc + d.revenue, 0) / insightTrendRange)}</strong></p>
+                </div>
               </div>
             </div>
 
