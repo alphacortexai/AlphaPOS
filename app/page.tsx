@@ -1284,15 +1284,21 @@ export default function Page() {
             <div className="card insight-card" style={{ marginTop: '1rem' }}>
               <div className="insight-header-row">
                 <h3 style={{ margin: 0 }}>📌 Insights</h3>
-                <div className="filter-group" style={{ marginBottom: 0 }}>
-                  <label>Sales Trend Window</label>
-                  <select value={insightTrendRange} onChange={(e) => setInsightTrendRange(Number(e.target.value) as InsightTrendRange)}>
-                    <option value={7}>Last 7 days</option>
-                    <option value={14}>Last 14 days</option>
-                    <option value={30}>Last 30 days</option>
-                    <option value={60}>Last 60 days</option>
-                    <option value={100}>Last 100 days</option>
-                  </select>
+                <div style={{ display: 'flex', alignItems: 'flex-end', gap: '0.75rem', flexWrap: 'wrap' }}>
+                  <div className="filter-group" style={{ marginBottom: 0 }}>
+                    <label>Sales Trend Window</label>
+                    <select value={insightTrendRange} onChange={(e) => setInsightTrendRange(Number(e.target.value) as InsightTrendRange)}>
+                      <option value={7}>Last 7 days</option>
+                      <option value={14}>Last 14 days</option>
+                      <option value={30}>Last 30 days</option>
+                      <option value={60}>Last 60 days</option>
+                      <option value={100}>Last 100 days</option>
+                    </select>
+                  </div>
+                  <button className="dashboard-refresh-btn" onClick={handleDashboardRefresh} disabled={isRefreshingDashboard}>
+                    <span className="refresh-btn-icon" aria-hidden="true">{isRefreshingDashboard ? '⏳' : '🔄'}</span>
+                    <span>{isRefreshingDashboard ? 'Refreshing…' : 'Refresh Insights'}</span>
+                  </button>
                 </div>
               </div>
 
