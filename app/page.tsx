@@ -606,6 +606,37 @@ export default function Page() {
     updatedByEmail: authUser?.email || 'unknown',
   });
 
+  useEffect(() => {
+    const todayKey = new Date().toISOString().slice(0, 10);
+    const sharedCostServices = services.filter((service) => service.serviceType === 'shared_cost' && service.monthlySharedCost > 0);
+    if (sharedCostServices.length === 0) return;
+
+    setExpenses((prev) => {
+      const existingAutoExpenseKeys = new Set(
+        prev
+          .filter((expense) => expense.id.startsWith('auto-shared-cost::'))
+          .map((expense) => expense.id)
+      );
+
+      const newAutoExpenses: Expense[] = [];
+      sharedCostServices.forEach((service) => {
+        const autoExpenseId = `auto-shared-cost::${todayKey}::${service.branchId}::${service.id}`;
+        if (existingAutoExpenseKeys.has(autoExpenseId)) return;
+
+        newAutoExpenses.push({
+          id: autoExpenseId,
+          title: `Shared Cost (${todayKey}) - ${service.name}`,
+          branchId: service.branchId,
+          amount: service.monthlySharedCost / 30,
+          ...currentAuditStamp(),
+        });
+      });
+
+      if (newAutoExpenses.length === 0) return prev;
+      return [...newAutoExpenses, ...prev];
+    });
+  }, [services]);
+
   const logActivity = (action: string, details: string) => {
     setActivityLogs((prev) => [{
       id: crypto.randomUUID(),
