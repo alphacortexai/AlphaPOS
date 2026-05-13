@@ -606,6 +606,42 @@ export default function Page() {
     updatedByEmail: authUser?.email || 'unknown',
   });
 
+  useEffect(() => {
+    if (!authUser) return;
+    const sharedServices = services.filter((service) => service.serviceType === 'shared_cost' && service.monthlySharedCost > 0);
+    if (sharedServices.length === 0) return;
+
+    const today = new Date();
+    const currentYear = today.getFullYear();
+    const currentMonth = today.getMonth();
+    const monthStart = new Date(currentYear, currentMonth, 1);
+    const dayCount = Math.floor((today.getTime() - monthStart.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+    const existingAutoExpenseIds = new Set(expenses.filter((expense) => expense.id.startsWith('auto-shared-')).map((expense) => expense.id));
+    const nextAutoExpenses: Expense[] = [];
+
+    sharedServices.forEach((service) => {
+      const dailyAmount = service.monthlySharedCost / 30;
+      for (let dayOffset = 0; dayOffset < dayCount; dayOffset += 1) {
+        const d = new Date(currentYear, currentMonth, 1 + dayOffset);
+        const dayKey = d.toISOString().slice(0, 10);
+        const id = `auto-shared-${service.id}-${dayKey}`;
+        if (existingAutoExpenseIds.has(id)) continue;
+        nextAutoExpenses.push({
+          id,
+          title: `Auto shared cost - ${service.name} (${dayKey})`,
+          branchId: service.branchId,
+          amount: dailyAmount,
+          createdAt: `${dayKey}T00:00:00.000Z`,
+          createdByUid: authUser.uid,
+          createdByEmail: authUser.email || 'unknown',
+        });
+      }
+    });
+
+    if (nextAutoExpenses.length === 0) return;
+    setExpenses((prev) => [...nextAutoExpenses, ...prev]);
+  }, [authUser, expenses, services]);
+
   const logActivity = (action: string, details: string) => {
     setActivityLogs((prev) => [{
       id: crypto.randomUUID(),
