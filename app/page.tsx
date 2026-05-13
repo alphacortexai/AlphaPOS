@@ -460,37 +460,12 @@ export default function Page() {
   };
 
   const getMetrics = (period: 'day' | 'week' | 'month', offset: number = 0) => {
-    const now = new Date();
-    let start: Date, end: Date;
-
-    if (period === 'day') {
-      start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - offset);
-      end = new Date(now.getFullYear(), now.getMonth(), now.getDate() - offset + 1);
-    } else if (period === 'week') {
-      const currentWeekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay());
-      start = new Date(currentWeekStart.getTime() - offset * 7 * 24 * 60 * 60 * 1000);
-      end = new Date(start.getTime() + 7 * 24 * 60 * 60 * 1000);
-    } else {
-      start = new Date(now.getFullYear(), now.getMonth() - offset, 1);
-      end = new Date(now.getFullYear(), now.getMonth() - offset + 1, 1);
-    }
-
-    const periodSales = sales.filter(s => {
-      const d = new Date(s.createdAt);
-      return d >= start && d < end;
-    });
-    const periodExpenses = expenses.filter(e => {
-      const d = new Date(e.createdAt);
-      return d >= start && d < end;
-    });
-
-    const revenue = periodSales.reduce((a, s) => a + s.amount, 0);
-    const cost = periodSales.reduce((a, s) => a + s.cost, 0);
-    const expenseTotal = periodExpenses.reduce((a, e) => a + e.amount, 0);
-    const grossProfit = revenue - cost;
-    const netProfit = grossProfit - expenseTotal;
-
-    return { revenue, cost, expenseTotal, grossProfit, netProfit };
+    const periodMap: Record<'day' | 'week' | 'month', DashboardPeriod> = {
+      day: 'daily',
+      week: 'weekly',
+      month: 'monthly',
+    };
+    return getMetricsForPeriod(periodMap[period], offset);
   };
 
   const calculateChange = (current: number, previous: number) => {
