@@ -1247,7 +1247,7 @@ export default function Page() {
             </div>
 
             {/* KPI Cards Grid */}
-            <div className="grid">
+            <div className="grid dashboard-metrics-grid">
               <div className="card dashboard-card">
                 <h4>💵 Sales ({dashboardPeriod})</h4>
                 <div className="card-value">{formatUGX(dashboardMetrics.sales.value)}</div>
@@ -1287,11 +1287,11 @@ export default function Page() {
               </div>
             </div>
 
-            <div className="card insight-card" style={{ marginTop: '1rem' }}>
+            <div className="card insight-card">
               <div className="insight-header-row">
-                <h3 style={{ margin: 0 }}>📌 Insights</h3>
-                <div style={{ display: 'flex', alignItems: 'flex-end', gap: '0.75rem', flexWrap: 'wrap' }}>
-                  <div className="filter-group" style={{ marginBottom: 0 }}>
+                <h3 className="insight-title">📌 Insights</h3>
+                <div className="insight-actions">
+                  <div className="filter-group insight-filter-group">
                     <label>Sales Trend Window</label>
                     <select value={insightTrendRange} onChange={(e) => setInsightTrendRange(Number(e.target.value) as InsightTrendRange)}>
                       <option value={7}>Last 7 days</option>
@@ -1312,11 +1312,11 @@ export default function Page() {
                 <div>
                   <h4>1) Most sold product/service</h4>
                   {dashboardInsights.mostSold.length > 0 ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                    <div className="insight-list">
                       {dashboardInsights.mostSold.map((item, i) => (
-                        <p key={i} style={{ margin: 0, fontSize: '0.9rem' }}>
-                          <span style={{ color: 'var(--text-muted)', marginRight: '0.5rem' }}>#{i+1}</span>
-                          <strong>{item.name}</strong> <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>({item.type})</span> — {item.qty} units
+                        <p key={i} className="insight-list-item">
+                          <span className="insight-list-rank">#{i+1}</span>
+                          <strong>{item.name}</strong> <span className="insight-list-type">({item.type})</span> — {item.qty} units
                         </p>
                       ))}
                     </div>
@@ -1325,11 +1325,11 @@ export default function Page() {
                 <div>
                   <h4>2) Product/service with most revenue</h4>
                   {dashboardInsights.topRevenue.length > 0 ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                    <div className="insight-list">
                       {dashboardInsights.topRevenue.map((item, i) => (
-                        <p key={i} style={{ margin: 0, fontSize: '0.9rem' }}>
-                          <span style={{ color: 'var(--text-muted)', marginRight: '0.5rem' }}>#{i+1}</span>
-                          <strong>{item.name}</strong> <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>({item.type})</span> — {formatUGX(item.revenue)}
+                        <p key={i} className="insight-list-item">
+                          <span className="insight-list-rank">#{i+1}</span>
+                          <strong>{item.name}</strong> <span className="insight-list-type">({item.type})</span> — {formatUGX(item.revenue)}
                         </p>
                       ))}
                     </div>
@@ -1337,18 +1337,18 @@ export default function Page() {
                 </div>
               </div>
 
-              <div style={{ marginTop: '1.5rem', borderTop: '1px solid var(--border)', paddingTop: '1.5rem' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-                  <h4 style={{ margin: 0 }}>3) Sales trend (last {insightTrendRange} days)</h4>
-                  <div style={{ display: 'flex', gap: '1rem', fontSize: '0.75rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                      <div style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: 'var(--info)' }}></div>
+              <div className="insight-trend-section">
+                <div className="insight-trend-header">
+                  <h4 className="insight-trend-title">3) Sales trend (last {insightTrendRange} days)</h4>
+                  <div className="insight-legend">
+                    <div className="insight-legend-item">
+                      <div className="insight-legend-dot"></div>
                       <span>Daily Revenue</span>
                     </div>
                   </div>
                 </div>
-                <div className="insight-trend-chart" style={{ height: '180px', background: 'var(--bg-subtle)', borderRadius: 'var(--radius)', padding: '1rem', position: 'relative' }}>
-                  <svg viewBox="0 0 100 100" preserveAspectRatio="none" style={{ width: '100%', height: '100%', overflow: 'visible' }} aria-label={`Sales trend for last ${insightTrendRange} days`}>
+                <div className="insight-trend-chart">
+                  <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-label={`Sales trend for last ${insightTrendRange} days`}>
                     {/* Grid lines */}
                     {[0, 25, 50, 75, 100].map(y => (
                       <line key={y} x1="0" y1={y} x2="100" y2={y} stroke="var(--border)" strokeWidth="0.5" strokeDasharray="2,2" />
@@ -1361,9 +1361,9 @@ export default function Page() {
                     })}
                   </svg>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '0.75rem' }}>
-                  <p className="insight-trend-meta" style={{ margin: 0 }}>Peak day: <strong>{formatUGX(dashboardInsights.maxRevenue)}</strong></p>
-                  <p className="insight-trend-meta" style={{ margin: 0, color: 'var(--text-muted)' }}>Average: <strong>{formatUGX(dashboardInsights.trendDays.reduce((acc, d) => acc + d.revenue, 0) / insightTrendRange)}</strong></p>
+                <div className="insight-trend-footer">
+                  <p className="insight-trend-meta">Peak day: <strong>{formatUGX(dashboardInsights.maxRevenue)}</strong></p>
+                  <p className="insight-trend-meta insight-trend-meta-muted">Average: <strong>{formatUGX(dashboardInsights.trendDays.reduce((acc, d) => acc + d.revenue, 0) / insightTrendRange)}</strong></p>
                 </div>
               </div>
             </div>
@@ -2126,7 +2126,7 @@ export default function Page() {
                     <button className="primary" onClick={() => { setBranchForm({ name: '', location: '', id: '' }); setShowBranchFormModal(true); }}>+ Add Branch</button>
                   )}
                 </div>
-                <div className="grid">
+                <div className="grid dashboard-metrics-grid">
                   {branches.map((b) => (
                     <div key={b.id} className="card">
                       <h4 style={{ marginBottom: '1rem' }}>{b.name}</h4>
