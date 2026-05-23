@@ -1363,7 +1363,7 @@ export default function Page() {
                   </div>
                 </div>
                 <div className="insight-trend-chart">
-                  <svg viewBox="-14 0 122 116" preserveAspectRatio="none" aria-label={`Sales trend for last ${insightTrendRange} days`}>
+                  <svg viewBox="-14 0 122 116" preserveAspectRatio="xMidYMid meet" aria-label={`Sales trend for last ${insightTrendRange} days`}>
                     {/* Grid lines + y-axis labels */}
                     {dashboardInsights.yTicks.map((tick, idx) => (
                       <g key={idx}>
