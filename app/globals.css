@@ -611,14 +611,15 @@ body {
   gap: var(--space-xs);
   min-height: 100px;
   justify-content: space-between;
+  align-items: flex-end;
+  text-align: right;
   padding: var(--space-md);
 }
 
 .dashboard-card .badge {
-  position: absolute;
-  top: var(--space-lg);
-  right: var(--space-lg);
-  margin: 0;
+  margin-top: auto;
+  margin-right: 0;
+  margin-bottom: 0;
 }
 
 .dashboard-card h4 {
@@ -628,7 +629,7 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.05em;
   margin: 0;
-  padding-right: 3rem;
+  padding-right: 0;
   line-height: 1.2;
 }
 
