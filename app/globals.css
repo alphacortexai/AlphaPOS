@@ -611,14 +611,20 @@ body {
   gap: var(--space-xs);
   min-height: 100px;
   justify-content: space-between;
-  align-items: flex-end;
-  text-align: right;
+  align-items: flex-start;
+  text-align: left;
   padding: var(--space-md);
+}
+
+.dashboard-card-icon {
+  font-size: 1.5rem;
+  line-height: 1;
+  margin-bottom: 0.15rem;
 }
 
 .dashboard-card .badge {
   margin-top: auto;
-  margin-right: 0;
+  margin-left: 0;
   margin-bottom: 0;
 }
 
