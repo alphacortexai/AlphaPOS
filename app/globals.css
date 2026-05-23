@@ -82,8 +82,8 @@ body {
 
 /* Sidebar - Modern & Minimal */
 .sidebar { 
-  width: 240px;
-  background: var(--bg-subtle);
+  width: 264px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-subtle) 88%, #0f172a 12%) 0%, var(--bg-subtle) 100%);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
@@ -98,7 +98,10 @@ body {
 
 .sidebar-header {
   margin-bottom: var(--space-lg);
-  padding: 0 var(--space-sm);
+  padding: var(--space-sm);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) + 4px);
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
 }
 
 .sidebar-header h2 {
@@ -123,6 +126,10 @@ body {
 
 .sidebar-section {
   margin-bottom: var(--space-lg);
+  padding: var(--space-sm);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) + 2px);
+  background: color-mix(in srgb, var(--bg) 94%, transparent);
 }
 
 .role-label {
@@ -162,7 +169,7 @@ body {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: var(--space-xs);
+  gap: 6px;
 }
 
 .nav-button {
@@ -172,30 +179,51 @@ body {
   font-size: 0.875rem;
   font-weight: 500;
   color: var(--text-muted);
-  border-radius: var(--radius);
+  border-radius: 12px;
   border: none;
   background: transparent;
   text-align: left;
   cursor: pointer;
   transition: all 0.2s ease;
+  border: 1px solid transparent;
+  gap: var(--space-sm);
 }
 
 .nav-button:hover {
-  background: var(--bg-accent);
+  background: color-mix(in srgb, var(--bg-accent) 72%, var(--primary) 28%);
   color: var(--text);
+  border-color: color-mix(in srgb, var(--primary) 30%, var(--border) 70%);
 }
 
 .nav-button.active {
-  background: var(--primary);
+  background: linear-gradient(135deg, var(--primary) 0%, color-mix(in srgb, var(--primary) 78%, #7c3aed 22%) 100%);
   color: var(--primary-foreground);
   box-shadow: var(--shadow-premium);
   font-weight: 600;
+  border-color: color-mix(in srgb, var(--primary) 68%, white 32%);
+}
+
+.nav-group-label {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin: var(--space-md) var(--space-sm) var(--space-xs);
+  font-weight: 700;
+}
+
+.nav-icon {
+  width: 1.2rem;
+  text-align: center;
 }
 
 .sidebar-footer {
   margin-top: auto;
   padding-top: var(--space-lg);
   border-top: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+  border-radius: 12px;
+  padding: var(--space-md);
   display: flex;
   flex-direction: column;
   gap: var(--space-md);
