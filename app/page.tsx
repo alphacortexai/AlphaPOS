@@ -570,6 +570,8 @@ export default function Page() {
     });
 
     const maxRevenue = trendDays.reduce((max, day) => Math.max(max, day.revenue), 0);
+    const totalRevenue = trendDays.reduce((acc, day) => acc + day.revenue, 0);
+    const averageRevenue = trendDays.length > 0 ? totalRevenue / trendDays.length : 0;
     const points = trendDays
       .map((day, idx) => {
         const x = trendDays.length === 1 ? 0 : (idx / (trendDays.length - 1)) * 100;
@@ -578,7 +580,20 @@ export default function Page() {
       })
       .join(' ');
 
-    return { mostSold, topRevenue, trendDays, maxRevenue, points, trendMap };
+    const areaPoints = `0,100 ${points} 100,100`;
+    const yTicks = [1, 0.75, 0.5, 0.25, 0].map((factor) => {
+      const y = (1 - factor) * 100;
+      return { y, value: maxRevenue * factor };
+    });
+
+    const xTickIndexes = [0, Math.floor((trendDays.length - 1) / 2), trendDays.length - 1]
+      .filter((index, position, arr) => arr.indexOf(index) === position);
+    const xTicks = xTickIndexes.map((index) => {
+      const x = trendDays.length === 1 ? 0 : (index / (trendDays.length - 1)) * 100;
+      return { x, label: trendDays[index]?.date ?? '' };
+    });
+
+    return { mostSold, topRevenue, trendDays, maxRevenue, points, areaPoints, yTicks, xTicks, totalRevenue, averageRevenue, trendMap };
   }, [insightTrendRange, sales]);
 
   // Filtered products for inventory
@@ -1348,22 +1363,51 @@ export default function Page() {
                   </div>
                 </div>
                 <div className="insight-trend-chart">
-                  <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-label={`Sales trend for last ${insightTrendRange} days`}>
-                    {/* Grid lines */}
-                    {[0, 25, 50, 75, 100].map(y => (
-                      <line key={y} x1="0" y1={y} x2="100" y2={y} stroke="var(--border)" strokeWidth="0.5" strokeDasharray="2,2" />
+                  <svg viewBox="-14 0 122 116" preserveAspectRatio="none" aria-label={`Sales trend for last ${insightTrendRange} days`}>
+                    {/* Grid lines + y-axis labels */}
+                    {dashboardInsights.yTicks.map((tick, idx) => (
+                      <g key={idx}>
+                        <line x1="0" y1={tick.y} x2="100" y2={tick.y} stroke="var(--border)" strokeWidth="0.5" strokeDasharray="2,2" />
+                        <text x="-1" y={tick.y + 1.5} textAnchor="end" className="trend-axis-label">
+                          {formatUGX(tick.value)}
+                        </text>
+                      </g>
                     ))}
+                    <line x1="0" y1="100" x2="100" y2="100" stroke="var(--text-muted)" strokeWidth="0.6" />
+                    <line x1="0" y1="0" x2="0" y2="100" stroke="var(--text-muted)" strokeWidth="0.6" />
+
+                    <polygon points={dashboardInsights.areaPoints} fill="url(#trendFill)" />
+                    <defs>
+                      <linearGradient id="trendFill" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="var(--info)" stopOpacity="0.25" />
+                        <stop offset="100%" stopColor="var(--info)" stopOpacity="0.02" />
+                      </linearGradient>
+                    </defs>
                     <polyline points={dashboardInsights.points} fill="none" stroke="var(--info)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
                     {/* Data points */}
                     {dashboardInsights.points.split(' ').map((p, i) => {
                       const [x, y] = p.split(',');
-                      return <circle key={i} cx={x} cy={y} r="1.5" fill="var(--bg)" stroke="var(--info)" strokeWidth="1" />;
+                      const day = dashboardInsights.trendDays[i];
+                      return (
+                        <circle key={i} cx={x} cy={y} r="1.5" fill="var(--bg)" stroke="var(--info)" strokeWidth="1">
+                          <title>{`${day?.date || ''}: ${formatUGX(day?.revenue || 0)}`}</title>
+                        </circle>
+                      );
                     })}
+
+                    {dashboardInsights.xTicks.map((tick, idx) => (
+                      <text key={idx} x={tick.x} y="108.5" textAnchor={idx === 0 ? 'start' : idx === dashboardInsights.xTicks.length - 1 ? 'end' : 'middle'} className="trend-axis-label">
+                        {tick.label}
+                      </text>
+                    ))}
+                    <text x="50" y="114" textAnchor="middle" className="trend-axis-title">Date</text>
+                    <text x="-12" y="50" textAnchor="middle" transform="rotate(-90 -12 50)" className="trend-axis-title">Revenue (UGX)</text>
                   </svg>
                 </div>
                 <div className="insight-trend-footer">
                   <p className="insight-trend-meta">Peak day: <strong>{formatUGX(dashboardInsights.maxRevenue)}</strong></p>
-                  <p className="insight-trend-meta insight-trend-meta-muted">Average: <strong>{formatUGX(dashboardInsights.trendDays.reduce((acc, d) => acc + d.revenue, 0) / insightTrendRange)}</strong></p>
+                  <p className="insight-trend-meta">Total window revenue: <strong>{formatUGX(dashboardInsights.totalRevenue)}</strong></p>
+                  <p className="insight-trend-meta insight-trend-meta-muted">Average/day: <strong>{formatUGX(dashboardInsights.averageRevenue)}</strong></p>
                 </div>
               </div>
             </div>
