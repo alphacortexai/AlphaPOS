@@ -1275,7 +1275,8 @@ button.delete-btn:hover {
 }
 
 .dashboard-metrics-grid .dashboard-card {
-  grid-column: span 4;
+  grid-column: span 2;
+  aspect-ratio: 1 / 1;
   min-height: 132px;
   border: 1px solid color-mix(in srgb, var(--border) 72%, #dbeafe 28%);
   background: linear-gradient(160deg, #ffffff 0%, #fbfdff 100%);
@@ -1350,7 +1351,7 @@ button.delete-btn:hover {
 }
 
 @media (max-width: 640px) {
-  .dashboard-metrics-grid .dashboard-card { grid-column: span 12; }
+  .dashboard-metrics-grid .dashboard-card { grid-column: span 6; }
   .insight-trend-header,
   .insight-trend-footer { flex-direction: column; align-items: flex-start; gap: 0.65rem; }
 }
