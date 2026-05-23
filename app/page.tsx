@@ -586,11 +586,9 @@ export default function Page() {
       return { y, value: maxRevenue * factor };
     });
 
-    const xTickIndexes = [0, Math.floor((trendDays.length - 1) / 2), trendDays.length - 1]
-      .filter((index, position, arr) => arr.indexOf(index) === position);
-    const xTicks = xTickIndexes.map((index) => {
+    const xTicks = trendDays.map((day, index) => {
       const x = trendDays.length === 1 ? 0 : (index / (trendDays.length - 1)) * 100;
-      return { x, label: trendDays[index]?.date ?? '' };
+      return { x, label: day.date.slice(5) };
     });
 
     return { mostSold, topRevenue, trendDays, maxRevenue, points, areaPoints, yTicks, xTicks, totalRevenue, averageRevenue, trendMap };
