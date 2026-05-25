@@ -124,6 +124,7 @@ export default function Page() {
   const [editingExpenseGroupId, setEditingExpenseGroupId] = useState('');
   const [editingExpenseGroupName, setEditingExpenseGroupName] = useState('');
   const [expenseChartRange, setExpenseChartRange] = useState<ExpenseChartRange>('month');
+  const [showExpenseGroupsDetails, setShowExpenseGroupsDetails] = useState(false);
   const [userForm, setUserForm] = useState({ id: '', name: '', email: '', role: 'cashier' as Role, branchId: '' });
   const [shopNameForm, setShopNameForm] = useState('');
   const [settingsTab, setSettingsTab] = useState<'shop' | 'branches'>('shop');
@@ -2017,32 +2018,43 @@ export default function Page() {
             
 
             <div className="card" style={{ marginBottom: '1rem' }}>
-              <h4 style={{ marginTop: 0 }}>Expense Groups</h4>
-              <form onSubmit={createExpenseGroup} style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
-                <input value={expenseGroupForm.name} onChange={(e) => setExpenseGroupForm({ name: e.target.value })} placeholder="New expense group name" style={{ flex: '1', minWidth: '220px' }} required />
-                <button type="submit" className="primary">Create Group</button>
-              </form>
-              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
-                <select value={transferExpenseGroupId} onChange={(e) => setTransferExpenseGroupId(e.target.value)} style={{ minWidth: '240px' }}>
-                  <option value="">Transfer ungrouped expenses to...</option>
-                  {expenseGroups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
-                </select>
-                <button type="button" className="edit-btn" onClick={transferUngroupedExpenses} disabled={!transferExpenseGroupId}>Transfer Existing Ungrouped</button>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
+                <h4 style={{ margin: 0 }}>Expense Groups</h4>
+                <button type="button" className="edit-btn" onClick={() => setShowExpenseGroupsDetails((prev) => !prev)}>
+                  {showExpenseGroupsDetails ? 'Hide details ▲' : 'Show details ▼'}
+                </button>
               </div>
+              {showExpenseGroupsDetails && (
+                <>
+                  <form onSubmit={createExpenseGroup} style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+                    <input value={expenseGroupForm.name} onChange={(e) => setExpenseGroupForm({ name: e.target.value })} placeholder="New expense group name" style={{ flex: '1', minWidth: '220px' }} required />
+                    <button type="submit" className="primary">Create Group</button>
+                  </form>
+                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+                    <select value={transferExpenseGroupId} onChange={(e) => setTransferExpenseGroupId(e.target.value)} style={{ minWidth: '240px' }}>
+                      <option value="">Transfer ungrouped expenses to...</option>
+                      {expenseGroups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
+                    </select>
+                    <button type="button" className="edit-btn" onClick={transferUngroupedExpenses} disabled={!transferExpenseGroupId}>Transfer Existing Ungrouped</button>
+                  </div>
+                </>
+              )}
               {expenseGroups.length > 0 && (
-                <div style={{ display: 'grid', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                <div style={{ display: 'flex', gap: '0.6rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
                   {expenseGroups.map((group) => (
-                    <div key={group.id} style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <div key={group.id} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', background: 'var(--surface-strong)', border: '1px solid var(--border)', borderRadius: '999px', padding: '0.35rem 0.7rem' }}>
                       {editingExpenseGroupId === group.id ? (
                         <>
-                          <input value={editingExpenseGroupName} onChange={(e) => setEditingExpenseGroupName(e.target.value)} />
+                          <input value={editingExpenseGroupName} onChange={(e) => setEditingExpenseGroupName(e.target.value)} style={{ minWidth: '140px' }} />
                           <button type="button" className="primary" onClick={() => saveExpenseGroupEdit(group.id)}>Save</button>
                           <button type="button" className="edit-btn" onClick={() => { setEditingExpenseGroupId(''); setEditingExpenseGroupName(''); }}>Cancel</button>
                         </>
                       ) : (
                         <>
-                          <span style={{ fontWeight: 600 }}>{group.name}</span>
-                          <button type="button" className="edit-btn" onClick={() => { setEditingExpenseGroupId(group.id); setEditingExpenseGroupName(group.name); }}>Edit</button>
+                          <span className="badge badge-info" style={{ fontWeight: 600 }}>{group.name}</span>
+                          <button type="button" className="edit-btn" title={`Edit ${group.name}`} aria-label={`Edit ${group.name}`} onClick={() => { setEditingExpenseGroupId(group.id); setEditingExpenseGroupName(group.name); }} style={{ width: 26, height: 26, borderRadius: '50%', padding: 0, lineHeight: 1 }}>
+                            +
+                          </button>
                         </>
                       )}
                     </div>
