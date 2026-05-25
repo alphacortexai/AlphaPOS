@@ -35,7 +35,20 @@ type ActivityLog = {
   userEmail: string;
   createdAt: string;
 };
-type CartItem = { itemId: string; itemType: 'product' | 'service'; itemName: string; qty: number; unitPrice: number; unitCost: number; branchId: string; maxQty?: number };
+type CartDiscountMode = 'none' | 'price' | 'percent';
+type CartItem = {
+  itemId: string;
+  itemType: 'product' | 'service';
+  itemName: string;
+  qty: number;
+  unitPrice: number;
+  unitCost: number;
+  branchId: string;
+  maxQty?: number;
+  discountMode?: CartDiscountMode;
+  discountedUnitPrice?: number;
+  discountPercent?: number;
+};
 
 const periodStart = (period: 'day' | 'week' | 'month' | 'year', date: Date = new Date()) => {
   const d = new Date(date);
@@ -137,7 +150,17 @@ export default function Page() {
       .filter((service) => branchIdsWithStockProducts.has(service.branchId) && (!query || service.name.toLowerCase().includes(query)))
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [products, quickSaleSearchQuery, services]);
-  const cartTotal = useMemo(() => cart.reduce((sum, item) => sum + (item.unitPrice * item.qty), 0), [cart]);
+  const getEffectiveUnitPrice = useCallback((item: CartItem) => {
+    if (item.discountMode === 'price' && typeof item.discountedUnitPrice === 'number' && Number.isFinite(item.discountedUnitPrice)) {
+      return Math.max(0, Math.min(item.unitPrice, item.discountedUnitPrice));
+    }
+    if (item.discountMode === 'percent' && typeof item.discountPercent === 'number' && Number.isFinite(item.discountPercent)) {
+      const safePercent = Math.max(0, Math.min(100, item.discountPercent));
+      return item.unitPrice * (1 - safePercent / 100);
+    }
+    return item.unitPrice;
+  }, []);
+  const cartTotal = useMemo(() => cart.reduce((sum, item) => sum + (getEffectiveUnitPrice(item) * item.qty), 0), [cart, getEffectiveUnitPrice]);
   const cartCost = useMemo(() => cart.reduce((sum, item) => sum + (item.unitCost * item.qty), 0), [cart]);
   const cartProfit = useMemo(() => cartTotal - cartCost, [cartTotal, cartCost]);
   const db = firebaseApp ? getFirestore(firebaseApp) : null;
@@ -869,6 +892,29 @@ export default function Page() {
     showNotification('Item removed from cart', 'info', 1500);
   };
 
+  const updateCartItemDiscountMode = (itemId: string, itemType: 'product' | 'service', discountMode: CartDiscountMode) => {
+    setCart((prev) => prev.map((item) => {
+      if (item.itemId !== itemId || item.itemType !== itemType) return item;
+      if (discountMode === 'price') return { ...item, discountMode, discountedUnitPrice: item.unitPrice, discountPercent: undefined };
+      if (discountMode === 'percent') return { ...item, discountMode, discountPercent: 0, discountedUnitPrice: undefined };
+      return { ...item, discountMode: 'none', discountedUnitPrice: undefined, discountPercent: undefined };
+    }));
+  };
+
+  const updateCartItemDiscountValue = (itemId: string, itemType: 'product' | 'service', rawValue: number) => {
+    setCart((prev) => prev.map((item) => {
+      if (item.itemId !== itemId || item.itemType !== itemType) return item;
+      if (!Number.isFinite(rawValue)) return item;
+      if (item.discountMode === 'price') {
+        return { ...item, discountedUnitPrice: Math.max(0, Math.min(item.unitPrice, rawValue)) };
+      }
+      if (item.discountMode === 'percent') {
+        return { ...item, discountPercent: Math.max(0, Math.min(100, rawValue)) };
+      }
+      return item;
+    }));
+  };
+
   const completeCartSale = () => {
     if (cart.length === 0) {
       showNotification('Cart is empty', 'error');
@@ -880,7 +926,7 @@ export default function Page() {
       itemName: item.itemName,
       branchId: item.branchId,
       qty: item.qty,
-      amount: item.unitPrice * item.qty,
+      amount: getEffectiveUnitPrice(item) * item.qty,
       cost: item.unitCost * item.qty,
       ...currentAuditStamp(),
     }));
@@ -1588,7 +1634,44 @@ export default function Page() {
                               <button className="edit-btn" onClick={() => updateCartItemQty(item.itemId, item.itemType, item.qty - 1)}>−</button>
                               <input type="number" value={item.qty} onChange={(e) => updateCartItemQty(item.itemId, item.itemType, Number(e.target.value))} style={{ width: '50px', textAlign: 'center', padding: '0.25rem' }} />
                               <button className="edit-btn" onClick={() => updateCartItemQty(item.itemId, item.itemType, item.qty + 1)}>+</button>
-                              <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>{formatUGX(item.unitPrice * item.qty)}</span>
+                              <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>{formatUGX(getEffectiveUnitPrice(item) * item.qty)}</span>
+                            </div>
+                            <div style={{ display: 'grid', gap: '0.4rem', gridTemplateColumns: '130px 1fr', alignItems: 'center' }}>
+                              <select
+                                value={item.discountMode || 'none'}
+                                onChange={(e) => updateCartItemDiscountMode(item.itemId, item.itemType, e.target.value as CartDiscountMode)}
+                              >
+                                <option value="none">No discount</option>
+                                <option value="price">Discounted price</option>
+                                <option value="percent">Discount %</option>
+                              </select>
+                              {item.discountMode === 'price' && (
+                                <input
+                                  type="number"
+                                  min={0}
+                                  max={item.unitPrice}
+                                  step="0.01"
+                                  value={item.discountedUnitPrice ?? item.unitPrice}
+                                  onChange={(e) => updateCartItemDiscountValue(item.itemId, item.itemType, Number(e.target.value))}
+                                  placeholder="Enter discounted unit price"
+                                />
+                              )}
+                              {item.discountMode === 'percent' && (
+                                <input
+                                  type="number"
+                                  min={0}
+                                  max={100}
+                                  step="0.01"
+                                  value={item.discountPercent ?? 0}
+                                  onChange={(e) => updateCartItemDiscountValue(item.itemId, item.itemType, Number(e.target.value))}
+                                  placeholder="Enter discount percent"
+                                />
+                              )}
+                              {(item.discountMode === 'none' || !item.discountMode) && (
+                                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                  Base unit price: {formatUGX(item.unitPrice)}
+                                </span>
+                              )}
                             </div>
                           </div>
                         ))}
