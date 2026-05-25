@@ -24,7 +24,8 @@ type Product = { id: string; name: string; branchId: string; stock: number; purc
 type ServiceType = 'direct_cost' | 'shared_cost';
 type Service = { id: string; name: string; branchId: string; salePrice: number; serviceType: ServiceType; directCost: number; monthlySharedCost: number } & AuditStamp;
 type Sale = { id: string; type: 'product' | 'service'; itemName: string; branchId: string; qty: number; amount: number; cost: number } & AuditStamp;
-type Expense = { id: string; title: string; branchId: string; amount: number } & AuditStamp;
+type ExpenseGroup = { id: string; name: string } & AuditStamp;
+type Expense = { id: string; title: string; branchId: string; amount: number; expenseGroupId?: string } & AuditStamp;
 type StaffUser = { id: string; name: string; email: string; role: Role; branchId: string } & AuditStamp;
 type ShopMembership = { ownerUid: string; shopName: string; role: Role };
 type ActivityLog = {
@@ -77,6 +78,7 @@ export default function Page() {
   const [services, setServices] = useState<Service[]>([]);
   const [sales, setSales] = useState<Sale[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [expenseGroups, setExpenseGroups] = useState<ExpenseGroup[]>([]);
   const [users, setUsers] = useState<StaffUser[]>([]);
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
 
@@ -115,7 +117,9 @@ export default function Page() {
   const [saleForm, setSaleForm] = useState({ productId: '', qty: 1 });
   const [cart, setCart] = useState<CartItem[]>([]);
   const [selectedBranchForSale, setSelectedBranchForSale] = useState('');
-  const [expenseForm, setExpenseForm] = useState({ id: '', title: '', branchId: '', amount: 0 });
+  const [expenseForm, setExpenseForm] = useState({ id: '', title: '', branchId: '', amount: 0, expenseGroupId: '' });
+  const [expenseGroupForm, setExpenseGroupForm] = useState({ name: '' });
+  const [transferExpenseGroupId, setTransferExpenseGroupId] = useState('');
   const [userForm, setUserForm] = useState({ id: '', name: '', email: '', role: 'cashier' as Role, branchId: '' });
   const [shopNameForm, setShopNameForm] = useState('');
   const [settingsTab, setSettingsTab] = useState<'shop' | 'branches'>('shop');
@@ -243,6 +247,7 @@ export default function Page() {
         setServices(Array.isArray(data.services) ? data.services : []);
         setSales(Array.isArray(data.sales) ? data.sales : []);
         setExpenses(Array.isArray(data.expenses) ? data.expenses : []);
+        setExpenseGroups(Array.isArray(data.expenseGroups) ? data.expenseGroups : []);
         setUsers(Array.isArray(data.users) ? data.users : []);
         setRole(selectedShop?.role || (data.role as Role) || 'shop_owner');
         setActivityLogs(Array.isArray(data.activityLogs) ? data.activityLogs : []);
@@ -354,7 +359,7 @@ export default function Page() {
         const userDataRef = doc(db, 'users', activeShopOwnerUid, 'pos', 'data');
         await setDoc(
           userDataRef,
-          { role, branches, products, services, sales, expenses, users, activityLogs, updatedAt: serverTimestamp() },
+          { role, branches, products, services, sales, expenses, expenseGroups, users, activityLogs, updatedAt: serverTimestamp() },
           { merge: true }
         );
       } catch (error) {
@@ -362,7 +367,7 @@ export default function Page() {
       }
     };
     void saveUserData();
-  }, [activeShopOwnerUid, authUser, db, role, branches, products, services, sales, expenses, users, activityLogs]);
+  }, [activeShopOwnerUid, authUser, db, role, branches, products, services, sales, expenses, expenseGroups, users, activityLogs]);
 
   const handleLogin = async () => {
     if (!firebaseApp) return;
@@ -393,13 +398,14 @@ export default function Page() {
     setServices([]);
     setSales([]);
     setExpenses([]);
+    setExpenseGroups([]);
     setUsers([]);
     setActivityLogs([]);
     setBranchForm({ name: '', location: '', id: '' });
     setProductForm({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0 });
     setServiceForm({ name: '', branchId: '', amount: 0, serviceType: 'direct_cost', directCost: 0, monthlySharedCost: 0 });
     setSaleForm({ productId: '', qty: 1 });
-    setExpenseForm({ id: '', title: '', branchId: '', amount: 0 });
+    setExpenseForm({ id: '', title: '', branchId: '', amount: 0, expenseGroupId: '' });
     setUserForm({ id: '', name: '', email: '', role: 'cashier', branchId: '' });
   };
 
@@ -760,6 +766,31 @@ export default function Page() {
     showNotification(`${service.name} sold successfully`, 'success');
   };
 
+
+  const expenseGroupMap = useMemo(() => Object.fromEntries(expenseGroups.map((g) => [g.id, g.name])), [expenseGroups]);
+
+  const createExpenseGroup = (e: React.FormEvent) => {
+    e.preventDefault();
+    const name = expenseGroupForm.name.trim();
+    if (!name) return;
+    const exists = expenseGroups.some((group) => group.name.toLowerCase() === name.toLowerCase());
+    if (exists) {
+      showNotification('Expense group already exists', 'error');
+      return;
+    }
+    const newGroup: ExpenseGroup = { id: crypto.randomUUID(), name, ...currentAuditStamp() };
+    setExpenseGroups((prev) => [newGroup, ...prev]);
+    setExpenseGroupForm({ name: '' });
+    setStatus(`Expense group "${name}" created.`);
+  };
+
+  const transferUngroupedExpenses = () => {
+    if (!transferExpenseGroupId) return;
+    setExpenses((prev) => prev.map((expense) => (!expense.expenseGroupId ? { ...expense, expenseGroupId: transferExpenseGroupId, ...updatedAuditStamp() } : expense)));
+    setStatus('Ungrouped expenses transferred successfully.');
+    setTransferExpenseGroupId('');
+  };
+
   const saveExpense = (e: React.FormEvent) => {
     e.preventDefault();
     if (!expenseForm.title || !expenseForm.branchId || expenseForm.amount <= 0) return;
@@ -772,7 +803,7 @@ export default function Page() {
       setStatus('Expense recorded.');
       logActivity('add_expense', `Added expense "${expenseForm.title}"`);
     }
-    setExpenseForm({ id: '', title: '', branchId: '', amount: 0 });
+    setExpenseForm({ id: '', title: '', branchId: '', amount: 0, expenseGroupId: '' });
     setShowExpenseModal(false);
   };
 
@@ -1100,7 +1131,7 @@ export default function Page() {
       setStatus('Only the shop owner or admin can edit expenses.');
       return;
     }
-    setExpenseForm(expense);
+    setExpenseForm({ id: expense.id, title: expense.title, branchId: expense.branchId, amount: expense.amount, expenseGroupId: expense.expenseGroupId || '' });
     setShowExpenseModal(true);
   };
 
@@ -1517,6 +1548,7 @@ export default function Page() {
             </div>
 
             {/* Inventory Table */}
+
             <div className="table-wrap">
               <table className="data-table">
                 <thead>
@@ -1740,6 +1772,7 @@ export default function Page() {
                 <button className="primary" type="submit">Save Service</button>
               </form>
             </div>
+
             <div className="table-wrap">
               <table className="data-table">
                 <thead>
@@ -1839,7 +1872,8 @@ export default function Page() {
                 <button className="edit-btn" onClick={() => { const today = new Date().toISOString().split('T')[0]; setSalesDateFilter(today); setSalesRangeStart(today); setSalesRangeEnd(today); setSalesHistoryViewMode('day'); }}>Today</button>
               </div>
 
-              <div className="table-wrap">
+  
+            <div className="table-wrap">
                 <table className="data-table">
                   <thead>
                     <tr>
@@ -1896,7 +1930,7 @@ export default function Page() {
           <section>
             <div className="page-header">
               <h2>💰 Expense Tracking</h2>
-              <button className="primary" onClick={() => { setExpenseForm({ id: '', title: '', branchId: branches[0]?.id || '', amount: 0 }); setShowExpenseModal(true); }}>
+              <button className="primary" onClick={() => { setExpenseForm({ id: '', title: '', branchId: branches[0]?.id || '', amount: 0, expenseGroupId: '' }); setShowExpenseModal(true); }}>
                 + Add Expense
               </button>
             </div>
@@ -1926,6 +1960,25 @@ export default function Page() {
               </div>
             )}
             
+
+            <div className="card" style={{ marginBottom: '1rem' }}>
+              <h4 style={{ marginTop: 0 }}>Expense Groups</h4>
+              <form onSubmit={createExpenseGroup} style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+                <input value={expenseGroupForm.name} onChange={(e) => setExpenseGroupForm({ name: e.target.value })} placeholder="New expense group name" style={{ flex: '1', minWidth: '220px' }} required />
+                <button type="submit" className="primary">Create Group</button>
+              </form>
+              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+                <select value={transferExpenseGroupId} onChange={(e) => setTransferExpenseGroupId(e.target.value)} style={{ minWidth: '240px' }}>
+                  <option value="">Transfer ungrouped expenses to...</option>
+                  {expenseGroups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
+                </select>
+                <button type="button" className="edit-btn" onClick={transferUngroupedExpenses} disabled={!transferExpenseGroupId}>Transfer Existing Ungrouped</button>
+              </div>
+              <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                {expenseGroups.length > 0 ? `${expenseGroups.length} group(s) created.` : 'No expense groups yet. Create one to organize expenses.'}
+              </div>
+            </div>
+
             <div className="table-wrap">
               <table className="data-table">
                 <thead>
@@ -1934,6 +1987,7 @@ export default function Page() {
                     <th>Expense Title</th>
                     <th>Branch</th>
                     <th>Amount</th>
+                    <th>Expense Group</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
@@ -1945,6 +1999,7 @@ export default function Page() {
                         <td style={{ fontWeight: 600 }}>{e.title}</td>
                         <td>{branchMap[e.branchId]}</td>
                         <td style={{ color: 'var(--danger)', fontWeight: 600 }}>{formatUGX(e.amount)}</td>
+                        <td>{e.expenseGroupId ? expenseGroupMap[e.expenseGroupId] || 'Unknown group' : 'Ungrouped'}</td>
                         <td>
                           {canManageSalesAndExpenses ? (
                             <>
@@ -1959,7 +2014,7 @@ export default function Page() {
                     ))
                   ) : (
                     <tr>
-                      <td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>No expenses recorded yet</td>
+                      <td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>No expenses recorded yet</td>
                     </tr>
                   )}
                 </tbody>
@@ -2011,7 +2066,8 @@ export default function Page() {
                   </div>
                 )}
                 
-                <div className="table-wrap">
+    
+            <div className="table-wrap">
                   <table className="data-table">
                     <thead>
                       <tr>
@@ -2150,7 +2206,8 @@ export default function Page() {
 
             <div style={{ marginTop: '3rem' }}>
               <h3 style={{ marginBottom: '1.5rem' }}>All Sales Transactions</h3>
-              <div className="table-wrap">
+  
+            <div className="table-wrap">
                 <table className="data-table">
                   <thead>
                     <tr>
@@ -2198,6 +2255,7 @@ export default function Page() {
           <section className="card activity-log-card" style={{ marginTop: '1rem' }}>
             <h2 style={{ marginTop: 0 }}>All User Activities</h2>
             <p style={{ color: 'var(--text-muted)' }}>Sale, add inventory, add stock, delete, edit, and add user actions for all roles.</p>
+
             <div className="table-wrap">
               <table className="data-table">
                 <thead>
@@ -2432,6 +2490,13 @@ export default function Page() {
                       <select value={expenseForm.branchId} onChange={(e) => setExpenseForm({ ...expenseForm, branchId: e.target.value })} required>
                         <option value="">Select Branch</option>
                         {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Expense Group</span>
+                      <select value={expenseForm.expenseGroupId} onChange={(e) => setExpenseForm({ ...expenseForm, expenseGroupId: e.target.value })}>
+                        <option value="">No group (Ungrouped)</option>
+                        {expenseGroups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
                       </select>
                     </label>
                     <label className="field">
