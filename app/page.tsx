@@ -9,6 +9,7 @@ type Role = 'shop_owner' | 'admin' | 'manager' | 'cashier' | 'stock';
 type View = 'dashboard' | 'sales_history' | 'products' | 'sales' | 'services' | 'expenses' | 'users' | 'branches' | 'reports' | 'settings' | 'profile' | 'activity_logs';
 type DashboardPeriod = 'daily' | 'weekly' | 'monthly' | 'yearly';
 type InsightTrendRange = 7 | 14 | 30 | 60 | 100;
+type ExpenseChartRange = 'day' | '7days' | '14days' | 'month' | '3months' | '6months' | '1year';
 
 type Branch = { id: string; name: string; location: string; createdAt?: string };
 type AuditStamp = {
@@ -22,7 +23,7 @@ type AuditStamp = {
 
 type Product = { id: string; name: string; branchId: string; stock: number; purchasePrice: number; salePrice: number } & AuditStamp;
 type ServiceType = 'direct_cost' | 'shared_cost';
-type Service = { id: string; name: string; branchId: string; salePrice: number; serviceType: ServiceType; directCost: number; monthlySharedCost: number } & AuditStamp;
+type Service = { id: string; name: string; branchId: string; salePrice: number; serviceType: ServiceType; directCost: number; monthlySharedCost: number; expenseGroupId?: string } & AuditStamp;
 type Sale = { id: string; type: 'product' | 'service'; itemName: string; branchId: string; qty: number; amount: number; cost: number } & AuditStamp;
 type ExpenseGroup = { id: string; name: string } & AuditStamp;
 type Expense = { id: string; title: string; branchId: string; amount: number; expenseGroupId?: string } & AuditStamp;
@@ -113,13 +114,16 @@ export default function Page() {
 
   const [branchForm, setBranchForm] = useState({ name: '', location: '', id: '' });
   const [productForm, setProductForm] = useState({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0 });
-  const [serviceForm, setServiceForm] = useState({ name: '', branchId: '', amount: 0, serviceType: 'direct_cost' as ServiceType, directCost: 0, monthlySharedCost: 0 });
+  const [serviceForm, setServiceForm] = useState({ name: '', branchId: '', amount: 0, serviceType: 'direct_cost' as ServiceType, directCost: 0, monthlySharedCost: 0, expenseGroupId: '' });
   const [saleForm, setSaleForm] = useState({ productId: '', qty: 1 });
   const [cart, setCart] = useState<CartItem[]>([]);
   const [selectedBranchForSale, setSelectedBranchForSale] = useState('');
   const [expenseForm, setExpenseForm] = useState({ id: '', title: '', branchId: '', amount: 0, expenseGroupId: '' });
   const [expenseGroupForm, setExpenseGroupForm] = useState({ name: '' });
   const [transferExpenseGroupId, setTransferExpenseGroupId] = useState('');
+  const [editingExpenseGroupId, setEditingExpenseGroupId] = useState('');
+  const [editingExpenseGroupName, setEditingExpenseGroupName] = useState('');
+  const [expenseChartRange, setExpenseChartRange] = useState<ExpenseChartRange>('month');
   const [userForm, setUserForm] = useState({ id: '', name: '', email: '', role: 'cashier' as Role, branchId: '' });
   const [shopNameForm, setShopNameForm] = useState('');
   const [settingsTab, setSettingsTab] = useState<'shop' | 'branches'>('shop');
@@ -403,7 +407,7 @@ export default function Page() {
     setActivityLogs([]);
     setBranchForm({ name: '', location: '', id: '' });
     setProductForm({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0 });
-    setServiceForm({ name: '', branchId: '', amount: 0, serviceType: 'direct_cost', directCost: 0, monthlySharedCost: 0 });
+    setServiceForm({ name: '', branchId: '', amount: 0, serviceType: 'direct_cost', directCost: 0, monthlySharedCost: 0, expenseGroupId: '' });
     setSaleForm({ productId: '', qty: 1 });
     setExpenseForm({ id: '', title: '', branchId: '', amount: 0, expenseGroupId: '' });
     setUserForm({ id: '', name: '', email: '', role: 'cashier', branchId: '' });
@@ -670,6 +674,7 @@ export default function Page() {
           title: `Shared Cost (${todayKey}) - ${service.name}`,
           branchId: service.branchId,
           amount: service.monthlySharedCost / 30,
+          expenseGroupId: service.expenseGroupId || undefined,
           ...currentAuditStamp(),
         });
       });
@@ -724,6 +729,7 @@ export default function Page() {
                 serviceType: serviceForm.serviceType,
                 directCost: serviceForm.serviceType === 'direct_cost' ? serviceForm.directCost : 0,
                 monthlySharedCost: serviceForm.serviceType === 'shared_cost' ? serviceForm.monthlySharedCost : 0,
+                expenseGroupId: serviceForm.serviceType === 'shared_cost' ? (serviceForm.expenseGroupId || undefined) : undefined,
                 ...updatedAuditStamp()
               }
             : service
@@ -737,12 +743,13 @@ export default function Page() {
         serviceType: serviceForm.serviceType,
         directCost: serviceForm.serviceType === 'direct_cost' ? serviceForm.directCost : 0,
         monthlySharedCost: serviceForm.serviceType === 'shared_cost' ? serviceForm.monthlySharedCost : 0,
+        expenseGroupId: serviceForm.serviceType === 'shared_cost' ? (serviceForm.expenseGroupId || undefined) : undefined,
         ...currentAuditStamp()
       }];
     });
 
     showNotification('Service saved successfully!', 'success');
-    setServiceForm({ name: '', branchId: '', amount: 0, serviceType: 'direct_cost', directCost: 0, monthlySharedCost: 0 });
+    setServiceForm({ name: '', branchId: '', amount: 0, serviceType: 'direct_cost', directCost: 0, monthlySharedCost: 0, expenseGroupId: '' });
   };
 
   const sellService = (serviceId: string) => {
@@ -790,6 +797,44 @@ export default function Page() {
     setStatus('Ungrouped expenses transferred successfully.');
     setTransferExpenseGroupId('');
   };
+
+  const saveExpenseGroupEdit = (groupId: string) => {
+    const trimmed = editingExpenseGroupName.trim();
+    if (!trimmed) return;
+    const duplicate = expenseGroups.some((group) => group.id !== groupId && group.name.toLowerCase() === trimmed.toLowerCase());
+    if (duplicate) {
+      showNotification('Expense group name already exists', 'error');
+      return;
+    }
+    setExpenseGroups((prev) => prev.map((group) => group.id === groupId ? { ...group, name: trimmed, ...updatedAuditStamp() } : group));
+    setEditingExpenseGroupId('');
+    setEditingExpenseGroupName('');
+    showNotification('Expense group updated', 'success');
+  };
+
+  const expenseChartData = useMemo(() => {
+    const now = new Date();
+    const rangeStart = new Date(now);
+    if (expenseChartRange === 'day') rangeStart.setDate(now.getDate() - 1);
+    if (expenseChartRange === '7days') rangeStart.setDate(now.getDate() - 7);
+    if (expenseChartRange === '14days') rangeStart.setDate(now.getDate() - 14);
+    if (expenseChartRange === 'month') rangeStart.setMonth(now.getMonth() - 1);
+    if (expenseChartRange === '3months') rangeStart.setMonth(now.getMonth() - 3);
+    if (expenseChartRange === '6months') rangeStart.setMonth(now.getMonth() - 6);
+    if (expenseChartRange === '1year') rangeStart.setFullYear(now.getFullYear() - 1);
+    const filtered = expenses.filter((expense) => new Date(expense.createdAt) >= rangeStart);
+    const grouped = new Map<string, number>();
+    filtered.forEach((expense) => {
+      const groupName = expense.expenseGroupId ? (expenseGroupMap[expense.expenseGroupId] || 'Unknown group') : 'Ungrouped';
+      grouped.set(groupName, (grouped.get(groupName) || 0) + expense.amount);
+    });
+    const total = [...grouped.values()].reduce((sum, value) => sum + value, 0);
+    const colors = ['#ef4444', '#f59e0b', '#3b82f6', '#10b981', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316'];
+    const segments = [...grouped.entries()].map(([name, amount], idx) => ({
+      name, amount, percentage: total > 0 ? (amount / total) * 100 : 0, color: colors[idx % colors.length]
+    })).sort((a, b) => b.amount - a.amount);
+    return { total, segments };
+  }, [expenseChartRange, expenseGroupMap, expenses]);
 
   const saveExpense = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1764,10 +1809,19 @@ export default function Page() {
                     <input type="number" min={0} value={serviceForm.directCost} onChange={(e) => setServiceForm((prev) => ({ ...prev, directCost: Number(e.target.value) }))} />
                   </div>
                 ) : (
-                  <div className="field">
-                    <label>Monthly Shared Cost</label>
-                    <input type="number" min={0} value={serviceForm.monthlySharedCost} onChange={(e) => setServiceForm((prev) => ({ ...prev, monthlySharedCost: Number(e.target.value) }))} />
-                  </div>
+                  <>
+                    <div className="field">
+                      <label>Monthly Shared Cost</label>
+                      <input type="number" min={0} value={serviceForm.monthlySharedCost} onChange={(e) => setServiceForm((prev) => ({ ...prev, monthlySharedCost: Number(e.target.value) }))} />
+                    </div>
+                    <div className="field">
+                      <label>Expense Group (for auto-added expenses)</label>
+                      <select value={serviceForm.expenseGroupId} onChange={(e) => setServiceForm((prev) => ({ ...prev, expenseGroupId: e.target.value }))}>
+                        <option value="">Ungrouped</option>
+                        {expenseGroups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
+                      </select>
+                    </div>
+                  </>
                 )}
                 <button className="primary" type="submit">Save Service</button>
               </form>
@@ -1804,7 +1858,8 @@ export default function Page() {
                           amount: service.salePrice,
                           serviceType: service.serviceType || 'direct_cost',
                           directCost: service.directCost || 0,
-                          monthlySharedCost: service.monthlySharedCost || 0
+                          monthlySharedCost: service.monthlySharedCost || 0,
+                          expenseGroupId: service.expenseGroupId || ''
                         })}>Edit</button>
                         <button className="primary" onClick={() => sellService(service.id)}>Sell</button>
                         <button className="delete-btn" onClick={() => { setServices((prev) => prev.filter((item) => item.id !== service.id)); logActivity('delete_service', `Deleted service "${service.name}"`); }}>Delete</button>
@@ -1974,9 +2029,52 @@ export default function Page() {
                 </select>
                 <button type="button" className="edit-btn" onClick={transferUngroupedExpenses} disabled={!transferExpenseGroupId}>Transfer Existing Ungrouped</button>
               </div>
+              {expenseGroups.length > 0 && (
+                <div style={{ display: 'grid', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                  {expenseGroups.map((group) => (
+                    <div key={group.id} style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                      {editingExpenseGroupId === group.id ? (
+                        <>
+                          <input value={editingExpenseGroupName} onChange={(e) => setEditingExpenseGroupName(e.target.value)} />
+                          <button type="button" className="primary" onClick={() => saveExpenseGroupEdit(group.id)}>Save</button>
+                          <button type="button" className="edit-btn" onClick={() => { setEditingExpenseGroupId(''); setEditingExpenseGroupName(''); }}>Cancel</button>
+                        </>
+                      ) : (
+                        <>
+                          <span style={{ fontWeight: 600 }}>{group.name}</span>
+                          <button type="button" className="edit-btn" onClick={() => { setEditingExpenseGroupId(group.id); setEditingExpenseGroupName(group.name); }}>Edit</button>
+                        </>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
               <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
                 {expenseGroups.length > 0 ? `${expenseGroups.length} group(s) created.` : 'No expense groups yet. Create one to organize expenses.'}
               </div>
+            </div>
+            <div className="card" style={{ marginBottom: '1rem' }}>
+              <h4 style={{ marginTop: 0 }}>Expense Group Distribution</h4>
+              <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
+                {(['day', '7days', '14days', 'month', '3months', '6months', '1year'] as ExpenseChartRange[]).map((range) => (
+                  <button key={range} type="button" className={expenseChartRange === range ? 'primary' : 'edit-btn'} onClick={() => setExpenseChartRange(range)}>
+                    {range === 'day' ? 'Per day' : range === '7days' ? '7 days' : range === '14days' ? '14 days' : range === 'month' ? 'Month' : range === '3months' ? '3 months' : range === '6months' ? '6 months' : '1 year'}
+                  </button>
+                ))}
+              </div>
+              {expenseChartData.total > 0 ? (
+                <div style={{ display: 'grid', gridTemplateColumns: '160px 1fr', gap: '1rem', alignItems: 'center' }}>
+                  <div style={{ width: 160, height: 160, borderRadius: '50%', background: `conic-gradient(${expenseChartData.segments.map((s, i) => `${s.color} ${expenseChartData.segments.slice(0, i).reduce((a, b) => a + b.percentage, 0)}% ${(expenseChartData.segments.slice(0, i + 1).reduce((a, b) => a + b.percentage, 0))}%`).join(', ')})` }} />
+                  <div style={{ display: 'grid', gap: '0.5rem' }}>
+                    {expenseChartData.segments.map((segment) => (
+                      <div key={segment.name} style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem' }}>
+                        <span><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', background: segment.color, marginRight: 6 }} />{segment.name}</span>
+                        <span style={{ fontWeight: 600 }}>{segment.percentage.toFixed(1)}% ({formatUGX(segment.amount)})</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : <div style={{ color: 'var(--text-muted)' }}>No expenses in this period.</div>}
             </div>
 
             <div className="table-wrap">
