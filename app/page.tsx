@@ -10,6 +10,7 @@ type View = 'dashboard' | 'sales_history' | 'products' | 'sales' | 'services' | 
 type DashboardPeriod = 'daily' | 'weekly' | 'monthly' | 'yearly';
 type InsightTrendRange = 7 | 14 | 30 | 60 | 100;
 type ExpenseChartRange = 'day' | '7days' | '14days' | 'month' | '3months' | '6months' | '1year';
+type ShopTimeSettings = { timezoneOffsetMinutes: number; dayStartTime: string };
 
 type Branch = { id: string; name: string; location: string; createdAt?: string };
 type AuditStamp = {
@@ -127,7 +128,8 @@ export default function Page() {
   const [showExpenseGroupsDetails, setShowExpenseGroupsDetails] = useState(false);
   const [userForm, setUserForm] = useState({ id: '', name: '', email: '', role: 'cashier' as Role, branchId: '' });
   const [shopNameForm, setShopNameForm] = useState('');
-  const [settingsTab, setSettingsTab] = useState<'shop' | 'branches'>('shop');
+  const [settingsTab, setSettingsTab] = useState<'shop' | 'branches' | 'time'>('shop');
+  const [shopTimeSettings, setShopTimeSettings] = useState<ShopTimeSettings>({ timezoneOffsetMinutes: 0, dayStartTime: '00:00' });
 
   const branchMap = useMemo(() => Object.fromEntries(branches.map((b) => [b.id, b.name])), [branches]);
   const topSellingProducts = useMemo(() => {
@@ -255,6 +257,10 @@ export default function Page() {
         setExpenseGroups(Array.isArray(data.expenseGroups) ? data.expenseGroups : []);
         setUsers(Array.isArray(data.users) ? data.users : []);
         setRole(selectedShop?.role || (data.role as Role) || 'shop_owner');
+        setShopTimeSettings({
+          timezoneOffsetMinutes: typeof data?.shopTimeSettings?.timezoneOffsetMinutes === 'number' ? data.shopTimeSettings.timezoneOffsetMinutes : 0,
+          dayStartTime: typeof data?.shopTimeSettings?.dayStartTime === 'string' ? data.shopTimeSettings.dayStartTime : '00:00',
+        });
         setActivityLogs(Array.isArray(data.activityLogs) ? data.activityLogs : []);
         hasLoadedUserDataRef.current = true;
         isSwitchingShopRef.current = false;
@@ -364,7 +370,7 @@ export default function Page() {
         const userDataRef = doc(db, 'users', activeShopOwnerUid, 'pos', 'data');
         await setDoc(
           userDataRef,
-          { role, branches, products, services, sales, expenses, expenseGroups, users, activityLogs, updatedAt: serverTimestamp() },
+          { role, branches, products, services, sales, expenses, expenseGroups, users, activityLogs, shopTimeSettings, updatedAt: serverTimestamp() },
           { merge: true }
         );
       } catch (error) {
@@ -372,7 +378,7 @@ export default function Page() {
       }
     };
     void saveUserData();
-  }, [activeShopOwnerUid, authUser, db, role, branches, products, services, sales, expenses, expenseGroups, users, activityLogs]);
+  }, [activeShopOwnerUid, authUser, db, role, branches, products, services, sales, expenses, expenseGroups, users, activityLogs, shopTimeSettings]);
 
   const handleLogin = async () => {
     if (!firebaseApp) return;
@@ -455,13 +461,28 @@ export default function Page() {
     return allocatedSharedCost;
   };
 
+  const getBusinessDayRange = useCallback((reference: Date, offsetDays: number = 0) => {
+    const [startHourStr, startMinuteStr] = shopTimeSettings.dayStartTime.split(':');
+    const startHour = Number(startHourStr || 0);
+    const startMinute = Number(startMinuteStr || 0);
+    const tzOffsetMs = shopTimeSettings.timezoneOffsetMinutes * 60 * 1000;
+    const dayStartMs = (startHour * 60 + startMinute) * 60 * 1000;
+    const referenceInShopTz = new Date(reference.getTime() + tzOffsetMs);
+    const businessBase = new Date(Date.UTC(referenceInShopTz.getUTCFullYear(), referenceInShopTz.getUTCMonth(), referenceInShopTz.getUTCDate()));
+    const startInShopTzMs = businessBase.getTime() + dayStartMs - offsetDays * 24 * 60 * 60 * 1000;
+    const start = new Date(startInShopTzMs - tzOffsetMs);
+    const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+    return { start, end };
+  }, [shopTimeSettings.dayStartTime, shopTimeSettings.timezoneOffsetMinutes]);
+
   const getMetricsForPeriod = (period: DashboardPeriod, offset: number = 0) => {
     const now = new Date();
     let start: Date, end: Date;
 
     if (period === 'daily') {
-      start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - offset);
-      end = new Date(now.getFullYear(), now.getMonth(), now.getDate() - offset + 1);
+      const range = getBusinessDayRange(now, offset);
+      start = range.start;
+      end = range.end;
     } else if (period === 'weekly') {
       const currentWeekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay());
       start = new Date(currentWeekStart.getTime() - offset * 7 * 24 * 60 * 60 * 1000);
@@ -540,7 +561,7 @@ export default function Page() {
         period: dashboardPeriod
       }
     };
-  }, [sales, expenses, products, dashboardPeriod, services]);
+  }, [sales, expenses, products, dashboardPeriod, services, getBusinessDayRange]);
 
   // Product & Service Chart Data
   const chartData = useMemo(() => {
@@ -816,7 +837,7 @@ export default function Page() {
   const expenseChartData = useMemo(() => {
     const now = new Date();
     const rangeStart = new Date(now);
-    if (expenseChartRange === 'day') rangeStart.setDate(now.getDate() - 1);
+    if (expenseChartRange === 'day') rangeStart.setTime(getBusinessDayRange(now, 0).start.getTime());
     if (expenseChartRange === '7days') rangeStart.setDate(now.getDate() - 7);
     if (expenseChartRange === '14days') rangeStart.setDate(now.getDate() - 14);
     if (expenseChartRange === 'month') rangeStart.setMonth(now.getMonth() - 1);
@@ -835,7 +856,7 @@ export default function Page() {
       name, amount, percentage: total > 0 ? (amount / total) * 100 : 0, color: colors[idx % colors.length]
     })).sort((a, b) => b.amount - a.amount);
     return { total, segments };
-  }, [expenseChartRange, expenseGroupMap, expenses]);
+  }, [expenseChartRange, expenseGroupMap, expenses, getBusinessDayRange]);
 
   const saveExpense = (e: React.FormEvent) => {
     e.preventDefault();
@@ -2406,6 +2427,7 @@ export default function Page() {
             <div style={{ display: 'flex', gap: '1rem', marginBottom: '2rem', borderBottom: '1px solid var(--border)' }}>
               <button onClick={() => setSettingsTab('shop')} style={{ padding: '0.75rem 1.5rem', borderBottom: settingsTab === 'shop' ? '3px solid var(--primary)' : 'none', background: 'none', cursor: 'pointer', fontWeight: settingsTab === 'shop' ? 600 : 400 }}>Shop Information</button>
               <button onClick={() => setSettingsTab('branches')} style={{ padding: '0.75rem 1.5rem', borderBottom: settingsTab === 'branches' ? '3px solid var(--primary)' : 'none', background: 'none', cursor: 'pointer', fontWeight: settingsTab === 'branches' ? 600 : 400 }}>Manage Branches</button>
+              <button onClick={() => setSettingsTab('time')} style={{ padding: '0.75rem 1.5rem', borderBottom: settingsTab === 'time' ? '3px solid var(--primary)' : 'none', background: 'none', cursor: 'pointer', fontWeight: settingsTab === 'time' ? 600 : 400 }}>Time & Timezone</button>
             </div>
 
             {settingsTab === 'shop' && (
@@ -2446,6 +2468,37 @@ export default function Page() {
                       )}
                     </div>
                   ))}
+                </div>
+              </div>
+            )}
+            {settingsTab === 'time' && (
+              <div className="card">
+                <h3>Time & Timezone</h3>
+                <p style={{ color: 'var(--text-muted)' }}>These settings control what counts as a business day in reports and expense charts.</p>
+                <div style={{ marginTop: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem' }}>
+                  <div>
+                    <label>Business day starts at</label>
+                    <input
+                      type="time"
+                      value={shopTimeSettings.dayStartTime}
+                      onChange={(e) => setShopTimeSettings((prev) => ({ ...prev, dayStartTime: e.target.value || '00:00' }))}
+                    />
+                  </div>
+                  <div>
+                    <label>Timezone</label>
+                    <select
+                      value={shopTimeSettings.timezoneOffsetMinutes}
+                      onChange={(e) => setShopTimeSettings((prev) => ({ ...prev, timezoneOffsetMinutes: Number(e.target.value) }))}
+                    >
+                      {Array.from({ length: 27 }, (_, idx) => {
+                        const hour = idx - 12;
+                        const offsetMinutes = hour * 60;
+                        const sign = hour >= 0 ? '+' : '-';
+                        const absHour = Math.abs(hour).toString().padStart(2, '0');
+                        return <option key={offsetMinutes} value={offsetMinutes}>UTC{sign}{absHour}:00</option>;
+                      })}
+                    </select>
+                  </div>
                 </div>
               </div>
             )}
