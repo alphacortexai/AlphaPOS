@@ -1864,21 +1864,6 @@ export default function Page() {
               </form>
             </div>
 
-            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
-              <button type="button" className={expensesViewMode === 'all' ? 'primary' : 'edit-btn'} onClick={() => setExpensesViewMode('all')}>
-                All expenses
-              </button>
-              <button type="button" className={expensesViewMode === 'day' ? 'primary' : 'edit-btn'} onClick={() => setExpensesViewMode('day')}>
-                Expenses by day
-              </button>
-              {expensesViewMode === 'day' && (
-                <label style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                  <span>Day</span>
-                  <input type="date" value={expensesDayFilter} onChange={(e) => setExpensesDayFilter(e.target.value)} />
-                </label>
-              )}
-            </div>
-
             <div className="table-wrap">
               <table className="data-table">
                 <thead>
@@ -2138,6 +2123,21 @@ export default function Page() {
                   </div>
                 </div>
               ) : <div style={{ color: 'var(--text-muted)' }}>No expenses in this period.</div>}
+            </div>
+
+            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+              <button type="button" className={expensesViewMode === 'all' ? 'primary' : 'edit-btn'} onClick={() => setExpensesViewMode('all')}>
+                All expenses
+              </button>
+              <button type="button" className={expensesViewMode === 'day' ? 'primary' : 'edit-btn'} onClick={() => setExpensesViewMode('day')}>
+                Expenses by day
+              </button>
+              {expensesViewMode === 'day' && (
+                <label style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                  <span>Day</span>
+                  <input type="date" value={expensesDayFilter} onChange={(e) => setExpensesDayFilter(e.target.value)} />
+                </label>
+              )}
             </div>
 
             <div className="table-wrap">
