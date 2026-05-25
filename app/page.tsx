@@ -102,6 +102,8 @@ export default function Page() {
   const [productsPage, setProductsPage] = useState(1);
   const [servicesPage, setServicesPage] = useState(1);
   const [expensesPage, setExpensesPage] = useState(1);
+  const [expensesViewMode, setExpensesViewMode] = useState<'all' | 'day'>('all');
+  const [expensesDayFilter, setExpensesDayFilter] = useState(new Date().toISOString().split('T')[0]);
   const [usersPage, setUsersPage] = useState(1);
   const [reportsSalesPage, setReportsSalesPage] = useState(1);
   const [activityLogsPage, setActivityLogsPage] = useState(1);
@@ -1160,9 +1162,22 @@ export default function Page() {
     };
   };
 
+  const filteredExpenses = useMemo(() => {
+    if (expensesViewMode === 'all') return expenses;
+    return expenses.filter((expense) => {
+      const expenseDate = new Date(expense.createdAt);
+      const selectedDay = new Date(`${expensesDayFilter}T00:00:00`);
+      return expenseDate.toDateString() === selectedDay.toDateString();
+    });
+  }, [expenses, expensesDayFilter, expensesViewMode]);
+
+  useEffect(() => {
+    setExpensesPage(1);
+  }, [expensesViewMode, expensesDayFilter]);
+
   const productsPagination = paginateData(filteredProducts, productsPage, setProductsPage);
   const servicesPagination = paginateData(services, servicesPage, setServicesPage);
-  const expensesPagination = paginateData(expenses, expensesPage, setExpensesPage);
+  const expensesPagination = paginateData(filteredExpenses, expensesPage, setExpensesPage);
   const usersPagination = paginateData(users, usersPage, setUsersPage);
   const reportsSalesPagination = paginateData(sales, reportsSalesPage, setReportsSalesPage);
   const activityLogsPagination = paginateData(activityLogs, activityLogsPage, setActivityLogsPage);
@@ -1849,6 +1864,21 @@ export default function Page() {
               </form>
             </div>
 
+            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+              <button type="button" className={expensesViewMode === 'all' ? 'primary' : 'edit-btn'} onClick={() => setExpensesViewMode('all')}>
+                All expenses
+              </button>
+              <button type="button" className={expensesViewMode === 'day' ? 'primary' : 'edit-btn'} onClick={() => setExpensesViewMode('day')}>
+                Expenses by day
+              </button>
+              {expensesViewMode === 'day' && (
+                <label style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                  <span>Day</span>
+                  <input type="date" value={expensesDayFilter} onChange={(e) => setExpensesDayFilter(e.target.value)} />
+                </label>
+              )}
+            </div>
+
             <div className="table-wrap">
               <table className="data-table">
                 <thead>
@@ -2123,7 +2153,7 @@ export default function Page() {
                   </tr>
                 </thead>
                 <tbody>
-                  {expenses.length > 0 ? (
+                  {filteredExpenses.length > 0 ? (
                     expensesPagination.rows.map((e) => (
                       <tr key={e.id}>
                         <td>{new Date(e.createdAt).toLocaleString()}</td>
@@ -2145,14 +2175,14 @@ export default function Page() {
                     ))
                   ) : (
                     <tr>
-                      <td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>No expenses recorded yet</td>
+                      <td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>No expenses found for this view</td>
                     </tr>
                   )}
                 </tbody>
               </table>
             </div>
             <PaginationControls
-              totalItems={expenses.length}
+              totalItems={filteredExpenses.length}
               totalPages={expensesPagination.totalPages}
               page={expensesPagination.safePage}
               start={expensesPagination.start}
