@@ -62,6 +62,21 @@ const periodStart = (period: 'day' | 'week' | 'month' | 'year', date: Date = new
   return new Date(d.getFullYear(), 0, 1);
 };
 
+const removeUndefinedDeep = <T,>(value: T): T => {
+  if (Array.isArray(value)) {
+    return value.map((item) => removeUndefinedDeep(item)) as T;
+  }
+
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, v]) => v !== undefined)
+      .map(([k, v]) => [k, removeUndefinedDeep(v)]);
+    return Object.fromEntries(entries) as T;
+  }
+
+  return value;
+};
+
 export default function Page() {
   const [authUser, setAuthUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
@@ -364,7 +379,7 @@ export default function Page() {
 
       await setDoc(
         userDataRef,
-        {
+        removeUndefinedDeep({
           products: latestProducts,
           services: latestServices,
           expenses: latestExpenses,
@@ -372,7 +387,7 @@ export default function Page() {
           recalculatedAt: serverTimestamp(),
           recalculatedSummary: recalculated.stats,
           updatedAt: serverTimestamp(),
-        },
+        }),
         { merge: true }
       );
 
@@ -391,11 +406,20 @@ export default function Page() {
       if (!authUser || !db || !hasLoadedUserDataRef.current || !activeShopOwnerUid || isSwitchingShopRef.current) return;
       try {
         const userDataRef = doc(db, 'users', activeShopOwnerUid, 'pos', 'data');
-        await setDoc(
-          userDataRef,
-          { role, branches, products, services, sales, expenses, expenseGroups, users, activityLogs, shopTimeSettings, accounts, updatedAt: serverTimestamp() },
-          { merge: true }
-        );
+        await setDoc(userDataRef, removeUndefinedDeep({
+          role,
+          branches,
+          products,
+          services,
+          sales,
+          expenses,
+          expenseGroups,
+          users,
+          activityLogs,
+          shopTimeSettings,
+          accounts,
+          updatedAt: serverTimestamp(),
+        }), { merge: true });
       } catch (error) {
         setStatus(`Failed to auto-save your data: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }
