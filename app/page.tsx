@@ -140,6 +140,8 @@ export default function Page() {
   const [selectedBranchForSale, setSelectedBranchForSale] = useState('');
   const [expenseForm, setExpenseForm] = useState({ id: '', title: '', branchId: '', amount: 0, expenseGroupId: '', accountId: '' });
   const [accountForm, setAccountForm] = useState({ name: '', openingBalance: 0 });
+  const [saleAccountId, setSaleAccountId] = useState('');
+  const [accountTopUpForm, setAccountTopUpForm] = useState({ accountId: '', amount: 0 });
   const [expenseGroupForm, setExpenseGroupForm] = useState({ name: '' });
   const [transferExpenseGroupId, setTransferExpenseGroupId] = useState('');
   const [editingExpenseGroupId, setEditingExpenseGroupId] = useState('');
@@ -828,6 +830,10 @@ export default function Page() {
       showNotification('Service not found', 'error');
       return;
     }
+    if (!selectedSaleAccountId) {
+      showNotification('Please create an account first (CASH is created by default).', 'error');
+      return;
+    }
     const newSale: Sale = {
       id: crypto.randomUUID(),
       type: 'service',
@@ -836,7 +842,7 @@ export default function Page() {
       qty: 1,
       amount: service.salePrice,
       cost: service.serviceType === 'direct_cost' ? service.directCost : 0,
-      accountId: defaultAccount?.id,
+      accountId: selectedSaleAccountId,
       ...currentAuditStamp(),
     };
     setSales((prev) => [newSale, ...prev]);
@@ -847,6 +853,10 @@ export default function Page() {
 
   const expenseGroupMap = useMemo(() => Object.fromEntries(expenseGroups.map((g) => [g.id, g.name])), [expenseGroups]);
   const defaultAccount = useMemo(() => accounts.find((account) => account.isDefault) || accounts[0], [accounts]);
+  const selectedSaleAccountId = useMemo(() => {
+    if (saleAccountId && accounts.some((account) => account.id === saleAccountId)) return saleAccountId;
+    return defaultAccount?.id;
+  }, [accounts, defaultAccount?.id, saleAccountId]);
   const accountMap = useMemo(() => Object.fromEntries(accounts.map((account) => [account.id, account.name])), [accounts]);
   const accountBalances = useMemo(() => {
     const balances = new Map<string, number>();
@@ -897,6 +907,26 @@ export default function Page() {
     setAccounts((prev) => [...prev, newAccount]);
     setAccountForm({ name: '', openingBalance: 0 });
     showNotification(`Account "${name}" created`, 'success');
+  };
+  const topUpAccount = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!(isShopOwner || role === 'admin')) {
+      showNotification('Only admin or shop owner can top up accounts.', 'error');
+      return;
+    }
+    const selectedAccountId = accountTopUpForm.accountId || defaultAccount?.id;
+    const amount = Number(accountTopUpForm.amount);
+    if (!selectedAccountId || amount <= 0) {
+      showNotification('Choose account and enter an amount greater than 0.', 'error');
+      return;
+    }
+    setAccounts((prev) => prev.map((account) => account.id === selectedAccountId
+      ? { ...account, openingBalance: (account.openingBalance || 0) + amount, ...updatedAuditStamp() }
+      : account));
+    const accountName = accountMap[selectedAccountId] || 'account';
+    setAccountTopUpForm({ accountId: selectedAccountId, amount: 0 });
+    logActivity('account_top_up', `Topped up ${formatUGX(amount)} to "${accountName}"`);
+    showNotification(`Top up completed for ${accountName}`, 'success');
   };
 
   const transferUngroupedExpenses = () => {
@@ -1109,6 +1139,10 @@ export default function Page() {
       showNotification('Cart is empty', 'error');
       return;
     }
+    if (!selectedSaleAccountId) {
+      showNotification('Please create an account first (CASH is created by default).', 'error');
+      return;
+    }
     const newSales = cart.map(item => ({
       id: crypto.randomUUID(),
       type: item.itemType,
@@ -1117,7 +1151,7 @@ export default function Page() {
       qty: item.qty,
       amount: getEffectiveUnitPrice(item) * item.qty,
       cost: item.unitCost * item.qty,
-      accountId: defaultAccount?.id,
+      accountId: selectedSaleAccountId,
       ...currentAuditStamp(),
     }));
     setSales(prev => [...newSales, ...prev]);
@@ -1134,6 +1168,10 @@ export default function Page() {
 
   const makeProductSale = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!selectedSaleAccountId) {
+      showNotification('Please create an account first (CASH is created by default).', 'error');
+      return;
+    }
     const p = products.find((x) => x.id === saleForm.productId);
     if (!p || p.stock < saleForm.qty) {
       setStatus('Invalid sale or insufficient stock.');
@@ -1147,7 +1185,7 @@ export default function Page() {
       qty: saleForm.qty,
       amount: p.salePrice * saleForm.qty,
       cost: p.purchasePrice * saleForm.qty,
-      accountId: defaultAccount?.id,
+      accountId: selectedSaleAccountId,
       ...currentAuditStamp(),
     };
     setSales((prev) => [newSale, ...prev]);
@@ -1806,6 +1844,12 @@ export default function Page() {
                       onChange={(e) => setQuickSaleSearchQuery(e.target.value)}
                     />
                   </div>
+                  <div className="filter-group" style={{ marginBottom: 0, minWidth: '220px' }}>
+                    <label>Credit sales to account</label>
+                    <select value={selectedSaleAccountId || ''} onChange={(e) => setSaleAccountId(e.target.value)}>
+                      {accounts.map((account) => <option key={account.id} value={account.id}>{account.name}{account.isDefault ? ' (Default)' : ''}</option>)}
+                    </select>
+                  </div>
                   <button className="primary" onClick={() => { setCart([]); setShowSaleModal(true); }}>+ New Sale</button>
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(145px, 1fr))', gap: '0.55rem', marginBottom: '1rem' }}>
@@ -1912,6 +1956,14 @@ export default function Page() {
           <section>
             <div className="page-header">
               <h2>Service Catalog</h2>
+            </div>
+            <div className="card" style={{ marginBottom: '1rem' }}>
+              <div className="field" style={{ maxWidth: '320px' }}>
+                <label>Credit service sales to account</label>
+                <select value={selectedSaleAccountId || ''} onChange={(e) => setSaleAccountId(e.target.value)}>
+                  {accounts.map((account) => <option key={account.id} value={account.id}>{account.name}{account.isDefault ? ' (Default)' : ''}</option>)}
+                </select>
+              </div>
             </div>
             <div className="card" style={{ marginBottom: '1rem' }}>
               <form onSubmit={saveService} style={{ display: 'grid', gap: '0.75rem', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', alignItems: 'end' }}>
@@ -2635,7 +2687,7 @@ export default function Page() {
             {settingsTab === 'accounts' && (
               <div className="card">
                 <h3>Accounts</h3>
-                <p style={{ color: 'var(--text-muted)' }}>Sales are credited to the default CASH account. Expenses are deducted from the selected account (default CASH).</p>
+                <p style={{ color: 'var(--text-muted)' }}>Sales (products and services) are credited to the selected account below (or default CASH). Expenses are deducted from the selected expense account.</p>
                 <form onSubmit={createAccount} className="form" style={{ marginTop: '1rem' }}>
                   <label className="field">
                     <span>Account Name</span>
@@ -2647,6 +2699,21 @@ export default function Page() {
                   </label>
                   <div><button type="submit" className="primary">+ Add Account</button></div>
                 </form>
+                {(isShopOwner || role === 'admin') && (
+                  <form onSubmit={topUpAccount} className="form" style={{ marginTop: '0.75rem' }}>
+                    <label className="field">
+                      <span>Top Up Account</span>
+                      <select value={accountTopUpForm.accountId || defaultAccount?.id || ''} onChange={(e) => setAccountTopUpForm((prev) => ({ ...prev, accountId: e.target.value }))}>
+                        {accounts.map((account) => <option key={account.id} value={account.id}>{account.name}{account.isDefault ? ' (Default)' : ''}</option>)}
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Top Up Amount (UGX)</span>
+                      <input type="number" min={1} value={accountTopUpForm.amount} onChange={(e) => setAccountTopUpForm((prev) => ({ ...prev, amount: Number(e.target.value) }))} required />
+                    </label>
+                    <div><button type="submit" className="primary">+ Top Up</button></div>
+                  </form>
+                )}
                 <div className="table-wrap" style={{ marginTop: '1rem' }}>
                   <table className="data-table">
                     <thead><tr><th>Account</th><th>Type</th><th>Opening Balance</th><th>Current Balance</th></tr></thead>
@@ -2672,7 +2739,7 @@ export default function Page() {
           <section>
             <div className="card">
               <h3>Accounts</h3>
-              <p style={{ color: 'var(--text-muted)' }}>Sales are credited to the default CASH account. Expenses are deducted from the selected account (default CASH).</p>
+              <p style={{ color: 'var(--text-muted)' }}>Sales (products and services) are credited to the selected account below (or default CASH). Expenses are deducted from the selected expense account.</p>
               <form onSubmit={createAccount} className="form" style={{ marginTop: '1rem' }}>
                 <label className="field">
                   <span>Account Name</span>
@@ -2684,6 +2751,21 @@ export default function Page() {
                 </label>
                 <div><button type="submit" className="primary">+ Add Account</button></div>
               </form>
+              {(isShopOwner || role === 'admin') && (
+                <form onSubmit={topUpAccount} className="form" style={{ marginTop: '0.75rem' }}>
+                  <label className="field">
+                    <span>Top Up Account</span>
+                    <select value={accountTopUpForm.accountId || defaultAccount?.id || ''} onChange={(e) => setAccountTopUpForm((prev) => ({ ...prev, accountId: e.target.value }))}>
+                      {accounts.map((account) => <option key={account.id} value={account.id}>{account.name}{account.isDefault ? ' (Default)' : ''}</option>)}
+                    </select>
+                  </label>
+                  <label className="field">
+                    <span>Top Up Amount (UGX)</span>
+                    <input type="number" min={1} value={accountTopUpForm.amount} onChange={(e) => setAccountTopUpForm((prev) => ({ ...prev, amount: Number(e.target.value) }))} required />
+                  </label>
+                  <div><button type="submit" className="primary">+ Top Up</button></div>
+                </form>
+              )}
               <div className="table-wrap" style={{ marginTop: '1rem' }}>
                 <table className="data-table">
                   <thead><tr><th>Account</th><th>Type</th><th>Opening Balance</th><th>Current Balance</th></tr></thead>
