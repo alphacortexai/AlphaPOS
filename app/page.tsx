@@ -6,7 +6,7 @@ import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signO
 import { collection, doc, getDoc, getDocs, getFirestore, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
 
 type Role = 'shop_owner' | 'admin' | 'manager' | 'cashier' | 'stock';
-type View = 'dashboard' | 'sales_history' | 'products' | 'sales' | 'services' | 'expenses' | 'users' | 'branches' | 'reports' | 'settings' | 'profile' | 'activity_logs';
+type View = 'dashboard' | 'sales_history' | 'products' | 'sales' | 'services' | 'expenses' | 'users' | 'branches' | 'reports' | 'settings' | 'accounts' | 'profile' | 'activity_logs';
 type DashboardPeriod = 'daily' | 'weekly' | 'monthly' | 'yearly';
 type InsightTrendRange = 7 | 14 | 30 | 60 | 100;
 type ExpenseChartRange = 'day' | '7days' | '14days' | 'month' | '3months' | '6months' | '1year';
@@ -1418,6 +1418,7 @@ export default function Page() {
           <button className={`nav-button ${view === 'users' ? 'active' : ''}`} onClick={() => { setView('users'); setIsSidebarOpen(false); }}><span className="nav-icon">👥</span><span>Staff</span></button>
           <button className={`nav-button ${view === 'activity_logs' ? 'active' : ''}`} onClick={() => { setView('activity_logs'); setIsSidebarOpen(false); }}><span className="nav-icon">📜</span><span>Activity Logs</span></button>
           <button className={`nav-button ${view === 'reports' ? 'active' : ''}`} onClick={() => { setView('reports'); setIsSidebarOpen(false); }}><span className="nav-icon">📊</span><span>Reports</span></button>
+          <button className={`nav-button ${view === 'accounts' ? 'active' : ''}`} onClick={() => { setView('accounts'); setIsSidebarOpen(false); }}><span className="nav-icon">🏦</span><span>Accounts</span></button>
           {isShopOwner && <button className={`nav-button ${view === 'settings' ? 'active' : ''}`} onClick={() => { setView('settings'); setIsSidebarOpen(false); }}><span className="nav-icon">⚙️</span><span>Settings</span></button>}
         </nav>
 
@@ -1458,6 +1459,7 @@ export default function Page() {
                view === 'users' ? '👥 Staff Management' :
                view === 'activity_logs' ? '🧾 Activity Logs' :
                view === 'reports' ? '📈 Business Reports' :
+               view === 'accounts' ? '🏦 Accounts' :
                view === 'settings' ? '⚙️ System Settings' :
                view.charAt(0).toUpperCase() + view.slice(1)}
             </h1>
@@ -1521,6 +1523,12 @@ export default function Page() {
                 <h4>Gross Profit ({dashboardPeriod})</h4>
                 <div className="card-value">{formatUGX(dashboardMetrics.grossProfit.value)}</div>
                 <Badge value={dashboardMetrics.grossProfit.change} />
+              </div>
+              <div className="card dashboard-card">
+                <span className="dashboard-card-icon" aria-hidden="true">🏦</span>
+                <h4>Default Account</h4>
+                <div className="card-value">{defaultAccount?.name || 'No Account'}</div>
+                <span className="badge badge-info">{formatUGX(defaultAccount ? (accountBalances.get(defaultAccount.id) || 0) : 0)}</span>
               </div>
               <div className="card dashboard-card">
                 <span className="dashboard-card-icon" aria-hidden="true">🎯</span>
@@ -2632,6 +2640,42 @@ export default function Page() {
                 </div>
               </div>
             )}
+          </section>
+        )}
+
+
+        {view === 'accounts' && (
+          <section>
+            <div className="card">
+              <h3>Accounts</h3>
+              <p style={{ color: 'var(--text-muted)' }}>Sales are credited to the default CASH account. Expenses are deducted from the selected account (default CASH).</p>
+              <form onSubmit={createAccount} className="form" style={{ marginTop: '1rem' }}>
+                <label className="field">
+                  <span>Account Name</span>
+                  <input value={accountForm.name} onChange={(e) => setAccountForm((prev) => ({ ...prev, name: e.target.value }))} placeholder="e.g. Mobile Money" required />
+                </label>
+                <label className="field">
+                  <span>Opening Balance (UGX)</span>
+                  <input type="number" value={accountForm.openingBalance} onChange={(e) => setAccountForm((prev) => ({ ...prev, openingBalance: Number(e.target.value) }))} />
+                </label>
+                <div><button type="submit" className="primary">+ Add Account</button></div>
+              </form>
+              <div className="table-wrap" style={{ marginTop: '1rem' }}>
+                <table className="data-table">
+                  <thead><tr><th>Account</th><th>Type</th><th>Opening Balance</th><th>Current Balance</th></tr></thead>
+                  <tbody>
+                    {accounts.map((account) => (
+                      <tr key={account.id}>
+                        <td>{account.name}</td>
+                        <td>{account.isDefault ? 'Default' : 'Custom'}</td>
+                        <td>{formatUGX(account.openingBalance || 0)}</td>
+                        <td>{formatUGX(accountBalances.get(account.id) || 0)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </section>
         )}
 
