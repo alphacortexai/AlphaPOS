@@ -908,6 +908,12 @@ export default function Page() {
     setAccountForm({ name: '', openingBalance: 0 });
     showNotification(`Account "${name}" created`, 'success');
   };
+  const requestDoubleAccountConfirmation = (actionLabel: string) => {
+    const initialConfirmation = window.confirm(`Are you sure you want to ${actionLabel}?`);
+    if (!initialConfirmation) return false;
+    return window.confirm(`Please confirm again: are you absolutely sure you want to ${actionLabel}?`);
+  };
+
   const topUpAccount = (e: React.FormEvent) => {
     e.preventDefault();
     if (!(isShopOwner || role === 'admin')) {
@@ -920,13 +926,43 @@ export default function Page() {
       showNotification('Choose account and enter an amount greater than 0.', 'error');
       return;
     }
+    const accountName = accountMap[selectedAccountId] || 'account';
+    if (!requestDoubleAccountConfirmation(`top up ${accountName} by ${formatUGX(amount)}`)) {
+      showNotification('Top up cancelled.', 'info');
+      return;
+    }
     setAccounts((prev) => prev.map((account) => account.id === selectedAccountId
       ? { ...account, openingBalance: (account.openingBalance || 0) + amount, ...updatedAuditStamp() }
       : account));
-    const accountName = accountMap[selectedAccountId] || 'account';
     setAccountTopUpForm({ accountId: selectedAccountId, amount: 0 });
     logActivity('account_top_up', `Topped up ${formatUGX(amount)} to "${accountName}"`);
     showNotification(`Top up completed for ${accountName}`, 'success');
+  };
+
+  const editAccountOpeningBalance = (accountId: string) => {
+    if (!(isShopOwner || role === 'admin')) {
+      showNotification('Only admin or shop owner can edit account values.', 'error');
+      return;
+    }
+    const targetAccount = accounts.find((account) => account.id === accountId);
+    if (!targetAccount) return;
+    const currentValue = targetAccount.openingBalance || 0;
+    const input = window.prompt(`Enter new opening balance for ${targetAccount.name}`, String(currentValue));
+    if (input === null) return;
+    const nextValue = Number(input);
+    if (!Number.isFinite(nextValue)) {
+      showNotification('Please enter a valid number.', 'error');
+      return;
+    }
+    if (!requestDoubleAccountConfirmation(`set ${targetAccount.name} opening balance to ${formatUGX(nextValue)}`)) {
+      showNotification('Account update cancelled.', 'info');
+      return;
+    }
+    setAccounts((prev) => prev.map((account) => account.id === accountId
+      ? { ...account, openingBalance: nextValue, ...updatedAuditStamp() }
+      : account));
+    logActivity('edit_account', `Changed opening balance for "${targetAccount.name}" to ${formatUGX(nextValue)}`);
+    showNotification(`Updated ${targetAccount.name} opening balance.`, 'success');
   };
 
   const transferUngroupedExpenses = () => {
@@ -2716,7 +2752,7 @@ export default function Page() {
                 )}
                 <div className="table-wrap" style={{ marginTop: '1rem' }}>
                   <table className="data-table">
-                    <thead><tr><th>Account</th><th>Type</th><th>Opening Balance</th><th>Current Balance</th></tr></thead>
+                    <thead><tr><th>Account</th><th>Type</th><th>Opening Balance</th><th>Current Balance</th>{(isShopOwner || role === 'admin') && <th>Actions</th>}</tr></thead>
                     <tbody>
                       {accounts.map((account) => (
                         <tr key={account.id}>
@@ -2724,6 +2760,11 @@ export default function Page() {
                           <td>{account.isDefault ? 'Default' : 'Custom'}</td>
                           <td>{formatUGX(account.openingBalance || 0)}</td>
                           <td>{formatUGX(accountBalances.get(account.id) || 0)}</td>
+                          {(isShopOwner || role === 'admin') && (
+                            <td>
+                              <button type="button" className="edit-btn" onClick={() => editAccountOpeningBalance(account.id)}>Edit value</button>
+                            </td>
+                          )}
                         </tr>
                       ))}
                     </tbody>
@@ -2768,7 +2809,7 @@ export default function Page() {
               )}
               <div className="table-wrap" style={{ marginTop: '1rem' }}>
                 <table className="data-table">
-                  <thead><tr><th>Account</th><th>Type</th><th>Opening Balance</th><th>Current Balance</th></tr></thead>
+                  <thead><tr><th>Account</th><th>Type</th><th>Opening Balance</th><th>Current Balance</th>{(isShopOwner || role === 'admin') && <th>Actions</th>}</tr></thead>
                   <tbody>
                     {accounts.map((account) => (
                       <tr key={account.id}>
@@ -2776,6 +2817,11 @@ export default function Page() {
                         <td>{account.isDefault ? 'Default' : 'Custom'}</td>
                         <td>{formatUGX(account.openingBalance || 0)}</td>
                         <td>{formatUGX(accountBalances.get(account.id) || 0)}</td>
+                        {(isShopOwner || role === 'admin') && (
+                          <td>
+                            <button type="button" className="edit-btn" onClick={() => editAccountOpeningBalance(account.id)}>Edit value</button>
+                          </td>
+                        )}
                       </tr>
                     ))}
                   </tbody>
