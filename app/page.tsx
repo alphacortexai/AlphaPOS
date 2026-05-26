@@ -11,6 +11,7 @@ type DashboardPeriod = 'daily' | 'weekly' | 'monthly' | 'yearly';
 type InsightTrendRange = 7 | 14 | 30 | 60 | 100;
 type ExpenseChartRange = 'day' | '7days' | '14days' | 'month' | '3months' | '6months' | '1year';
 type ShopTimeSettings = { timezoneOffsetMinutes: number; dayStartTime: string };
+type Account = { id: string; name: string; openingBalance: number; isDefault?: boolean } & AuditStamp;
 
 type Branch = { id: string; name: string; location: string; createdAt?: string };
 type AuditStamp = {
@@ -25,9 +26,9 @@ type AuditStamp = {
 type Product = { id: string; name: string; branchId: string; stock: number; purchasePrice: number; salePrice: number } & AuditStamp;
 type ServiceType = 'direct_cost' | 'shared_cost';
 type Service = { id: string; name: string; branchId: string; salePrice: number; serviceType: ServiceType; directCost: number; monthlySharedCost: number; expenseGroupId?: string } & AuditStamp;
-type Sale = { id: string; type: 'product' | 'service'; itemName: string; branchId: string; qty: number; amount: number; cost: number } & AuditStamp;
+type Sale = { id: string; type: 'product' | 'service'; itemName: string; branchId: string; qty: number; amount: number; cost: number; accountId?: string } & AuditStamp;
 type ExpenseGroup = { id: string; name: string } & AuditStamp;
-type Expense = { id: string; title: string; branchId: string; amount: number; expenseGroupId?: string } & AuditStamp;
+type Expense = { id: string; title: string; branchId: string; amount: number; expenseGroupId?: string; accountId?: string } & AuditStamp;
 type StaffUser = { id: string; name: string; email: string; role: Role; branchId: string } & AuditStamp;
 type ShopMembership = { ownerUid: string; shopName: string; role: Role };
 type ActivityLog = {
@@ -83,6 +84,7 @@ export default function Page() {
   const [expenseGroups, setExpenseGroups] = useState<ExpenseGroup[]>([]);
   const [users, setUsers] = useState<StaffUser[]>([]);
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
+  const [accounts, setAccounts] = useState<Account[]>([]);
 
   // Modals
   const [showProductModal, setShowProductModal] = useState(false);
@@ -121,7 +123,8 @@ export default function Page() {
   const [saleForm, setSaleForm] = useState({ productId: '', qty: 1 });
   const [cart, setCart] = useState<CartItem[]>([]);
   const [selectedBranchForSale, setSelectedBranchForSale] = useState('');
-  const [expenseForm, setExpenseForm] = useState({ id: '', title: '', branchId: '', amount: 0, expenseGroupId: '' });
+  const [expenseForm, setExpenseForm] = useState({ id: '', title: '', branchId: '', amount: 0, expenseGroupId: '', accountId: '' });
+  const [accountForm, setAccountForm] = useState({ name: '', openingBalance: 0 });
   const [expenseGroupForm, setExpenseGroupForm] = useState({ name: '' });
   const [transferExpenseGroupId, setTransferExpenseGroupId] = useState('');
   const [editingExpenseGroupId, setEditingExpenseGroupId] = useState('');
@@ -130,7 +133,7 @@ export default function Page() {
   const [showExpenseGroupsDetails, setShowExpenseGroupsDetails] = useState(false);
   const [userForm, setUserForm] = useState({ id: '', name: '', email: '', role: 'cashier' as Role, branchId: '' });
   const [shopNameForm, setShopNameForm] = useState('');
-  const [settingsTab, setSettingsTab] = useState<'shop' | 'branches' | 'time'>('shop');
+  const [settingsTab, setSettingsTab] = useState<'shop' | 'branches' | 'time' | 'accounts'>('shop');
   const [shopTimeSettings, setShopTimeSettings] = useState<ShopTimeSettings>({ timezoneOffsetMinutes: 0, dayStartTime: '00:00' });
 
   const branchMap = useMemo(() => Object.fromEntries(branches.map((b) => [b.id, b.name])), [branches]);
@@ -178,6 +181,20 @@ export default function Page() {
   const cartProfit = useMemo(() => cartTotal - cartCost, [cartTotal, cartCost]);
   const db = firebaseApp ? getFirestore(firebaseApp) : null;
   const formatUGX = (value: number) => `UGX ${new Intl.NumberFormat('en-UG', { maximumFractionDigits: 0 }).format(Math.round(value))}`;
+  const ensureDefaultCashAccount = useCallback((existingAccounts: Account[]) => {
+    const normalized = existingAccounts.map((account) => ({ ...account, openingBalance: Number.isFinite(account.openingBalance) ? account.openingBalance : 0 }));
+    const existingCash = normalized.find((account) => account.name.trim().toLowerCase() === 'cash');
+    if (existingCash) {
+      return normalized.map((account) => ({ ...account, isDefault: account.id === existingCash.id }));
+    }
+    return [{
+      id: crypto.randomUUID(),
+      name: 'CASH',
+      openingBalance: 0,
+      isDefault: true,
+      ...currentAuditStamp(),
+    }, ...normalized];
+  }, []);
   const currentShop = availableShops.find((s) => s.ownerUid === activeShopOwnerUid);
   const isShopOwner = activeShopOwnerUid === authUser?.uid;
   const truncateShopName = (name: string, maxLength: number = 15) => name.length > maxLength ? name.substring(0, maxLength) + '...' : name;
@@ -211,6 +228,7 @@ export default function Page() {
         setServices([]);
         setSales([]);
         setExpenses([]);
+        setAccounts([]);
         setUsers([]);
       }
     });
@@ -244,6 +262,8 @@ export default function Page() {
         if (!snap.exists()) {
           const defaultBranch = { id: crypto.randomUUID(), name: 'Main Branch', location: 'HQ', createdAt: new Date().toISOString() };
           setBranches([defaultBranch]);
+          const defaultCashAccount = ensureDefaultCashAccount([]);
+          setAccounts(defaultCashAccount);
           setRole(selectedShop?.role || 'shop_owner');
           hasLoadedUserDataRef.current = true;
           isSwitchingShopRef.current = false;
@@ -256,6 +276,7 @@ export default function Page() {
         setServices(Array.isArray(data.services) ? data.services : []);
         setSales(Array.isArray(data.sales) ? data.sales : []);
         setExpenses(Array.isArray(data.expenses) ? data.expenses : []);
+        setAccounts(ensureDefaultCashAccount(Array.isArray(data.accounts) ? data.accounts : []));
         setExpenseGroups(Array.isArray(data.expenseGroups) ? data.expenseGroups : []);
         setUsers(Array.isArray(data.users) ? data.users : []);
         setRole(selectedShop?.role || (data.role as Role) || 'shop_owner');
@@ -372,7 +393,7 @@ export default function Page() {
         const userDataRef = doc(db, 'users', activeShopOwnerUid, 'pos', 'data');
         await setDoc(
           userDataRef,
-          { role, branches, products, services, sales, expenses, expenseGroups, users, activityLogs, shopTimeSettings, updatedAt: serverTimestamp() },
+          { role, branches, products, services, sales, expenses, expenseGroups, users, activityLogs, shopTimeSettings, accounts, updatedAt: serverTimestamp() },
           { merge: true }
         );
       } catch (error) {
@@ -380,7 +401,7 @@ export default function Page() {
       }
     };
     void saveUserData();
-  }, [activeShopOwnerUid, authUser, db, role, branches, products, services, sales, expenses, expenseGroups, users, activityLogs, shopTimeSettings]);
+  }, [activeShopOwnerUid, authUser, db, role, branches, products, services, sales, expenses, expenseGroups, users, activityLogs, shopTimeSettings, accounts]);
 
   const handleLogin = async () => {
     if (!firebaseApp) return;
@@ -411,6 +432,7 @@ export default function Page() {
     setServices([]);
     setSales([]);
     setExpenses([]);
+    setAccounts([]);
     setExpenseGroups([]);
     setUsers([]);
     setActivityLogs([]);
@@ -418,7 +440,7 @@ export default function Page() {
     setProductForm({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0 });
     setServiceForm({ name: '', branchId: '', amount: 0, serviceType: 'direct_cost', directCost: 0, monthlySharedCost: 0, expenseGroupId: '' });
     setSaleForm({ productId: '', qty: 1 });
-    setExpenseForm({ id: '', title: '', branchId: '', amount: 0, expenseGroupId: '' });
+    setExpenseForm({ id: '', title: '', branchId: '', amount: 0, expenseGroupId: '', accountId: '' });
     setUserForm({ id: '', name: '', email: '', role: 'cashier', branchId: '' });
   };
 
@@ -790,6 +812,7 @@ export default function Page() {
       qty: 1,
       amount: service.salePrice,
       cost: service.serviceType === 'direct_cost' ? service.directCost : 0,
+      accountId: defaultAccount?.id,
       ...currentAuditStamp(),
     };
     setSales((prev) => [newSale, ...prev]);
@@ -799,6 +822,23 @@ export default function Page() {
 
 
   const expenseGroupMap = useMemo(() => Object.fromEntries(expenseGroups.map((g) => [g.id, g.name])), [expenseGroups]);
+  const defaultAccount = useMemo(() => accounts.find((account) => account.isDefault) || accounts[0], [accounts]);
+  const accountMap = useMemo(() => Object.fromEntries(accounts.map((account) => [account.id, account.name])), [accounts]);
+  const accountBalances = useMemo(() => {
+    const balances = new Map<string, number>();
+    accounts.forEach((account) => balances.set(account.id, account.openingBalance || 0));
+    sales.forEach((sale) => {
+      const accountId = sale.accountId || defaultAccount?.id;
+      if (!accountId) return;
+      balances.set(accountId, (balances.get(accountId) || 0) + sale.amount);
+    });
+    expenses.forEach((expense) => {
+      const accountId = expense.accountId || defaultAccount?.id;
+      if (!accountId) return;
+      balances.set(accountId, (balances.get(accountId) || 0) - expense.amount);
+    });
+    return balances;
+  }, [accounts, defaultAccount?.id, expenses, sales]);
 
   const createExpenseGroup = (e: React.FormEvent) => {
     e.preventDefault();
@@ -813,6 +853,26 @@ export default function Page() {
     setExpenseGroups((prev) => [newGroup, ...prev]);
     setExpenseGroupForm({ name: '' });
     setStatus(`Expense group "${name}" created.`);
+  };
+  const createAccount = (e: React.FormEvent) => {
+    e.preventDefault();
+    const name = accountForm.name.trim();
+    if (!name) return;
+    const exists = accounts.some((account) => account.name.toLowerCase() === name.toLowerCase());
+    if (exists) {
+      showNotification('Account already exists', 'error');
+      return;
+    }
+    const newAccount: Account = {
+      id: crypto.randomUUID(),
+      name,
+      openingBalance: Number(accountForm.openingBalance) || 0,
+      isDefault: false,
+      ...currentAuditStamp(),
+    };
+    setAccounts((prev) => [...prev, newAccount]);
+    setAccountForm({ name: '', openingBalance: 0 });
+    showNotification(`Account "${name}" created`, 'success');
   };
 
   const transferUngroupedExpenses = () => {
@@ -863,16 +923,21 @@ export default function Page() {
   const saveExpense = (e: React.FormEvent) => {
     e.preventDefault();
     if (!expenseForm.title || !expenseForm.branchId || expenseForm.amount <= 0) return;
+    const selectedAccountId = expenseForm.accountId || defaultAccount?.id;
+    if (!selectedAccountId) {
+      showNotification('Please create an account first (CASH is created by default).', 'error');
+      return;
+    }
     if (expenseForm.id) {
-      setExpenses((prev) => prev.map((ex) => (ex.id === expenseForm.id ? { ...ex, ...expenseForm, ...updatedAuditStamp() } : ex)));
+      setExpenses((prev) => prev.map((ex) => (ex.id === expenseForm.id ? { ...ex, ...expenseForm, accountId: selectedAccountId, ...updatedAuditStamp() } : ex)));
       setStatus('Expense updated.');
       logActivity('edit_expense', `Updated expense "${expenseForm.title}"`);
     } else {
-      setExpenses((prev) => [...prev, { ...expenseForm, id: crypto.randomUUID(), ...currentAuditStamp() }]);
+      setExpenses((prev) => [...prev, { ...expenseForm, accountId: selectedAccountId, id: crypto.randomUUID(), ...currentAuditStamp() }]);
       setStatus('Expense recorded.');
       logActivity('add_expense', `Added expense "${expenseForm.title}"`);
     }
-    setExpenseForm({ id: '', title: '', branchId: '', amount: 0, expenseGroupId: '' });
+    setExpenseForm({ id: '', title: '', branchId: '', amount: 0, expenseGroupId: '', accountId: defaultAccount?.id || '' });
     setShowExpenseModal(false);
   };
 
@@ -1028,6 +1093,7 @@ export default function Page() {
       qty: item.qty,
       amount: getEffectiveUnitPrice(item) * item.qty,
       cost: item.unitCost * item.qty,
+      accountId: defaultAccount?.id,
       ...currentAuditStamp(),
     }));
     setSales(prev => [...newSales, ...prev]);
@@ -1057,6 +1123,7 @@ export default function Page() {
       qty: saleForm.qty,
       amount: p.salePrice * saleForm.qty,
       cost: p.purchasePrice * saleForm.qty,
+      accountId: defaultAccount?.id,
       ...currentAuditStamp(),
     };
     setSales((prev) => [newSale, ...prev]);
@@ -1213,7 +1280,7 @@ export default function Page() {
       setStatus('Only the shop owner or admin can edit expenses.');
       return;
     }
-    setExpenseForm({ id: expense.id, title: expense.title, branchId: expense.branchId, amount: expense.amount, expenseGroupId: expense.expenseGroupId || '' });
+    setExpenseForm({ id: expense.id, title: expense.title, branchId: expense.branchId, amount: expense.amount, expenseGroupId: expense.expenseGroupId || '', accountId: expense.accountId || defaultAccount?.id || '' });
     setShowExpenseModal(true);
   };
 
@@ -2022,7 +2089,7 @@ export default function Page() {
           <section>
             <div className="page-header">
               <h2>💰 Expense Tracking</h2>
-              <button className="primary" onClick={() => { setExpenseForm({ id: '', title: '', branchId: branches[0]?.id || '', amount: 0, expenseGroupId: '' }); setShowExpenseModal(true); }}>
+              <button className="primary" onClick={() => { setExpenseForm({ id: '', title: '', branchId: branches[0]?.id || '', amount: 0, expenseGroupId: '', accountId: defaultAccount?.id || '' }); setShowExpenseModal(true); }}>
                 + Add Expense
               </button>
             </div>
@@ -2458,6 +2525,7 @@ export default function Page() {
               <button onClick={() => setSettingsTab('shop')} style={{ padding: '0.75rem 1.5rem', borderBottom: settingsTab === 'shop' ? '3px solid var(--primary)' : 'none', background: 'none', cursor: 'pointer', fontWeight: settingsTab === 'shop' ? 600 : 400 }}>Shop Information</button>
               <button onClick={() => setSettingsTab('branches')} style={{ padding: '0.75rem 1.5rem', borderBottom: settingsTab === 'branches' ? '3px solid var(--primary)' : 'none', background: 'none', cursor: 'pointer', fontWeight: settingsTab === 'branches' ? 600 : 400 }}>Manage Branches</button>
               <button onClick={() => setSettingsTab('time')} style={{ padding: '0.75rem 1.5rem', borderBottom: settingsTab === 'time' ? '3px solid var(--primary)' : 'none', background: 'none', cursor: 'pointer', fontWeight: settingsTab === 'time' ? 600 : 400 }}>Time & Timezone</button>
+              <button onClick={() => setSettingsTab('accounts')} style={{ padding: '0.75rem 1.5rem', borderBottom: settingsTab === 'accounts' ? '3px solid var(--primary)' : 'none', background: 'none', cursor: 'pointer', fontWeight: settingsTab === 'accounts' ? 600 : 400 }}>Accounts</button>
             </div>
 
             {settingsTab === 'shop' && (
@@ -2529,6 +2597,38 @@ export default function Page() {
                       })}
                     </select>
                   </div>
+                </div>
+              </div>
+            )}
+            {settingsTab === 'accounts' && (
+              <div className="card">
+                <h3>Accounts</h3>
+                <p style={{ color: 'var(--text-muted)' }}>Sales are credited to the default CASH account. Expenses are deducted from the selected account (default CASH).</p>
+                <form onSubmit={createAccount} className="form" style={{ marginTop: '1rem' }}>
+                  <label className="field">
+                    <span>Account Name</span>
+                    <input value={accountForm.name} onChange={(e) => setAccountForm((prev) => ({ ...prev, name: e.target.value }))} placeholder="e.g. Mobile Money" required />
+                  </label>
+                  <label className="field">
+                    <span>Opening Balance (UGX)</span>
+                    <input type="number" value={accountForm.openingBalance} onChange={(e) => setAccountForm((prev) => ({ ...prev, openingBalance: Number(e.target.value) }))} />
+                  </label>
+                  <div><button type="submit" className="primary">+ Add Account</button></div>
+                </form>
+                <div className="table-wrap" style={{ marginTop: '1rem' }}>
+                  <table className="data-table">
+                    <thead><tr><th>Account</th><th>Type</th><th>Opening Balance</th><th>Current Balance</th></tr></thead>
+                    <tbody>
+                      {accounts.map((account) => (
+                        <tr key={account.id}>
+                          <td>{account.name}</td>
+                          <td>{account.isDefault ? 'Default' : 'Custom'}</td>
+                          <td>{formatUGX(account.openingBalance || 0)}</td>
+                          <td>{formatUGX(accountBalances.get(account.id) || 0)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               </div>
             )}
@@ -2690,6 +2790,13 @@ export default function Page() {
                       <select value={expenseForm.expenseGroupId} onChange={(e) => setExpenseForm({ ...expenseForm, expenseGroupId: e.target.value })}>
                         <option value="">No group (Ungrouped)</option>
                         {expenseGroups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Deduct From Account</span>
+                      <select value={expenseForm.accountId} onChange={(e) => setExpenseForm({ ...expenseForm, accountId: e.target.value })} required>
+                        <option value="">Select Account</option>
+                        {accounts.map((account) => <option key={account.id} value={account.id}>{account.name}{account.isDefault ? ' (Default)' : ''}</option>)}
                       </select>
                     </label>
                     <label className="field">
