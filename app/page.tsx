@@ -61,6 +61,19 @@ const periodStart = (period: 'day' | 'week' | 'month' | 'year', date: Date = new
   return new Date(d.getFullYear(), 0, 1);
 };
 
+const sanitizeForFirestore = (value: unknown): unknown => {
+  if (value === undefined) return null;
+  if (Array.isArray(value)) return value.map((item) => sanitizeForFirestore(item));
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, entryValue]) => entryValue !== undefined)
+        .map(([entryKey, entryValue]) => [entryKey, sanitizeForFirestore(entryValue)])
+    );
+  }
+  return value;
+};
+
 export default function Page() {
   const [authUser, setAuthUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
@@ -370,9 +383,22 @@ export default function Page() {
       if (!authUser || !db || !hasLoadedUserDataRef.current || !activeShopOwnerUid || isSwitchingShopRef.current) return;
       try {
         const userDataRef = doc(db, 'users', activeShopOwnerUid, 'pos', 'data');
+        const sanitizedPayload = sanitizeForFirestore({
+          role,
+          branches,
+          products,
+          services,
+          sales,
+          expenses,
+          expenseGroups,
+          users,
+          activityLogs,
+          shopTimeSettings,
+          updatedAt: serverTimestamp(),
+        });
         await setDoc(
           userDataRef,
-          { role, branches, products, services, sales, expenses, expenseGroups, users, activityLogs, shopTimeSettings, updatedAt: serverTimestamp() },
+          sanitizedPayload,
           { merge: true }
         );
       } catch (error) {
