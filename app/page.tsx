@@ -24,7 +24,7 @@ type AuditStamp = {
 };
 
 type Product = { id: string; name: string; branchId: string; stock: number; purchasePrice: number; salePrice: number } & AuditStamp;
-type ServiceType = 'direct_cost' | 'shared_cost';
+type ServiceType = 'direct_cost' | 'shared_cost' | 'hybrid_cost';
 type Service = { id: string; name: string; branchId: string; salePrice: number; serviceType: ServiceType; directCost: number; monthlySharedCost: number; expenseGroupId?: string } & AuditStamp;
 type Sale = { id: string; type: 'product' | 'service'; itemName: string; branchId: string; qty: number; amount: number; cost: number; accountId?: string } & AuditStamp;
 type ExpenseGroup = { id: string; name: string } & AuditStamp;
@@ -198,6 +198,13 @@ export default function Page() {
   const cartProfit = useMemo(() => cartTotal - cartCost, [cartTotal, cartCost]);
   const db = firebaseApp ? getFirestore(firebaseApp) : null;
   const formatUGX = (value: number) => `UGX ${new Intl.NumberFormat('en-UG', { maximumFractionDigits: 0 }).format(Math.round(value))}`;
+  const serviceTypeLabels: Record<ServiceType, string> = {
+    direct_cost: 'Direct Cost',
+    shared_cost: 'Shared Monthly Cost',
+    hybrid_cost: 'Direct + Monthly Cost',
+  };
+  const serviceHasDirectCost = (serviceType: ServiceType) => serviceType === 'direct_cost' || serviceType === 'hybrid_cost';
+  const serviceHasMonthlyCost = (serviceType: ServiceType) => serviceType === 'shared_cost' || serviceType === 'hybrid_cost';
   const ensureDefaultCashAccount = useCallback((existingAccounts: Account[]) => {
     const normalized = existingAccounts.map((account) => ({ ...account, openingBalance: Number.isFinite(account.openingBalance) ? account.openingBalance : 0 }));
     const existingCash = normalized.find((account) => account.name.trim().toLowerCase() === 'cash');
@@ -321,7 +328,7 @@ export default function Page() {
     const serviceCostByName = new Map(
       payload.services.map((service) => [
         service.name.trim().toLowerCase(),
-        service.serviceType === 'shared_cost' ? 0 : service.directCost,
+        serviceHasDirectCost(service.serviceType || 'direct_cost') ? service.directCost : 0,
       ])
     );
 
@@ -333,7 +340,7 @@ export default function Page() {
 
     const totalInventoryValue = payload.products.reduce((sum, product) => sum + product.stock * product.purchasePrice, 0);
     const monthlySharedCostTotal = payload.services
-      .filter((service) => service.serviceType === 'shared_cost')
+      .filter((service) => serviceHasMonthlyCost(service.serviceType || 'direct_cost'))
       .reduce((sum, service) => sum + service.monthlySharedCost, 0);
     const totalExpenseValue = payload.expenses.reduce((sum, expense) => sum + expense.amount, 0);
 
@@ -480,36 +487,33 @@ export default function Page() {
   };
 
   // Enhanced Metric Calculation Utilities
-  const getSharedServiceCostForRange = (periodSales: Sale[]) => {
-    const sharedServices = services.filter((service) => service.serviceType === 'shared_cost');
-    if (sharedServices.length === 0 || periodSales.length === 0) return 0;
-
-    const sharedCostByService = new Map(
-      sharedServices.map((service) => [
-        `${service.branchId}::${service.name.trim().toLowerCase()}`,
-        service.monthlySharedCost / 30,
-      ])
+  const getAllocatedSharedServiceCostForRange = useCallback((start: Date, end: Date, branchId?: string) => {
+    const sharedServices = services.filter((service) =>
+      serviceHasMonthlyCost(service.serviceType || 'direct_cost')
+      && service.monthlySharedCost > 0
+      && (!branchId || service.branchId === branchId)
     );
+    if (sharedServices.length === 0 || end <= start) return 0;
 
-    const activeServiceDays = new Set<string>();
+    const cursor = new Date(start);
+    cursor.setHours(0, 0, 0, 0);
+    const endCursor = new Date(end);
+    endCursor.setHours(0, 0, 0, 0);
+    const daysInRange: Date[] = [];
+    while (cursor < endCursor) {
+      daysInRange.push(new Date(cursor));
+      cursor.setDate(cursor.getDate() + 1);
+    }
+    const safeDays = daysInRange.length > 0 ? daysInRange : [new Date(start)];
 
-    periodSales
-      .filter((sale) => sale.type === 'service')
-      .forEach((sale) => {
-        const serviceKey = `${sale.branchId}::${sale.itemName.trim().toLowerCase()}`;
-        if (!sharedCostByService.has(serviceKey)) return;
-        const saleDay = new Date(sale.createdAt).toISOString().slice(0, 10);
-        activeServiceDays.add(`${serviceKey}::${saleDay}`);
-      });
-
-    let allocatedSharedCost = 0;
-    activeServiceDays.forEach((activeDayKey) => {
-      const [serviceKey] = activeDayKey.split('::', 2);
-      allocatedSharedCost += sharedCostByService.get(serviceKey) ?? 0;
-    });
-
-    return allocatedSharedCost;
-  };
+    return sharedServices.reduce((sum, service) => {
+      const allocated = safeDays.reduce((daySum, day) => {
+        const daysInMonth = new Date(day.getFullYear(), day.getMonth() + 1, 0).getDate();
+        return daySum + (service.monthlySharedCost / daysInMonth);
+      }, 0);
+      return sum + allocated;
+    }, 0);
+  }, [services]);
 
   const getBusinessDayRange = useCallback((reference: Date, offsetDays: number = 0) => {
     const [startHourStr, startMinuteStr] = shopTimeSettings.dayStartTime.split(':');
@@ -557,7 +561,7 @@ export default function Page() {
     const revenue = periodSales.reduce((a, s) => a + s.amount, 0);
     const cost = periodSales.reduce((a, s) => a + s.cost, 0);
     const expenseTotal = periodExpenses.reduce((a, e) => a + e.amount, 0);
-    const sharedServiceCost = getSharedServiceCostForRange(periodSales);
+    const sharedServiceCost = getAllocatedSharedServiceCostForRange(start, end);
     const grossProfit = revenue - cost - sharedServiceCost;
     const netProfit = grossProfit - expenseTotal;
 
@@ -572,6 +576,62 @@ export default function Page() {
     };
     return getMetricsForPeriod(periodMap[period], offset);
   };
+
+  const accountingSnapshot = useMemo(() => {
+    const now = new Date();
+    const dayRange = getBusinessDayRange(now);
+    const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay());
+    const weekEnd = new Date(weekStart.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    const monthSales = sales.filter((sale) => {
+      const saleDate = new Date(sale.createdAt);
+      return saleDate >= monthStart && saleDate < monthEnd;
+    });
+    const streams = new Map<string, { name: string; type: 'Product Sales' | 'Service Income'; revenue: number; directCost: number; qty: number; overhead: number }>();
+
+    monthSales.forEach((sale) => {
+      const key = `${sale.type}:${sale.itemName}`;
+      const existing = streams.get(key) || {
+        name: sale.itemName,
+        type: sale.type === 'product' ? 'Product Sales' : 'Service Income',
+        revenue: 0,
+        directCost: 0,
+        qty: 0,
+        overhead: 0,
+      };
+      existing.revenue += sale.amount;
+      existing.directCost += sale.cost;
+      existing.qty += sale.qty;
+      streams.set(key, existing);
+    });
+
+    services
+      .filter((service) => serviceHasMonthlyCost(service.serviceType || 'direct_cost') && service.monthlySharedCost > 0)
+      .forEach((service) => {
+        const key = `service:${service.name}`;
+        const existing = streams.get(key) || {
+          name: service.name,
+          type: 'Service Income' as const,
+          revenue: 0,
+          directCost: 0,
+          qty: 0,
+          overhead: 0,
+        };
+        existing.overhead += service.monthlySharedCost;
+        streams.set(key, existing);
+      });
+
+    return {
+      daily: getMetricsForPeriod('daily'),
+      weekly: getMetricsForPeriod('weekly'),
+      monthly: getMetricsForPeriod('monthly'),
+      dailyAllocatedOverhead: getAllocatedSharedServiceCostForRange(dayRange.start, dayRange.end),
+      weeklyAllocatedOverhead: getAllocatedSharedServiceCostForRange(weekStart, weekEnd),
+      monthlyAllocatedOverhead: getAllocatedSharedServiceCostForRange(monthStart, monthEnd),
+      streams: Array.from(streams.values()).sort((a, b) => b.revenue - a.revenue),
+    };
+  }, [getAllocatedSharedServiceCostForRange, getBusinessDayRange, sales, services]);
 
   const calculateChange = (current: number, previous: number) => {
     if (previous === 0) return current > 0 ? 100 : 0;
@@ -611,7 +671,7 @@ export default function Page() {
         period: dashboardPeriod
       }
     };
-  }, [sales, expenses, products, dashboardPeriod, services, getBusinessDayRange]);
+  }, [sales, expenses, products, dashboardPeriod, services, getBusinessDayRange, getAllocatedSharedServiceCostForRange]);
 
   // Product & Service Chart Data
   const chartData = useMemo(() => {
@@ -724,38 +784,6 @@ export default function Page() {
     updatedByEmail: authUser?.email || 'unknown',
   });
 
-  useEffect(() => {
-    const todayKey = new Date().toISOString().slice(0, 10);
-    const sharedCostServices = services.filter((service) => service.serviceType === 'shared_cost' && service.monthlySharedCost > 0);
-    if (sharedCostServices.length === 0) return;
-
-    setExpenses((prev) => {
-      const existingAutoExpenseKeys = new Set(
-        prev
-          .filter((expense) => expense.id.startsWith('auto-shared-cost::'))
-          .map((expense) => expense.id)
-      );
-
-      const newAutoExpenses: Expense[] = [];
-      sharedCostServices.forEach((service) => {
-        const autoExpenseId = `auto-shared-cost::${todayKey}::${service.branchId}::${service.id}`;
-        if (existingAutoExpenseKeys.has(autoExpenseId)) return;
-
-        newAutoExpenses.push({
-          id: autoExpenseId,
-          title: `Shared Cost (${todayKey}) - ${service.name}`,
-          branchId: service.branchId,
-          amount: service.monthlySharedCost / 30,
-          expenseGroupId: service.expenseGroupId || undefined,
-          ...currentAuditStamp(),
-        });
-      });
-
-      if (newAutoExpenses.length === 0) return prev;
-      return [...newAutoExpenses, ...prev];
-    });
-  }, [services]);
-
   const logActivity = (action: string, details: string) => {
     setActivityLogs((prev) => [{
       id: crypto.randomUUID(),
@@ -786,8 +814,8 @@ export default function Page() {
   const saveService = (e: React.FormEvent) => {
     e.preventDefault();
     if (!serviceForm.name || !serviceForm.branchId || serviceForm.amount <= 0) return;
-    if (serviceForm.serviceType === 'direct_cost' && serviceForm.directCost < 0) return;
-    if (serviceForm.serviceType === 'shared_cost' && serviceForm.monthlySharedCost <= 0) return;
+    if (serviceHasDirectCost(serviceForm.serviceType) && serviceForm.directCost < 0) return;
+    if (serviceHasMonthlyCost(serviceForm.serviceType) && serviceForm.monthlySharedCost <= 0) return;
 
     setServices((prev) => {
       const existing = prev.find((service) => service.name.toLowerCase() === serviceForm.name.trim().toLowerCase() && service.branchId === serviceForm.branchId);
@@ -799,9 +827,9 @@ export default function Page() {
                 name: serviceForm.name.trim(),
                 salePrice: serviceForm.amount,
                 serviceType: serviceForm.serviceType,
-                directCost: serviceForm.serviceType === 'direct_cost' ? serviceForm.directCost : 0,
-                monthlySharedCost: serviceForm.serviceType === 'shared_cost' ? serviceForm.monthlySharedCost : 0,
-                expenseGroupId: serviceForm.serviceType === 'shared_cost' ? (serviceForm.expenseGroupId || undefined) : undefined,
+                directCost: serviceHasDirectCost(serviceForm.serviceType) ? serviceForm.directCost : 0,
+                monthlySharedCost: serviceHasMonthlyCost(serviceForm.serviceType) ? serviceForm.monthlySharedCost : 0,
+                expenseGroupId: serviceHasMonthlyCost(serviceForm.serviceType) ? (serviceForm.expenseGroupId || undefined) : undefined,
                 ...updatedAuditStamp()
               }
             : service
@@ -813,9 +841,9 @@ export default function Page() {
         branchId: serviceForm.branchId,
         salePrice: serviceForm.amount,
         serviceType: serviceForm.serviceType,
-        directCost: serviceForm.serviceType === 'direct_cost' ? serviceForm.directCost : 0,
-        monthlySharedCost: serviceForm.serviceType === 'shared_cost' ? serviceForm.monthlySharedCost : 0,
-        expenseGroupId: serviceForm.serviceType === 'shared_cost' ? (serviceForm.expenseGroupId || undefined) : undefined,
+        directCost: serviceHasDirectCost(serviceForm.serviceType) ? serviceForm.directCost : 0,
+        monthlySharedCost: serviceHasMonthlyCost(serviceForm.serviceType) ? serviceForm.monthlySharedCost : 0,
+        expenseGroupId: serviceHasMonthlyCost(serviceForm.serviceType) ? (serviceForm.expenseGroupId || undefined) : undefined,
         ...currentAuditStamp()
       }];
     });
@@ -841,7 +869,7 @@ export default function Page() {
       branchId: service.branchId,
       qty: 1,
       amount: service.salePrice,
-      cost: service.serviceType === 'direct_cost' ? service.directCost : 0,
+      cost: serviceHasDirectCost(service.serviceType || 'direct_cost') ? service.directCost : 0,
       accountId: selectedSaleAccountId,
       ...currentAuditStamp(),
     };
@@ -1119,7 +1147,7 @@ export default function Page() {
         itemName: service.name,
         qty: 1,
         unitPrice: service.salePrice,
-        unitCost: service.serviceType === 'direct_cost' ? service.directCost : 0,
+        unitCost: serviceHasDirectCost(service.serviceType || 'direct_cost') ? service.directCost : 0,
         branchId: service.branchId,
       }]);
     }
@@ -2024,22 +2052,24 @@ export default function Page() {
                   <label>Service Type</label>
                   <select value={serviceForm.serviceType} onChange={(e) => setServiceForm((prev) => ({ ...prev, serviceType: e.target.value as ServiceType }))}>
                     <option value="direct_cost">Direct Cost Service</option>
-                    <option value="shared_cost">Shared Cost Service</option>
+                    <option value="shared_cost">Monthly Shared Cost Service</option>
+                    <option value="hybrid_cost">Direct + Monthly Cost Service</option>
                   </select>
                 </div>
-                {serviceForm.serviceType === 'direct_cost' ? (
+                {serviceHasDirectCost(serviceForm.serviceType) && (
                   <div className="field">
-                    <label>Direct Cost</label>
+                    <label>Direct Cost Per Sale</label>
                     <input type="number" min={0} value={serviceForm.directCost} onChange={(e) => setServiceForm((prev) => ({ ...prev, directCost: Number(e.target.value) }))} />
                   </div>
-                ) : (
+                )}
+                {serviceHasMonthlyCost(serviceForm.serviceType) && (
                   <>
                     <div className="field">
                       <label>Monthly Shared Cost</label>
                       <input type="number" min={0} value={serviceForm.monthlySharedCost} onChange={(e) => setServiceForm((prev) => ({ ...prev, monthlySharedCost: Number(e.target.value) }))} />
                     </div>
                     <div className="field">
-                      <label>Expense Group (for auto-added expenses)</label>
+                      <label>Expense Group (reporting allocation)</label>
                       <select value={serviceForm.expenseGroupId} onChange={(e) => setServiceForm((prev) => ({ ...prev, expenseGroupId: e.target.value }))}>
                         <option value="">Ungrouped</option>
                         {expenseGroups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
@@ -2068,12 +2098,13 @@ export default function Page() {
                     <tr key={service.id}>
                       <td style={{ fontWeight: 600 }}>{service.name}</td>
                       <td>{branchMap[service.branchId]}</td>
-                      <td>{service.serviceType === 'direct_cost' ? 'Direct Cost' : 'Shared Cost'}</td>
+                      <td>{serviceTypeLabels[service.serviceType || 'direct_cost']}</td>
                       <td>{formatUGX(service.salePrice)}</td>
                       <td>
-                        {service.serviceType === 'direct_cost'
-                          ? `Unit cost: ${formatUGX(service.directCost)}`
-                          : `Monthly: ${formatUGX(service.monthlySharedCost)} | Weekly: ${formatUGX(service.monthlySharedCost / 4)} | Daily: ${formatUGX(service.monthlySharedCost / 30)}`}
+                        {[
+                          serviceHasDirectCost(service.serviceType || 'direct_cost') ? `Unit: ${formatUGX(service.directCost)}` : '',
+                          serviceHasMonthlyCost(service.serviceType || 'direct_cost') ? `Monthly: ${formatUGX(service.monthlySharedCost)} | Daily: ${formatUGX(service.monthlySharedCost / 30)}` : '',
+                        ].filter(Boolean).join(' + ') || 'No cost configured'}
                       </td>
                       <td>
                         <button className="edit-btn" onClick={() => setServiceForm({
@@ -2478,6 +2509,31 @@ export default function Page() {
               <h2>Business Reports & Analytics</h2>
             </div>
 
+            <div className="card" style={{ marginBottom: '1rem' }}>
+              <h3 style={{ marginTop: 0 }}>Tally-style Profit Model</h3>
+              <p style={{ color: 'var(--text-muted)', marginTop: 0 }}>
+                Products use purchase price as cost of goods sold. Services can now carry a direct unit cost, a monthly overhead allocation, or both. Monthly overhead is allocated in reports only, so it does not reduce cash accounts until you record the real payment as an expense.
+              </p>
+              <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
+                <div>
+                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Daily Allocated Overhead</div>
+                  <strong>{formatUGX(accountingSnapshot.dailyAllocatedOverhead)}</strong>
+                </div>
+                <div>
+                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Weekly Allocated Overhead</div>
+                  <strong>{formatUGX(accountingSnapshot.weeklyAllocatedOverhead)}</strong>
+                </div>
+                <div>
+                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Monthly Allocated Overhead</div>
+                  <strong>{formatUGX(accountingSnapshot.monthlyAllocatedOverhead)}</strong>
+                </div>
+                <div>
+                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Monthly Operating Profit</div>
+                  <strong style={{ color: accountingSnapshot.monthly.netProfit >= 0 ? 'var(--success)' : 'var(--danger)' }}>{formatUGX(accountingSnapshot.monthly.netProfit)}</strong>
+                </div>
+              </div>
+            </div>
+
             <div className="grid" style={{ gridTemplateColumns: 'repeat(2, 1fr)' }}>
               <div className="card">
                 <h4>Daily Summary</h4>
@@ -2549,6 +2605,44 @@ export default function Page() {
                     <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--info)' }}>{formatUGX(products.reduce((a, p) => a + (p.stock * p.purchasePrice), 0))}</div>
                   </div>
                 </div>
+              </div>
+            </div>
+
+            <div style={{ marginTop: '3rem' }}>
+              <h3 style={{ marginBottom: '1rem' }}>Monthly Income Streams</h3>
+              <div className="table-wrap">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Income Stream</th>
+                      <th>Type</th>
+                      <th>Qty</th>
+                      <th>Revenue</th>
+                      <th>Direct Cost</th>
+                      <th>Allocated Overhead</th>
+                      <th>Operating Profit</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {accountingSnapshot.streams.length > 0 ? accountingSnapshot.streams.map((stream) => (
+                      <tr key={`${stream.type}-${stream.name}`}>
+                        <td style={{ fontWeight: 600 }}>{stream.name}</td>
+                        <td>{stream.type}</td>
+                        <td>{stream.qty}</td>
+                        <td>{formatUGX(stream.revenue)}</td>
+                        <td>{formatUGX(stream.directCost)}</td>
+                        <td>{formatUGX(stream.overhead)}</td>
+                        <td style={{ color: stream.revenue - stream.directCost - stream.overhead >= 0 ? 'var(--success)' : 'var(--danger)', fontWeight: 700 }}>
+                          {formatUGX(stream.revenue - stream.directCost - stream.overhead)}
+                        </td>
+                      </tr>
+                    )) : (
+                      <tr>
+                        <td colSpan={7} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>No sales or service overhead configured for this month.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
               </div>
             </div>
 
