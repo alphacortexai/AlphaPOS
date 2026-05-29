@@ -14,7 +14,7 @@ Alpha Matrix is implemented with **Next.js (App Router)** and React.
 
 ## Accounting setup model
 
-Alpha Matrix now supports a Tally-style profit structure without changing the simple POS workflow:
+Alpha Matrix now supports a profit and cost allocation structure without changing the simple POS workflow:
 
 - **Products / retail:** enter purchase price and sale price on each product. Sales automatically reduce stock and use purchase price as cost of goods sold.
 - **Direct-cost services:** use this for services with a known cost per sale, such as printing where paper is UGX 50 and ink is UGX 100 per page. Enter UGX 150 as the direct cost per sale.

@@ -689,7 +689,7 @@ body {
   letter-spacing: 0.05em;
 }
 
-input, select {
+input, select, textarea {
   width: 100%;
   padding: var(--space-sm) var(--space-md);
   font-size: 0.9rem;
@@ -700,11 +700,29 @@ input, select {
   font-family: inherit;
 }
 
-input::placeholder {
+textarea {
+  resize: vertical;
+  min-height: 92px;
+}
+
+.field-full {
+  grid-column: 1 / -1;
+}
+
+.field-hint {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  background: var(--info-light);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-md);
+}
+
+input::placeholder, textarea::placeholder {
   color: var(--text-light);
 }
 
-input:focus, select:focus {
+input:focus, select:focus, textarea:focus {
   outline: none;
   border-color: var(--primary);
   box-shadow: 0 0 0 3px var(--info-light);

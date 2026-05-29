@@ -28,7 +28,10 @@ type ServiceType = 'direct_cost' | 'shared_cost' | 'hybrid_cost';
 type Service = { id: string; name: string; branchId: string; salePrice: number; serviceType: ServiceType; directCost: number; monthlySharedCost: number; expenseGroupId?: string } & AuditStamp;
 type Sale = { id: string; type: 'product' | 'service'; itemName: string; branchId: string; qty: number; amount: number; cost: number; accountId?: string } & AuditStamp;
 type ExpenseGroup = { id: string; name: string } & AuditStamp;
-type Expense = { id: string; title: string; branchId: string; amount: number; expenseGroupId?: string; accountId?: string } & AuditStamp;
+type ExpenseType = 'direct_cost' | 'fixed_shared_overhead' | 'variable_overhead' | 'subscription' | 'tax_fee';
+type ExpenseFrequency = 'one_time' | 'daily' | 'weekly' | 'monthly' | 'yearly';
+type ExpenseAllocationMethod = 'none' | 'equal_split' | 'usage_based';
+type Expense = { id: string; title: string; branchId: string; amount: number; expenseGroupId?: string; accountId?: string; expenseType?: ExpenseType; frequency?: ExpenseFrequency; allocationMethod?: ExpenseAllocationMethod; allocationNotes?: string } & AuditStamp;
 type StaffUser = { id: string; name: string; email: string; role: Role; branchId: string } & AuditStamp;
 type ShopMembership = { ownerUid: string; shopName: string; role: Role };
 type ActivityLog = {
@@ -138,7 +141,7 @@ export default function Page() {
   const [saleForm, setSaleForm] = useState({ productId: '', qty: 1 });
   const [cart, setCart] = useState<CartItem[]>([]);
   const [selectedBranchForSale, setSelectedBranchForSale] = useState('');
-  const [expenseForm, setExpenseForm] = useState({ id: '', title: '', branchId: '', amount: 0, expenseGroupId: '', accountId: '' });
+  const [expenseForm, setExpenseForm] = useState({ id: '', title: '', branchId: '', amount: 0, expenseGroupId: '', accountId: '', expenseType: 'direct_cost' as ExpenseType, frequency: 'one_time' as ExpenseFrequency, allocationMethod: 'none' as ExpenseAllocationMethod, allocationNotes: '' });
   const [accountForm, setAccountForm] = useState({ name: '', openingBalance: 0 });
   const [saleAccountId, setSaleAccountId] = useState('');
   const [accountTopUpForm, setAccountTopUpForm] = useState({ accountId: '', amount: 0 });
@@ -202,6 +205,25 @@ export default function Page() {
     direct_cost: 'Direct Cost',
     shared_cost: 'Shared Monthly Cost',
     hybrid_cost: 'Direct + Monthly Cost',
+  };
+  const expenseTypeLabels: Record<ExpenseType, string> = {
+    direct_cost: 'Direct / job cost',
+    fixed_shared_overhead: 'Fixed shared overhead',
+    variable_overhead: 'Variable overhead',
+    subscription: 'Subscription',
+    tax_fee: 'Tax / fee',
+  };
+  const expenseFrequencyLabels: Record<ExpenseFrequency, string> = {
+    one_time: 'One-time',
+    daily: 'Daily',
+    weekly: 'Weekly',
+    monthly: 'Monthly',
+    yearly: 'Yearly',
+  };
+  const expenseAllocationLabels: Record<ExpenseAllocationMethod, string> = {
+    none: 'No allocation',
+    equal_split: 'Equal split',
+    usage_based: 'Usage-based',
   };
   const serviceHasDirectCost = (serviceType: ServiceType) => serviceType === 'direct_cost' || serviceType === 'hybrid_cost';
   const serviceHasMonthlyCost = (serviceType: ServiceType) => serviceType === 'shared_cost' || serviceType === 'hybrid_cost';
@@ -473,7 +495,7 @@ export default function Page() {
     setProductForm({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0 });
     setServiceForm({ name: '', branchId: '', amount: 0, serviceType: 'direct_cost', directCost: 0, monthlySharedCost: 0, expenseGroupId: '' });
     setSaleForm({ productId: '', qty: 1 });
-    setExpenseForm({ id: '', title: '', branchId: '', amount: 0, expenseGroupId: '', accountId: '' });
+    setExpenseForm({ id: '', title: '', branchId: '', amount: 0, expenseGroupId: '', accountId: '', expenseType: 'direct_cost', frequency: 'one_time', allocationMethod: 'none', allocationNotes: '' });
     setUserForm({ id: '', name: '', email: '', role: 'cashier', branchId: '' });
   };
 
@@ -1014,6 +1036,31 @@ export default function Page() {
     showNotification('Expense group updated', 'success');
   };
 
+  const expenseLedgerSummary = useMemo(() => {
+    const monthlyEquivalent = (expense: Expense) => {
+      const amount = Number(expense.amount) || 0;
+      const frequency = expense.frequency || 'one_time';
+      if (frequency === 'daily') return amount * 30;
+      if (frequency === 'weekly') return amount * 4.33;
+      if (frequency === 'monthly') return amount;
+      if (frequency === 'yearly') return amount / 12;
+      return amount;
+    };
+    const fixedSharedMonthly = expenses
+      .filter((expense) => expense.expenseType === 'fixed_shared_overhead')
+      .reduce((sum, expense) => sum + monthlyEquivalent(expense), 0);
+    const recurringMonthly = expenses
+      .filter((expense) => (expense.frequency || 'one_time') !== 'one_time')
+      .reduce((sum, expense) => sum + monthlyEquivalent(expense), 0);
+    const allocatableMonthly = expenses
+      .filter((expense) => (expense.allocationMethod || 'none') !== 'none')
+      .reduce((sum, expense) => sum + monthlyEquivalent(expense), 0);
+    const directExpenseTotal = expenses
+      .filter((expense) => (expense.expenseType || 'direct_cost') === 'direct_cost')
+      .reduce((sum, expense) => sum + expense.amount, 0);
+    return { fixedSharedMonthly, recurringMonthly, allocatableMonthly, directExpenseTotal };
+  }, [expenses]);
+
   const expenseChartData = useMemo(() => {
     const now = new Date();
     const rangeStart = new Date(now);
@@ -1055,7 +1102,7 @@ export default function Page() {
       setStatus('Expense recorded.');
       logActivity('add_expense', `Added expense "${expenseForm.title}"`);
     }
-    setExpenseForm({ id: '', title: '', branchId: '', amount: 0, expenseGroupId: '', accountId: defaultAccount?.id || '' });
+    setExpenseForm({ id: '', title: '', branchId: '', amount: 0, expenseGroupId: '', accountId: defaultAccount?.id || '', expenseType: 'direct_cost', frequency: 'one_time', allocationMethod: 'none', allocationNotes: '' });
     setShowExpenseModal(false);
   };
 
@@ -1406,7 +1453,7 @@ export default function Page() {
       setStatus('Only the shop owner or admin can edit expenses.');
       return;
     }
-    setExpenseForm({ id: expense.id, title: expense.title, branchId: expense.branchId, amount: expense.amount, expenseGroupId: expense.expenseGroupId || '', accountId: expense.accountId || defaultAccount?.id || '' });
+    setExpenseForm({ id: expense.id, title: expense.title, branchId: expense.branchId, amount: expense.amount, expenseGroupId: expense.expenseGroupId || '', accountId: expense.accountId || defaultAccount?.id || '', expenseType: expense.expenseType || 'direct_cost', frequency: expense.frequency || 'one_time', allocationMethod: expense.allocationMethod || 'none', allocationNotes: expense.allocationNotes || '' });
     setShowExpenseModal(true);
   };
 
@@ -2240,7 +2287,7 @@ export default function Page() {
           <section>
             <div className="page-header">
               <h2>💰 Expense Tracking</h2>
-              <button className="primary" onClick={() => { setExpenseForm({ id: '', title: '', branchId: branches[0]?.id || '', amount: 0, expenseGroupId: '', accountId: defaultAccount?.id || '' }); setShowExpenseModal(true); }}>
+              <button className="primary" onClick={() => { setExpenseForm({ id: '', title: '', branchId: branches[0]?.id || '', amount: 0, expenseGroupId: '', accountId: defaultAccount?.id || '', expenseType: 'direct_cost', frequency: 'one_time', allocationMethod: 'none', allocationNotes: '' }); setShowExpenseModal(true); }}>
                 + Add Expense
               </button>
             </div>
@@ -2270,6 +2317,36 @@ export default function Page() {
               </div>
             )}
             
+
+            <div className="card" style={{ marginBottom: '1rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem', flexWrap: 'wrap' }}>
+                <div>
+                  <h4 style={{ marginTop: 0, marginBottom: '0.35rem' }}>Expense Ledger</h4>
+                  <p style={{ color: 'var(--text-muted)', margin: 0, maxWidth: 760 }}>
+                    Record business support costs here instead of attaching them to a single sale. Example: a monthly Wi-Fi bill of {formatUGX(110000)} should be saved as a fixed shared overhead, monthly frequency, then allocated equally or by usage in your notes.
+                  </p>
+                </div>
+                <span className="badge badge-info">Overhead ready</span>
+              </div>
+              <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', marginTop: '1rem' }}>
+                <div>
+                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Fixed shared monthly</div>
+                  <div style={{ fontSize: '1.1rem', fontWeight: 700 }}>{formatUGX(expenseLedgerSummary.fixedSharedMonthly)}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Recurring monthly equivalent</div>
+                  <div style={{ fontSize: '1.1rem', fontWeight: 700 }}>{formatUGX(expenseLedgerSummary.recurringMonthly)}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Marked for allocation</div>
+                  <div style={{ fontSize: '1.1rem', fontWeight: 700 }}>{formatUGX(expenseLedgerSummary.allocatableMonthly)}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Direct expense total</div>
+                  <div style={{ fontSize: '1.1rem', fontWeight: 700 }}>{formatUGX(expenseLedgerSummary.directExpenseTotal)}</div>
+                </div>
+              </div>
+            </div>
 
             <div className="card" style={{ marginBottom: '1rem' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
@@ -2366,6 +2443,9 @@ export default function Page() {
                     <th>Expense Title</th>
                     <th>Branch</th>
                     <th>Amount</th>
+                    <th>Ledger Type</th>
+                    <th>Frequency</th>
+                    <th>Allocation</th>
                     <th>Expense Group</th>
                     <th>Actions</th>
                   </tr>
@@ -2378,6 +2458,12 @@ export default function Page() {
                         <td style={{ fontWeight: 600 }}>{e.title}</td>
                         <td>{branchMap[e.branchId]}</td>
                         <td style={{ color: 'var(--danger)', fontWeight: 600 }}>{formatUGX(e.amount)}</td>
+                        <td>{expenseTypeLabels[e.expenseType || 'direct_cost']}</td>
+                        <td>{expenseFrequencyLabels[e.frequency || 'one_time']}</td>
+                        <td>
+                          <div style={{ fontWeight: 600 }}>{expenseAllocationLabels[e.allocationMethod || 'none']}</div>
+                          {e.allocationNotes && <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>{e.allocationNotes}</div>}
+                        </td>
                         <td>{e.expenseGroupId ? expenseGroupMap[e.expenseGroupId] || 'Unknown group' : 'Ungrouped'}</td>
                         <td>
                           {canManageSalesAndExpenses ? (
@@ -2393,7 +2479,7 @@ export default function Page() {
                     ))
                   ) : (
                     <tr>
-                      <td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>No expenses found for this view</td>
+                      <td colSpan={9} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>No expenses found for this view</td>
                     </tr>
                   )}
                 </tbody>
@@ -2510,7 +2596,7 @@ export default function Page() {
             </div>
 
             <div className="card" style={{ marginBottom: '1rem' }}>
-              <h3 style={{ marginTop: 0 }}>Tally-style Profit Model</h3>
+              <h3 style={{ marginTop: 0 }}>Profit & Cost Allocation Model</h3>
               <p style={{ color: 'var(--text-muted)', marginTop: 0 }}>
                 Products use purchase price as cost of goods sold. Services can now carry a direct unit cost, a monthly overhead allocation, or both. Monthly overhead is allocated in reports only, so it does not reduce cash accounts until you record the real payment as an expense.
               </p>
@@ -3093,6 +3179,36 @@ export default function Page() {
                       <span>Amount (UGX)</span>
                       <input type="number" value={expenseForm.amount} onChange={(e) => setExpenseForm({ ...expenseForm, amount: Number(e.target.value) })} required />
                     </label>
+                    <label className="field">
+                      <span>Ledger Type</span>
+                      <select value={expenseForm.expenseType} onChange={(e) => setExpenseForm({ ...expenseForm, expenseType: e.target.value as ExpenseType })} required>
+                        {Object.entries(expenseTypeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Frequency</span>
+                      <select value={expenseForm.frequency} onChange={(e) => setExpenseForm({ ...expenseForm, frequency: e.target.value as ExpenseFrequency })} required>
+                        {Object.entries(expenseFrequencyLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Allocation</span>
+                      <select value={expenseForm.allocationMethod} onChange={(e) => setExpenseForm({ ...expenseForm, allocationMethod: e.target.value as ExpenseAllocationMethod })} required>
+                        {Object.entries(expenseAllocationLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                      </select>
+                    </label>
+                    <label className="field field-full">
+                      <span>Allocation Notes</span>
+                      <textarea
+                        value={expenseForm.allocationNotes}
+                        onChange={(e) => setExpenseForm({ ...expenseForm, allocationNotes: e.target.value })}
+                        placeholder="Example: Wi-Fi 110,000/month. Browsing 50%, POS/Admin 20%, Printing 10%, Online services 20%."
+                        rows={3}
+                      />
+                    </label>
+                    <div className="field-hint field-full">
+                      Fixed shared overheads such as internet, rent, salaries, subscriptions, and electricity belong in this ledger. They are not inventory and are not tied to one sale.
+                    </div>
                   </div>
                 </div>
                 <div className="modal-footer">
