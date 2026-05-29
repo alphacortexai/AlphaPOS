@@ -1544,10 +1544,10 @@ export default function Page() {
       </aside>
 
       <main className="main" style={{ display: 'flex', flexDirection: 'column' }}>
-        <header className="main-header" style={{ padding: 'var(--space-lg) var(--space-xl)', margin: '0 0 var(--space-xl) 0', borderBottom: '1px solid var(--border)', background: 'var(--bg)', position: 'sticky', top: 0, zIndex: 40 }}>
+        <header className="main-header" style={{ padding: 'var(--space-md) var(--space-lg)', margin: '0 0 var(--space-md) 0', borderBottom: '1px solid var(--border)', background: 'var(--bg)', position: 'sticky', top: 0, zIndex: 40 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-md)' }}>
             <button className="mobile-menu-toggle" onClick={() => setIsSidebarOpen(true)}>☰</button>
-            <h1 style={{ margin: 0, fontSize: '1.5rem', fontWeight: 700, letterSpacing: '-0.02em' }}>
+            <h1 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 700, letterSpacing: '-0.02em' }}>
               {view === 'dashboard' ? '📊 Dashboard Overview' : 
                view === 'sales' ? '🛒 Sales Desk' :
                view === 'sales_history' ? '🧾 Sales History' :
@@ -1563,7 +1563,7 @@ export default function Page() {
             </h1>
           </div>
           <div className="status-container" style={{ margin: 0 }}>
-            <span className="status" style={{ fontSize: '0.75rem', padding: '0.4rem 0.8rem' }}>{status}</span>
+            <span className="status" style={{ fontSize: '0.72rem', padding: '0.3rem 0.65rem' }}>{status}</span>
           </div>
         </header>
 
