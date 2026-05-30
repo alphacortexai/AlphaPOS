@@ -255,14 +255,14 @@ export default function Page() {
       if (!authUser || !db) return false;
       try {
         const normalizedEmail = authUser.email?.toLowerCase().trim();
-        const memberships: ShopMembership[] = [{ ownerUid: authUser.uid, shopName: 'My Shop', role: 'shop_owner' }];
+        const linkedMemberships: ShopMembership[] = [];
         if (normalizedEmail) {
           const membershipsQuery = query(collection(db, 'shopMemberships'), where('email', '==', normalizedEmail));
           const membershipSnap = await getDocs(membershipsQuery);
           membershipSnap.forEach((m) => {
             const data = m.data();
             if (data.ownerUid && data.ownerUid !== authUser.uid) {
-              memberships.push({
+              linkedMemberships.push({
                 ownerUid: data.ownerUid as string,
                 shopName: (data.shopName as string) || 'Linked Shop',
                 role: (data.role as Role) || 'cashier',
@@ -270,13 +270,45 @@ export default function Page() {
             }
           });
         }
+
+        const ownUserDataRef = doc(db, 'users', authUser.uid, 'pos', 'data');
+        const ownSnap = await getDoc(ownUserDataRef);
+        const ownData = ownSnap.exists() ? ownSnap.data() : null;
+        const ownShopName = typeof ownData?.shopName === 'string' && ownData.shopName.trim() ? ownData.shopName : 'My Shop';
+        const memberships: ShopMembership[] = [
+          ...(ownSnap.exists() || linkedMemberships.length === 0
+            ? [{ ownerUid: authUser.uid, shopName: ownShopName, role: 'shop_owner' as Role }]
+            : []),
+          ...linkedMemberships,
+        ];
+
         setAvailableShops(memberships);
-        const selectedShopOwnerUid = activeShopOwnerUid || memberships[0].ownerUid;
-        if (!activeShopOwnerUid) setActiveShopOwnerUid(selectedShopOwnerUid);
+        let selectedShopOwnerUid = activeShopOwnerUid;
+        if (!selectedShopOwnerUid || !memberships.some((shop) => shop.ownerUid === selectedShopOwnerUid)) {
+          selectedShopOwnerUid = memberships[0].ownerUid;
+          setActiveShopOwnerUid(selectedShopOwnerUid);
+        }
         const selectedShop = memberships.find((s) => s.ownerUid === selectedShopOwnerUid);
-        const userDataRef = doc(db, 'users', selectedShopOwnerUid, 'pos', 'data');
-        const snap = await getDoc(userDataRef);
+        const userDataRef = selectedShopOwnerUid === authUser.uid ? ownUserDataRef : doc(db, 'users', selectedShopOwnerUid, 'pos', 'data');
+        const snap = selectedShopOwnerUid === authUser.uid ? ownSnap : await getDoc(userDataRef);
         if (!snap.exists()) {
+          if (selectedShopOwnerUid !== authUser.uid) {
+            setBranches([]);
+            setProducts([]);
+            setServices([]);
+            setSales([]);
+            setExpenses([]);
+            setExpenseGroups([]);
+            setUsers([]);
+            setActivityLogs([]);
+            setAccounts([]);
+            setRole(selectedShop?.role || 'cashier');
+            hasLoadedUserDataRef.current = false;
+            isSwitchingShopRef.current = false;
+            setStatus(`No saved data was found for ${selectedShop?.shopName || 'the selected shop'}. Ask the shop owner to open the shop once or check your invitation.`);
+            return false;
+          }
+
           const defaultBranch = { id: crypto.randomUUID(), name: 'Main Branch', location: 'HQ', createdAt: new Date().toISOString() };
           setBranches([defaultBranch]);
           const defaultCashAccount = ensureDefaultCashAccount([]);
