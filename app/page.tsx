@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type Dispatch, type SetStateAction } from 'react';
 import { firebaseApp } from '../lib.firebase';
 import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth';
 import { collection, doc, getDoc, getDocs, getFirestore, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
@@ -31,6 +31,25 @@ type ExpenseGroup = { id: string; name: string } & AuditStamp;
 type Expense = { id: string; title: string; branchId: string; amount: number; expenseGroupId?: string; accountId?: string } & AuditStamp;
 type StaffUser = { id: string; name: string; email: string; role: Role; branchId: string } & AuditStamp;
 type ShopMembership = { ownerUid: string; shopName: string; role: Role };
+type ShopBackupPayload = {
+  app: 'AlphaPOS';
+  version: 1;
+  exportedAt: string;
+  shopName: string;
+  sourceOwnerUid: string;
+  data: {
+    branches: Branch[];
+    products: Product[];
+    services: Service[];
+    sales: Sale[];
+    expenses: Expense[];
+    expenseGroups: ExpenseGroup[];
+    users: StaffUser[];
+    activityLogs: ActivityLog[];
+    shopTimeSettings: ShopTimeSettings;
+    accounts: Account[];
+  };
+};
 type ActivityLog = {
   id: string;
   action: string;
@@ -90,6 +109,7 @@ export default function Page() {
   const hasLoadedUserDataRef = useRef(false);
   const isSwitchingShopRef = useRef(false);
   const notificationTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const backupFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [branches, setBranches] = useState<Branch[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -150,7 +170,7 @@ export default function Page() {
   const [showExpenseGroupsDetails, setShowExpenseGroupsDetails] = useState(false);
   const [userForm, setUserForm] = useState({ id: '', name: '', email: '', role: 'cashier' as Role, branchId: '' });
   const [shopNameForm, setShopNameForm] = useState('');
-  const [settingsTab, setSettingsTab] = useState<'shop' | 'branches' | 'time' | 'accounts'>('shop');
+  const [settingsTab, setSettingsTab] = useState<'shop' | 'branches' | 'time' | 'accounts' | 'backup'>('shop');
   const [shopTimeSettings, setShopTimeSettings] = useState<ShopTimeSettings>({ timezoneOffsetMinutes: 0, dayStartTime: '00:00' });
 
   const branchMap = useMemo(() => Object.fromEntries(branches.map((b) => [b.id, b.name])), [branches]);
@@ -1452,6 +1472,138 @@ export default function Page() {
     showNotification('Branch deleted successfully!', 'success');
   };
 
+  const buildShopBackupPayload = (): ShopBackupPayload => ({
+    app: 'AlphaPOS',
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    shopName: currentShop?.shopName || 'My Shop',
+    sourceOwnerUid: activeShopOwnerUid,
+    data: {
+      branches,
+      products,
+      services,
+      sales,
+      expenses,
+      expenseGroups,
+      users,
+      activityLogs,
+      shopTimeSettings,
+      accounts,
+    },
+  });
+
+  const downloadShopBackup = () => {
+    if (!activeShopOwnerUid) {
+      showNotification('Open a shop before creating a backup.', 'error');
+      return;
+    }
+
+    const backup = buildShopBackupPayload();
+    const blob = new Blob([JSON.stringify(removeUndefinedDeep(backup), null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    const safeShopName = backup.shopName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'shop';
+    link.href = url;
+    link.download = `alphapos-${safeShopName}-backup-${backup.exportedAt.slice(0, 10)}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    logActivity('backup_export', `Downloaded full shop backup for "${backup.shopName}"`);
+    showNotification('Shop backup downloaded. Keep this file somewhere safe.', 'success');
+    setStatus('Full shop backup exported successfully.');
+  };
+
+  const restoreShopBackup = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    if (!authUser || !db || !activeShopOwnerUid) {
+      showNotification('Please sign in and open the shop you want to restore into.', 'error');
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(await file.text()) as Partial<ShopBackupPayload>;
+      if (parsed.app !== 'AlphaPOS' || parsed.version !== 1 || !parsed.data) {
+        throw new Error('This is not a valid AlphaPOS backup file.');
+      }
+
+      const restoredBranches = Array.isArray(parsed.data.branches) ? parsed.data.branches : [];
+      const restoredProducts = Array.isArray(parsed.data.products) ? parsed.data.products : [];
+      const restoredServices = Array.isArray(parsed.data.services) ? parsed.data.services : [];
+      const restoredSales = Array.isArray(parsed.data.sales) ? parsed.data.sales : [];
+      const restoredExpenses = Array.isArray(parsed.data.expenses) ? parsed.data.expenses : [];
+      const restoredExpenseGroups = Array.isArray(parsed.data.expenseGroups) ? parsed.data.expenseGroups : [];
+      const restoredUsers = Array.isArray(parsed.data.users) ? parsed.data.users : [];
+      const restoredActivityLogs = Array.isArray(parsed.data.activityLogs) ? parsed.data.activityLogs : [];
+      const restoredShopTimeSettings = parsed.data.shopTimeSettings && typeof parsed.data.shopTimeSettings.dayStartTime === 'string'
+        ? parsed.data.shopTimeSettings
+        : { timezoneOffsetMinutes: 0, dayStartTime: '00:00' };
+      const restoredAccounts = ensureDefaultCashAccount(Array.isArray(parsed.data.accounts) ? parsed.data.accounts : []);
+      const restoredShopName = parsed.shopName?.trim() || currentShop?.shopName || 'Restored Shop';
+
+      const restoredLog: ActivityLog = {
+        id: crypto.randomUUID(),
+        action: 'backup_restore',
+        details: `Restored full shop backup from ${file.name}`,
+        role,
+        userEmail: authUser.email || 'Unknown user',
+        createdAt: new Date().toISOString(),
+      };
+      const nextActivityLogs = [restoredLog, ...restoredActivityLogs].slice(0, 100);
+      const userDataRef = doc(db, 'users', activeShopOwnerUid, 'pos', 'data');
+
+      await setDoc(userDataRef, removeUndefinedDeep({
+        role: 'shop_owner' as Role,
+        shopName: restoredShopName,
+        branches: restoredBranches,
+        products: restoredProducts,
+        services: restoredServices,
+        sales: restoredSales,
+        expenses: restoredExpenses,
+        expenseGroups: restoredExpenseGroups,
+        users: restoredUsers,
+        activityLogs: nextActivityLogs,
+        shopTimeSettings: restoredShopTimeSettings,
+        accounts: restoredAccounts,
+        restoredFromBackupAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      }), { merge: true });
+
+      await Promise.all(restoredUsers.map((staffUser) => {
+        const normalizedEmail = staffUser.email?.toLowerCase().trim();
+        if (!normalizedEmail) return Promise.resolve();
+        const shopMembershipRef = doc(db, 'shopMemberships', `${activeShopOwnerUid}_${normalizedEmail}`);
+        return setDoc(shopMembershipRef, {
+          ownerUid: activeShopOwnerUid,
+          email: normalizedEmail,
+          shopName: restoredShopName,
+          role: staffUser.role,
+          restoredAt: serverTimestamp(),
+        }, { merge: true });
+      }));
+
+      setBranches(restoredBranches);
+      setProducts(restoredProducts);
+      setServices(restoredServices);
+      setSales(restoredSales);
+      setExpenses(restoredExpenses);
+      setExpenseGroups(restoredExpenseGroups);
+      setUsers(restoredUsers);
+      setActivityLogs(nextActivityLogs);
+      setShopTimeSettings(restoredShopTimeSettings);
+      setAccounts(restoredAccounts);
+      setRole('shop_owner');
+      setAvailableShops((prev) => prev.map((shop) => shop.ownerUid === activeShopOwnerUid ? { ...shop, shopName: restoredShopName, role: 'shop_owner' } : shop));
+      showNotification('Backup restored successfully. Your POS data has been reuploaded.', 'success');
+      setStatus(`Restored ${restoredProducts.length} products, ${restoredSales.length} sales, and ${restoredExpenses.length} expenses from backup.`);
+    } catch (error) {
+      showNotification(`Backup restore failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error', 6000);
+      setStatus('Backup restore failed. Please check the file and try again.');
+    }
+  };
+
   const Badge = ({ value }: { value: number }) => (
     <span className={`badge ${value >= 0 ? 'badge-success' : 'badge-danger'}`}>
       {value >= 0 ? '↑' : '↓'} {Math.abs(value).toFixed(1)}%
@@ -2646,6 +2798,7 @@ export default function Page() {
               <button onClick={() => setSettingsTab('branches')} style={{ padding: '0.75rem 1.5rem', borderBottom: settingsTab === 'branches' ? '3px solid var(--primary)' : 'none', background: 'none', cursor: 'pointer', fontWeight: settingsTab === 'branches' ? 600 : 400 }}>Manage Branches</button>
               <button onClick={() => setSettingsTab('time')} style={{ padding: '0.75rem 1.5rem', borderBottom: settingsTab === 'time' ? '3px solid var(--primary)' : 'none', background: 'none', cursor: 'pointer', fontWeight: settingsTab === 'time' ? 600 : 400 }}>Time & Timezone</button>
               <button onClick={() => setSettingsTab('accounts')} style={{ padding: '0.75rem 1.5rem', borderBottom: settingsTab === 'accounts' ? '3px solid var(--primary)' : 'none', background: 'none', cursor: 'pointer', fontWeight: settingsTab === 'accounts' ? 600 : 400 }}>Accounts</button>
+              <button onClick={() => setSettingsTab('backup')} style={{ padding: '0.75rem 1.5rem', borderBottom: settingsTab === 'backup' ? '3px solid var(--primary)' : 'none', background: 'none', cursor: 'pointer', fontWeight: settingsTab === 'backup' ? 600 : 400 }}>Backup & Restore</button>
             </div>
 
             {settingsTab === 'shop' && (
@@ -2720,6 +2873,50 @@ export default function Page() {
                 </div>
               </div>
             )}
+            {settingsTab === 'backup' && (
+              <div className="card">
+                <h3>Backup & Restore Shop Data</h3>
+                <p style={{ color: 'var(--text-muted)', maxWidth: '760px' }}>
+                  Download one backup file with all important POS data: inventory, services, sales, expenses, expense groups, accounts, branches, staff users, activity logs, and shop time settings. If a shop is deleted or data is lost, create/open a new shop with the owner account, then upload this file here to reupload the records.
+                </p>
+                <div className="grid dashboard-metrics-grid" style={{ marginTop: '1rem' }}>
+                  <div className="card dashboard-card">
+                    <h4>Inventory Items</h4>
+                    <div className="card-value">{products.length}</div>
+                  </div>
+                  <div className="card dashboard-card">
+                    <h4>Sales Records</h4>
+                    <div className="card-value">{sales.length}</div>
+                  </div>
+                  <div className="card dashboard-card">
+                    <h4>Expenses</h4>
+                    <div className="card-value">{expenses.length}</div>
+                  </div>
+                  <div className="card dashboard-card">
+                    <h4>Accounts & Staff</h4>
+                    <div className="card-value">{accounts.length + users.length}</div>
+                  </div>
+                </div>
+                {isShopOwner ? (
+                  <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginTop: '1.5rem' }}>
+                    <button type="button" className="primary" onClick={downloadShopBackup}>Download Full Backup</button>
+                    <button type="button" className="edit-btn" onClick={() => backupFileInputRef.current?.click()}>Upload & Restore Backup</button>
+                    <input ref={backupFileInputRef} type="file" accept="application/json,.json" onChange={restoreShopBackup} style={{ display: 'none' }} />
+                  </div>
+                ) : (
+                  <p style={{ marginTop: '1rem', color: 'var(--danger)', fontWeight: 600 }}>Only the shop owner can export or restore a full shop backup.</p>
+                )}
+                <div style={{ marginTop: '1.5rem', padding: '1rem', border: '1px solid var(--border)', borderRadius: '0.75rem', background: '#f8fafc' }}>
+                  <strong>Restore checklist</strong>
+                  <ol style={{ color: 'var(--text-muted)', marginBottom: 0 }}>
+                    <li>Sign in as the shop owner and create or open the destination shop.</li>
+                    <li>Upload the latest AlphaPOS backup JSON file.</li>
+                    <li>Confirm products, sales, expenses, accounts, staff, and branches are visible again.</li>
+                  </ol>
+                </div>
+              </div>
+            )}
+
             {settingsTab === 'accounts' && (
               <div className="card">
                 <h3>Accounts</h3>
