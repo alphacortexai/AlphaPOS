@@ -3,11 +3,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type Dispatch, type SetStateAction } from 'react';
 import { firebaseApp } from '../lib.firebase';
 import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
-import { collection, doc, getDoc, getDocs, getFirestore, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
+import { collection, deleteDoc, doc, getDoc, getDocs, getFirestore, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
 import RegisterDesk from '../components/pos/RegisterDesk';
 import ReceiptDialog from '../components/pos/ReceiptDialog';
 import ReturnDialog, { type ReturnableLine } from '../components/pos/ReturnDialog';
 import { LOCAL_OPERATOR_ID, readLocalShop, writeLocalShop } from '../lib/pos/localShop';
+import { buildSalesDigest, claimSalesEmailSend, defaultSalesEmailSettings, finishSalesEmailSend, normalizeSalesEmailSettings, previousSalesPeriod, type SalesDigest, type SalesEmailSettings } from '../lib/pos/salesEmail';
+import { completeEmailLinkSignIn, sendStaffSignInLink, staffSignInError, takeInvitedShopId } from '../lib/pos/staffInvite';
 import {
   customerAccountBalance,
   defaultReceiptSettings,
@@ -115,6 +117,7 @@ type ShopBackupPayload = {
     cashSessions?: CashSession[];
     taxSettings?: TaxSettings;
     receiptSettings?: ReceiptSettings;
+    salesEmailSettings?: SalesEmailSettings;
   };
 };
 type StockMovementReason = 'sale' | 'opening_stock' | 'restock' | 'count_correction' | 'damaged' | 'customer_return' | 'branch_transfer' | 'product_removed';
@@ -295,7 +298,12 @@ export default function Page() {
   const [showExpenseGroupsDetails, setShowExpenseGroupsDetails] = useState(false);
   const [userForm, setUserForm] = useState({ id: '', name: '', email: '', role: 'cashier' as Role, branchId: '' });
   const [shopNameForm, setShopNameForm] = useState('');
-  const [settingsTab, setSettingsTab] = useState<'shop' | 'branches' | 'time' | 'accounts' | 'backup' | 'tax' | 'receipt'>('shop');
+  const [settingsTab, setSettingsTab] = useState<'shop' | 'branches' | 'time' | 'accounts' | 'backup' | 'tax' | 'receipt' | 'email'>('shop');
+  const [salesEmailSettings, setSalesEmailSettings] = useState<SalesEmailSettings>(defaultSalesEmailSettings);
+  const [signInNotice, setSignInNotice] = useState('');
+  const [sendingSalesEmail, setSendingSalesEmail] = useState(false);
+  const [recipientDraft, setRecipientDraft] = useState('');
+  const recipientInputRef = useRef<HTMLInputElement>(null);
   const [shopTimeSettings, setShopTimeSettings] = useState<ShopTimeSettings>({ timezoneOffsetMinutes: 0, dayStartTime: '00:00' });
 
   const branchMap = useMemo(() => Object.fromEntries(branches.map((b) => [b.id, b.name])), [branches]);
@@ -346,7 +354,16 @@ export default function Page() {
     }
 
     const auth = getAuth(app);
-    return onAuthStateChanged(auth, (user) => {
+    let unsubscribe = () => {};
+    let cancelled = false;
+    void (async () => {
+      try {
+        await completeEmailLinkSignIn(auth);
+      } catch (error) {
+        if (!cancelled) setSignInNotice(staffSignInError(error));
+      }
+      if (cancelled) return;
+      unsubscribe = onAuthStateChanged(auth, (user) => {
       setAuthUser(user ? { uid: user.uid, email: user.email, displayName: user.displayName } : null);
       setLoading(false);
       hasLoadedUserDataRef.current = false;
@@ -365,8 +382,14 @@ export default function Page() {
         setCashSessions([]);
         setTaxSettings(defaultTaxSettings);
         setReceiptSettings(defaultReceiptSettings);
+        setSalesEmailSettings(defaultSalesEmailSettings);
       }
     });
+    })();
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
   }, []);
 
   const loadUserData = useCallback(async () => {
@@ -377,6 +400,7 @@ export default function Page() {
         setCashSessions(normalizeCashSessions(data?.cashSessions));
         setTaxSettings(normalizeTaxSettings(data?.taxSettings));
         setReceiptSettings(normalizeReceiptSettings(data?.receiptSettings));
+        setSalesEmailSettings(normalizeSalesEmailSettings(data?.salesEmailSettings));
       };
       if (authUser.uid === LOCAL_OPERATOR_ID) {
         try {
@@ -396,6 +420,7 @@ export default function Page() {
             setAccounts(ensureDefaultCashAccount([]));
             setShopTimeSettings({ timezoneOffsetMinutes: 0, dayStartTime: '00:00' });
             applyRetailCollections();
+            setSalesEmailSettings(defaultSalesEmailSettings);
           } else {
             setBranches(Array.isArray(data.branches) ? data.branches as Branch[] : []);
             setProducts(Array.isArray(data.products) ? data.products as Product[] : []);
@@ -442,7 +467,8 @@ export default function Page() {
           });
         }
         setAvailableShops(memberships);
-        const selectedShopOwnerUid = activeShopOwnerUid || memberships[0].ownerUid;
+        const invitedShop = takeInvitedShopId();
+        const selectedShopOwnerUid = (invitedShop && memberships.some((shop) => shop.ownerUid === invitedShop) ? invitedShop : '') || activeShopOwnerUid || memberships[0].ownerUid;
         if (!activeShopOwnerUid) setActiveShopOwnerUid(selectedShopOwnerUid);
         const selectedShop = memberships.find((s) => s.ownerUid === selectedShopOwnerUid);
         const userDataRef = doc(db, 'users', selectedShopOwnerUid, 'pos', 'data');
@@ -607,6 +633,7 @@ export default function Page() {
           cashSessions,
           taxSettings,
           receiptSettings,
+          salesEmailSettings,
         };
         if (authUser.uid === LOCAL_OPERATOR_ID) {
           writeLocalShop(removeUndefinedDeep(shopPayload));
@@ -623,7 +650,7 @@ export default function Page() {
       }
     };
     void saveUserData();
-  }, [activeShopOwnerUid, authUser, db, role, branches, products, services, sales, expenses, expenseGroups, users, activityLogs, shopTimeSettings, accounts, customers, heldTickets, cashSessions, taxSettings, receiptSettings, currentShop?.shopName]);
+  }, [activeShopOwnerUid, authUser, db, role, branches, products, services, sales, expenses, expenseGroups, users, activityLogs, shopTimeSettings, accounts, customers, heldTickets, cashSessions, taxSettings, receiptSettings, salesEmailSettings, currentShop?.shopName]);
 
   const startLocalCounter = () => {
     hasLoadedUserDataRef.current = false;
@@ -1410,43 +1437,124 @@ export default function Page() {
     setShowExpenseModal(false);
   };
 
-  const saveUser = (e: React.FormEvent) => {
+  const saveShopMembership = async (email: string, staffRole: Role) => {
+    if (!db || !activeShopOwnerUid) return;
+    const normalizedEmail = email.toLowerCase().trim();
+    if (!normalizedEmail) return;
+    const shopMembershipRef = doc(db, 'shopMemberships', `${activeShopOwnerUid}_${normalizedEmail}`);
+    await setDoc(shopMembershipRef, {
+      ownerUid: activeShopOwnerUid,
+      email: normalizedEmail,
+      shopName: availableShops.find(s => s.ownerUid === activeShopOwnerUid)?.shopName || 'My Shop',
+      role: staffRole,
+      invitedAt: serverTimestamp(),
+    }, { merge: true });
+  };
+
+  const emailStaffSignInLink = async (email: string, staffRole: Role) => {
+    await saveShopMembership(email, staffRole);
+    await sendStaffSignInLink(email, activeShopOwnerUid);
+    const message = `Sign-in email sent to ${email}. They open the link to enter as ${roleLabels[staffRole]}.`;
+    setStatus(message);
+    showNotification(message, 'success', 5000);
+  };
+
+  const saveUser = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!userForm.email || !userForm.name || !userForm.branchId) return;
+    const email = userForm.email.trim();
 
     if (userForm.id) {
-      setUsers((prev) => prev.map((u) => (u.id === userForm.id ? { ...u, ...userForm, ...updatedAuditStamp() } : u)));
+      const previous = users.find((user) => user.id === userForm.id);
+      setUsers((prev) => prev.map((u) => (u.id === userForm.id ? { ...u, ...userForm, email, ...updatedAuditStamp() } : u)));
+      if (db && previous && previous.email.toLowerCase().trim() !== email.toLowerCase()) {
+        await deleteDoc(doc(db, 'shopMemberships', `${activeShopOwnerUid}_${previous.email.toLowerCase().trim()}`)).catch(() => undefined);
+      }
+      await saveShopMembership(email, userForm.role).catch((error) => {
+        showNotification(error instanceof Error ? error.message : 'Could not update shop access.', 'error');
+      });
       setStatus('User updated.');
-      logActivity('edit_user', `Updated user "${userForm.email}"`);
+      logActivity('edit_user', `Updated user "${email}"`);
     } else {
       const newUser: StaffUser = {
         id: crypto.randomUUID(),
         name: userForm.name,
-        email: userForm.email,
+        email,
         role: userForm.role,
         branchId: userForm.branchId,
         ...currentAuditStamp(),
       };
       setUsers((prev) => [...prev, newUser]);
-      logActivity('add_user', `Added user "${userForm.email}" with role "${userForm.role}"`);
-
-      // Save shop membership for email-based invitation
-      if (db) {
-        const normalizedEmail = userForm.email.toLowerCase().trim();
-        const shopMembershipRef = doc(db, 'shopMemberships', `${activeShopOwnerUid}_${normalizedEmail}`);
-        setDoc(shopMembershipRef, {
-          ownerUid: activeShopOwnerUid,
-          email: normalizedEmail,
-          shopName: availableShops.find(s => s.ownerUid === activeShopOwnerUid)?.shopName || 'My Shop',
-          role: userForm.role,
-          invitedAt: serverTimestamp(),
-        }, { merge: true }).catch(err => console.error('Failed to save membership:', err));
+      logActivity('add_user', `Added user "${email}" with role "${userForm.role}"`);
+      try {
+        await emailStaffSignInLink(email, userForm.role);
+      } catch (error) {
+        const message = `Staff saved, but the sign-in email was not sent. ${staffSignInError(error)}`;
+        setStatus(message);
+        showNotification(message, 'error', 7000);
       }
-      setStatus(`Invitation sent to ${userForm.email}`);
     }
     setUserForm({ id: '', name: '', email: '', role: 'cashier', branchId: '' });
     setShowUserModal(false);
   };
+
+  const deliverSalesReport = useCallback(async (manual: boolean) => {
+    if (salesEmailSettings.cadence === 'off') {
+      if (manual) showNotification('Choose daily, weekly, or monthly first.', 'info');
+      return;
+    }
+    if (!firebaseApp || !authUser || authUser.uid === LOCAL_OPERATOR_ID) {
+      if (manual) showNotification('Sign in with Firebase before emailing a sales report. This browser-only counter cannot send email.', 'error', 6000);
+      return;
+    }
+    if (!(isShopOwner || role === 'admin')) return;
+    const period = previousSalesPeriod(salesEmailSettings.cadence, new Date(), shopTimeSettings.timezoneOffsetMinutes);
+    if (!manual && salesEmailSettings.lastSentKey === period.key) return;
+    const claimKey = `${activeShopOwnerUid}:${period.key}`;
+    if (!manual && !claimSalesEmailSend(claimKey)) return;
+    setSendingSalesEmail(true);
+    try {
+      const digest: SalesDigest = buildSalesDigest(currentShop?.shopName || 'My Shop', salesEmailSettings.cadence, period, sales, expenses);
+      const idToken = await getAuth(firebaseApp).currentUser?.getIdToken();
+      if (!idToken) throw new Error('Sign in again before sending email.');
+      const response = await fetch('/api/email/sales-report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ idToken, recipients: salesEmailSettings.recipients, digest }),
+      });
+      const payload = await response.json() as { ok?: boolean; reason?: string; error?: string };
+      if (payload.ok) {
+        setSalesEmailSettings((prev) => ({ ...prev, lastSentKey: period.key }));
+        finishSalesEmailSend(claimKey, 'sent');
+        const message = `Sales email sent for ${period.label}.`;
+        setStatus(message);
+        if (manual) showNotification(message, 'success', 5000);
+        return;
+      }
+      if (payload.reason === 'not_configured') {
+        finishSalesEmailSend(claimKey, manual ? 'failed' : 'blocked');
+        if (manual) showNotification('Sales email is not set up on the server yet. Add RESEND_API_KEY and EMAIL_FROM, then try again.', 'error', 7000);
+        return;
+      }
+      finishSalesEmailSend(claimKey, 'failed');
+      if (manual) showNotification(payload.error || 'The sales email could not be sent.', 'error', 6000);
+    } catch (error) {
+      finishSalesEmailSend(claimKey, 'failed');
+      if (manual) showNotification(error instanceof Error ? error.message : 'The sales email could not be sent.', 'error', 6000);
+    } finally {
+      setSendingSalesEmail(false);
+    }
+  }, [activeShopOwnerUid, authUser, currentShop?.shopName, expenses, isShopOwner, role, sales, salesEmailSettings, shopTimeSettings.timezoneOffsetMinutes, showNotification]);
+
+  useEffect(() => {
+    if (document.activeElement === recipientInputRef.current) return;
+    setRecipientDraft(salesEmailSettings.recipients.join(', '));
+  }, [salesEmailSettings.recipients]);
+
+  useEffect(() => {
+    if (!hasLoadedUserDataRef.current || salesEmailSettings.cadence === 'off') return;
+    void deliverSalesReport(false);
+  }, [deliverSalesReport, salesEmailSettings.cadence]);
 
   const addProductToCart = (productId: string, silent = false) => {
     const product = products.find(p => p.id === productId);
@@ -2183,6 +2291,7 @@ export default function Page() {
       cashSessions,
       taxSettings,
       receiptSettings,
+      salesEmailSettings,
     },
   });
 
@@ -2240,6 +2349,7 @@ export default function Page() {
       const restoredCashSessions = normalizeCashSessions(parsed.data.cashSessions);
       const restoredTaxSettings = normalizeTaxSettings(parsed.data.taxSettings);
       const restoredReceiptSettings = normalizeReceiptSettings(parsed.data.receiptSettings);
+      const restoredSalesEmailSettings = normalizeSalesEmailSettings(parsed.data.salesEmailSettings);
       const restoredShopName = parsed.shopName?.trim() || currentShop?.shopName || 'Restored Shop';
 
       const restoredLog: ActivityLog = {
@@ -2271,6 +2381,7 @@ export default function Page() {
         cashSessions: restoredCashSessions,
         taxSettings: restoredTaxSettings,
         receiptSettings: restoredReceiptSettings,
+        salesEmailSettings: restoredSalesEmailSettings,
         restoredFromBackupAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       }), { merge: true });
@@ -2303,6 +2414,7 @@ export default function Page() {
       setCashSessions(restoredCashSessions);
       setTaxSettings(restoredTaxSettings);
       setReceiptSettings(restoredReceiptSettings);
+      setSalesEmailSettings(restoredSalesEmailSettings);
       setRole('shop_owner');
       setAvailableShops((prev) => prev.map((shop) => shop.ownerUid === activeShopOwnerUid ? { ...shop, shopName: restoredShopName, role: 'shop_owner' } : shop));
       showNotification('Backup restored successfully. Your POS data has been reuploaded.', 'success');
@@ -2334,8 +2446,12 @@ export default function Page() {
             <li>Inventory, expenses, staff, and branch reporting</li>
             <li>Google sign-in for shared shops, or this device when Firebase is not configured</li>
           </ul>
+          {signInNotice && <p className="auth-local-note">{signInNotice}</p>}
           {firebaseApp ? (
-            <button className="primary" style={{ width: '100%', padding: '1rem' }} onClick={handleLogin}>Sign in with Google</button>
+            <>
+              <button className="primary" style={{ width: '100%', padding: '1rem' }} onClick={handleLogin}>Sign in with Google</button>
+              <p className="auth-local-note">Invited staff can open the sign-in link in their email, or use Google with that same address.</p>
+            </>
           ) : (
             <>
               <p className="auth-local-note">No Firebase project is configured. The counter will keep this shop in this browser only.</p>
@@ -3309,6 +3425,7 @@ export default function Page() {
             
             {canManageUsers ? (
               <>
+                <p className="section-lead">Invite someone by email. AlphaPOS emails that address a sign-in link, and opening it enters the shop as the role you chose. They can also use Google with the same address.</p>
                 {/* Staff Summary */}
                 {users.length > 0 && (
                   <div className="kpi-grid">
@@ -3358,7 +3475,12 @@ export default function Page() {
                             <td>{new Date(u.createdAt).toLocaleDateString()}</td>
                             <td>
                               <button className="edit-btn" onClick={() => { setUserForm(u); setShowUserModal(true); }}>Edit</button>
-                              <button className="delete-btn" onClick={() => { setUsers(prev => prev.filter(x => x.id !== u.id)); logActivity('delete_user', `Removed user "${u.email}"`); }}>Remove</button>
+                              <button className="edit-btn" onClick={() => { void emailStaffSignInLink(u.email, u.role).catch((error) => showNotification(staffSignInError(error), 'error', 7000)); }}>Email link</button>
+                              <button className="delete-btn" onClick={() => {
+                                setUsers(prev => prev.filter(x => x.id !== u.id));
+                                if (db) void deleteDoc(doc(db, 'shopMemberships', `${activeShopOwnerUid}_${u.email.toLowerCase().trim()}`)).catch(() => undefined);
+                                logActivity('delete_user', `Removed user "${u.email}"`);
+                              }}>Remove</button>
                             </td>
                           </tr>
                         ))
@@ -3586,6 +3708,7 @@ export default function Page() {
                 ['accounts', 'Accounts'],
                 ['tax', 'Tax'],
                 ['receipt', 'Receipt'],
+                ['email', 'Email'],
                 ['backup', 'Backup'],
               ] as const).map(([tab, label]) => (
                 <button key={tab} type="button" role="tab" aria-selected={settingsTab === tab} className={settingsTab === tab ? 'active' : ''} onClick={() => setSettingsTab(tab)}>{label}</button>
@@ -3720,6 +3843,42 @@ export default function Page() {
                     </select>
                   </label>
                 </div>
+              </div>
+            )}
+
+            {settingsTab === 'email' && (
+              <div className="card">
+                <h3>Sales emails</h3>
+                <p className="muted-copy">Choose how often the shop emails a sales summary. AlphaPOS sends the previous day, week, or month the next time an owner or admin opens the shop after that period ends. The browser has to be open for the email to go out.</p>
+                <div className="office-form">
+                  <label>
+                    How often
+                    <select value={salesEmailSettings.cadence} onChange={(event) => setSalesEmailSettings((prev) => ({ ...prev, cadence: event.target.value as SalesEmailSettings['cadence'] }))}>
+                      <option value="off">Off</option>
+                      <option value="daily">Every day</option>
+                      <option value="weekly">Every week</option>
+                      <option value="monthly">Every month</option>
+                    </select>
+                  </label>
+                  <label>
+                    Also send to
+                    <input
+                      ref={recipientInputRef}
+                      value={recipientDraft}
+                      placeholder="accountant@shop.com, owner@shop.com"
+                      onChange={(event) => setRecipientDraft(event.target.value)}
+                      onBlur={() => setSalesEmailSettings((prev) => ({
+                        ...prev,
+                        recipients: recipientDraft.split(',').map((email) => email.trim().toLowerCase()).filter((email) => email.includes('@')).slice(0, 5),
+                      }))}
+                    />
+                  </label>
+                </div>
+                <p className="muted-copy">Your sign-in email is always included. Add up to five more addresses, separated by commas. Reports need RESEND_API_KEY and EMAIL_FROM on the server.</p>
+                {salesEmailSettings.lastSentKey && <p className="muted-copy">Last report marked sent: {salesEmailSettings.lastSentKey}</p>}
+                <button type="button" className="primary" disabled={sendingSalesEmail || salesEmailSettings.cadence === 'off'} onClick={() => { void deliverSalesReport(true); }}>
+                  {sendingSalesEmail ? 'Sending…' : 'Send the latest report'}
+                </button>
               </div>
             )}
 
@@ -4195,6 +4354,7 @@ export default function Page() {
                       <span>Email Address</span>
                       <input type="email" value={userForm.email} onChange={(e) => setUserForm({ ...userForm, email: e.target.value })} required />
                     </label>
+                    {!userForm.id && <p className="muted-copy form-span">We email this address a link. They sign in with that link, or with Google, and open the shop as {roleLabels[userForm.role]}.</p>}
                     <label className="field">
                       <span>Role</span>
                       <select value={userForm.role} onChange={(e) => setUserForm({ ...userForm, role: e.target.value as Role })} required>
@@ -4215,7 +4375,7 @@ export default function Page() {
                 </div>
                 <div className="modal-footer">
                   <button type="button" className="edit-btn" onClick={() => setShowUserModal(false)}>Cancel</button>
-                  <button type="submit" className="primary">{userForm.id ? 'Update' : 'Send Invitation'}</button>
+                  <button type="submit" className="primary">{userForm.id ? 'Update' : 'Email sign-in link'}</button>
                 </div>
               </form>
             </div>

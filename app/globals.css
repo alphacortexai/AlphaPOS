@@ -2182,7 +2182,9 @@ button.primary:hover, .dashboard-refresh-btn:hover:not(:disabled) { background: 
 .user-chip-text small { color: #a9c0af; font-size: 0.72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .badge { font-size: 0.72rem; padding: 0.22rem 0.55rem; border-radius: 999px; letter-spacing: 0.01em; }
 .filter-count { margin: 0 0 0.15rem auto; align-self: flex-end; color: var(--text-muted); font-size: 0.84rem; }
-.form > div:has(> button) { grid-column: 1 / -1; display: flex; justify-content: flex-start; }
+.form > div:has(> button), .form > .form-span { grid-column: 1 / -1; }
+.form > div:has(> button) { display: flex; justify-content: flex-start; }
+.form > .form-span { margin: 0; }
 .main > section h3 { margin: 0 0 0.8rem; letter-spacing: -0.03em; }
 
 .office-toolbar, .insight-header-row {
