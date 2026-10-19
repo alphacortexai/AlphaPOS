@@ -50,6 +50,17 @@ type ShopBackupPayload = {
     accounts: Account[];
   };
 };
+type StockMovementReason = 'sale' | 'opening_stock' | 'restock' | 'count_correction' | 'damaged' | 'customer_return' | 'branch_transfer' | 'product_removed';
+type StockMovementAudit = {
+  productId: string;
+  productName: string;
+  branchId: string;
+  quantityDelta: number;
+  reason: StockMovementReason;
+  fromBranchId?: string;
+  toBranchId?: string;
+  note?: string;
+};
 type ActivityLog = {
   id: string;
   action: string;
@@ -57,6 +68,7 @@ type ActivityLog = {
   role: Role;
   userEmail: string;
   createdAt: string;
+  stockMovement?: StockMovementAudit;
 };
 type CartDiscountMode = 'none' | 'price' | 'percent';
 type CartItem = {
@@ -123,6 +135,7 @@ export default function Page() {
 
   // Modals
   const [showProductModal, setShowProductModal] = useState(false);
+  const [showStockAdjustmentModal, setShowStockAdjustmentModal] = useState(false);
   const [showExpenseModal, setShowExpenseModal] = useState(false);
   const [showUserModal, setShowUserModal] = useState(false);
   const [showBranchModal, setShowBranchModal] = useState(false);
@@ -154,6 +167,7 @@ export default function Page() {
 
   const [branchForm, setBranchForm] = useState({ name: '', location: '', id: '' });
   const [productForm, setProductForm] = useState({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0, sku: '', barcode: '', category: '' });
+  const [stockAdjustmentForm, setStockAdjustmentForm] = useState({ productId: '', direction: 'add' as 'add' | 'remove', quantity: 1, reason: 'restock' as Exclude<StockMovementReason, 'sale' | 'opening_stock' | 'branch_transfer'>, note: '' });
   const [serviceForm, setServiceForm] = useState({ name: '', branchId: '', amount: 0, serviceType: 'direct_cost' as ServiceType, directCost: 0, monthlySharedCost: 0, expenseGroupId: '' });
   const [saleForm, setSaleForm] = useState({ productId: '', qty: 1 });
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -484,6 +498,8 @@ export default function Page() {
     setActivityLogs([]);
     setBranchForm({ name: '', location: '', id: '' });
     setProductForm({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0, sku: '', barcode: '', category: '' });
+    setStockAdjustmentForm({ productId: '', direction: 'add', quantity: 1, reason: 'restock', note: '' });
+    setShowStockAdjustmentModal(false);
     setServiceForm({ name: '', branchId: '', amount: 0, serviceType: 'direct_cost', directCost: 0, monthlySharedCost: 0, expenseGroupId: '' });
     setSaleForm({ productId: '', qty: 1 });
     setExpenseForm({ id: '', title: '', branchId: '', amount: 0, expenseGroupId: '', accountId: '' });
@@ -733,6 +749,11 @@ export default function Page() {
     });
   }, [products, productSearchQuery, productBranchFilter, productStockFilter]);
 
+  const recentStockMovements = useMemo(() => activityLogs
+    .filter((log): log is ActivityLog & { stockMovement: StockMovementAudit } => Boolean(log.stockMovement))
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    .slice(0, 100), [activityLogs]);
+
   const currentAuditStamp = () => ({
     createdAt: new Date().toISOString(),
     createdByUid: authUser?.uid || 'unknown',
@@ -777,7 +798,7 @@ export default function Page() {
     });
   }, [services]);
 
-  const logActivity = (action: string, details: string) => {
+  const logActivity = (action: string, details: string, stockMovement?: StockMovementAudit) => {
     setActivityLogs((prev) => [{
       id: crypto.randomUUID(),
       action,
@@ -785,7 +806,32 @@ export default function Page() {
       role,
       userEmail: authUser?.email || 'unknown',
       createdAt: new Date().toISOString(),
+      ...(stockMovement ? { stockMovement } : {}),
     }, ...prev].slice(0, 500));
+  };
+
+  const logStockMovement = (
+    product: Product,
+    quantityDelta: number,
+    reason: StockMovementReason,
+    note?: string,
+    branchTransfer?: { fromBranchId: string; toBranchId: string }
+  ) => {
+    if (quantityDelta === 0 && reason !== 'branch_transfer') return;
+    const stockMovement: StockMovementAudit = {
+      productId: product.id,
+      productName: product.name,
+      branchId: branchTransfer?.toBranchId || product.branchId,
+      quantityDelta,
+      reason,
+      ...(branchTransfer ? branchTransfer : {}),
+      ...(note?.trim() ? { note: note.trim() } : {}),
+    };
+    const quantityLabel = quantityDelta > 0 ? `+${quantityDelta}` : `${quantityDelta}`;
+    const details = reason === 'branch_transfer'
+      ? `${product.stock} units of "${product.name}" moved between branches.`
+      : `${quantityLabel} units of "${product.name}" (${reason.replaceAll('_', ' ')}).${note?.trim() ? ` ${note.trim()}` : ''}`;
+    logActivity(`stock_${reason}`, details, stockMovement);
   };
 
   const saveProduct = (e: React.FormEvent) => {
@@ -794,6 +840,10 @@ export default function Page() {
     const sku = productForm.sku.trim().toUpperCase();
     const barcode = productForm.barcode.trim();
     if (!name || !productForm.branchId) return;
+    if (!Number.isFinite(productForm.stock) || productForm.stock < 0 || !Number.isFinite(productForm.purchasePrice) || productForm.purchasePrice < 0 || !Number.isFinite(productForm.salePrice) || productForm.salePrice < 0) {
+      showNotification('Enter valid non-negative stock and price values.', 'error');
+      return;
+    }
     const identifiers = [sku, barcode].filter(Boolean).map((identifier) => identifier.toLowerCase());
     const duplicateIdentifier = products.some((product) => product.id !== productForm.id && [product.sku, product.barcode].some((identifier) => identifier && identifiers.includes(identifier.trim().toLowerCase())));
     if (duplicateIdentifier) {
@@ -802,11 +852,22 @@ export default function Page() {
     }
     const productDetails = { ...productForm, name, sku: sku || undefined, barcode: barcode || undefined, category: productForm.category.trim() || undefined };
     if (productForm.id) {
+      const previousProduct = products.find((product) => product.id === productForm.id);
       setProducts((prev) => prev.map((p) => (p.id === productForm.id ? { ...p, ...productDetails, ...updatedAuditStamp() } : p)));
+      if (previousProduct) {
+        const updatedProduct = { ...previousProduct, ...productDetails };
+        if (previousProduct.branchId !== updatedProduct.branchId && previousProduct.stock > 0) {
+          logStockMovement(previousProduct, 0, 'branch_transfer', undefined, { fromBranchId: previousProduct.branchId, toBranchId: updatedProduct.branchId });
+        }
+        const quantityDelta = updatedProduct.stock - previousProduct.stock;
+        if (quantityDelta !== 0) logStockMovement(updatedProduct, quantityDelta, 'count_correction');
+      }
       setStatus('Product updated.');
       logActivity('edit_inventory', `Updated product "${name}"`);
     } else {
-      setProducts((prev) => [...prev, { ...productDetails, id: crypto.randomUUID(), ...currentAuditStamp() }]);
+      const newProduct: Product = { ...productDetails, id: crypto.randomUUID(), ...currentAuditStamp() };
+      setProducts((prev) => [...prev, newProduct]);
+      if (newProduct.stock > 0) logStockMovement(newProduct, newProduct.stock, 'opening_stock');
       setStatus('Product added.');
       logActivity('add_inventory', `Added product "${name}"`);
     }
@@ -1206,8 +1267,17 @@ export default function Page() {
       showNotification('Cart is empty', 'error');
       return;
     }
+    if (cart.some((item) => !Number.isFinite(item.qty) || item.qty <= 0)) {
+      showNotification('Sale quantities must be greater than zero.', 'error');
+      return;
+    }
     if (!selectedSaleAccountId) {
       showNotification('Please create an account first (CASH is created by default).', 'error');
+      return;
+    }
+    const insufficientItem = cart.find((item) => item.itemType === 'product' && (products.find((product) => product.id === item.itemId)?.stock ?? 0) < item.qty);
+    if (insufficientItem) {
+      showNotification(`Not enough stock for "${insufficientItem.itemName}". Check the inventory and try again.`, 'error');
       return;
     }
     const newSales = cart.map(item => ({
@@ -1227,6 +1297,11 @@ export default function Page() {
       return cartItem ? { ...p, stock: p.stock - cartItem.qty } : p;
     });
     setProducts(updatedProducts);
+    cart.forEach((item, index) => {
+      if (item.itemType !== 'product') return;
+      const product = products.find((record) => record.id === item.itemId);
+      if (product) logStockMovement(product, -item.qty, 'sale', `Sale ${newSales[index].id.slice(0, 8)}`);
+    });
     logActivity('sale', `Completed cart sale with ${cart.length} item(s)`);
     showNotification(`Sale completed! ${cart.length} item(s) sold.`, 'success');
     setCart([]);
@@ -1237,12 +1312,12 @@ export default function Page() {
     e.preventDefault();
     if (!selectedSaleAccountId) {
       showNotification('Please create an account first (CASH is created by default).', 'error');
-      return;
+      return false;
     }
     const p = products.find((x) => x.id === saleForm.productId);
-    if (!p || p.stock < saleForm.qty) {
-      setStatus('Invalid sale or insufficient stock.');
-      return;
+    if (!p || !Number.isFinite(saleForm.qty) || saleForm.qty <= 0 || p.stock < saleForm.qty) {
+      showNotification('Invalid sale or insufficient stock.', 'error');
+      return false;
     }
     const newSale: Sale = {
       id: crypto.randomUUID(),
@@ -1257,9 +1332,11 @@ export default function Page() {
     };
     setSales((prev) => [newSale, ...prev]);
     setProducts((prev) => prev.map((x) => (x.id === p.id ? { ...x, stock: x.stock - saleForm.qty } : x)));
+    logStockMovement(p, -saleForm.qty, 'sale', `Sale ${newSale.id.slice(0, 8)}`);
     logActivity('sale', `Sold ${saleForm.qty} of "${p.name}"`);
     setSaleForm({ productId: '', qty: 1 });
     setStatus('Sale recorded.');
+    return true;
   };
 
 
@@ -1269,21 +1346,41 @@ export default function Page() {
       showNotification('Product not found', 'error');
       return;
     }
+    setStockAdjustmentForm({ productId, direction: 'add', quantity: 1, reason: 'restock', note: '' });
+    setShowStockAdjustmentModal(true);
+  };
 
-    const stockInput = window.prompt(`Add stock for ${product.name}. Current stock: ${product.stock}`, '0');
-    if (stockInput === null) return;
-
-    const qtyToAdd = Number(stockInput);
-    if (!Number.isFinite(qtyToAdd) || qtyToAdd <= 0) {
-      showNotification('Enter a valid stock quantity greater than 0', 'error');
+  const saveStockAdjustment = (e: React.FormEvent) => {
+    e.preventDefault();
+    const product = products.find((item) => item.id === stockAdjustmentForm.productId);
+    const quantity = Number(stockAdjustmentForm.quantity);
+    if (!product || !Number.isFinite(quantity) || quantity <= 0) {
+      showNotification('Choose a product and enter a quantity greater than zero.', 'error');
       return;
     }
-
-    setProducts((prev) =>
-      prev.map((p) => (p.id === productId ? { ...p, stock: p.stock + qtyToAdd, ...updatedAuditStamp() } : p))
-    );
-    logActivity('add_stock', `Added ${qtyToAdd} stock to "${product.name}"`);
-    showNotification(`${qtyToAdd} units added to ${product.name}`, 'success');
+    if (stockAdjustmentForm.reason === 'damaged' && stockAdjustmentForm.direction !== 'remove') {
+      showNotification('Damaged or expired stock must be removed from inventory.', 'error');
+      return;
+    }
+    if (stockAdjustmentForm.reason === 'restock' && stockAdjustmentForm.direction !== 'add') {
+      showNotification('Restock entries must add stock. Use a count correction to remove stock.', 'error');
+      return;
+    }
+    if (stockAdjustmentForm.reason === 'customer_return' && stockAdjustmentForm.direction !== 'add') {
+      showNotification('Customer returns must be added back into inventory.', 'error');
+      return;
+    }
+    const quantityDelta = stockAdjustmentForm.direction === 'add' ? quantity : -quantity;
+    if (product.stock + quantityDelta < 0) {
+      showNotification(`Only ${product.stock} units are available to remove.`, 'error');
+      return;
+    }
+    setProducts((prev) => prev.map((item) => item.id === product.id ? { ...item, stock: item.stock + quantityDelta, ...updatedAuditStamp() } : item));
+    logStockMovement(product, quantityDelta, stockAdjustmentForm.reason, stockAdjustmentForm.note);
+    setStatus(`Stock adjusted for ${product.name}.`);
+    showNotification(`${product.name}: ${quantityDelta > 0 ? '+' : ''}${quantityDelta} units recorded.`, 'success');
+    setShowStockAdjustmentModal(false);
+    setStockAdjustmentForm({ productId: '', direction: 'add', quantity: 1, reason: 'restock', note: '' });
   };
 
   const filteredSales = useMemo(() => {
@@ -2004,8 +2101,12 @@ export default function Page() {
                         <td style={{ color: 'var(--success)', fontWeight: 600 }}>{formatUGX(p.salePrice - p.purchasePrice)}</td>
                         <td>
                           <button className="edit-btn" onClick={() => { setProductForm({ ...p, sku: p.sku || '', barcode: p.barcode || '', category: p.category || '' }); setShowProductModal(true); }}>Edit</button>
-                          <button className="edit-btn" onClick={() => restockProduct(p.id)}>+ Stock</button>
-                          <button className="delete-btn" onClick={() => { setProducts(prev => prev.filter(x => x.id !== p.id)); logActivity('delete_inventory', `Deleted product "${p.name}"`); }}>Delete</button>
+                          <button className="edit-btn" onClick={() => restockProduct(p.id)}>Adjust stock</button>
+                          <button className="delete-btn" onClick={() => {
+                            if (p.stock > 0) logStockMovement(p, -p.stock, 'product_removed', 'Product removed from inventory');
+                            setProducts(prev => prev.filter(x => x.id !== p.id));
+                            logActivity('delete_inventory', `Deleted product "${p.name}"`);
+                          }}>Delete</button>
                         </td>
                       </tr>
                     ))
@@ -2018,6 +2119,68 @@ export default function Page() {
                   )}
                 </tbody>
               </table>
+            </div>
+            <div className="card" style={{ marginTop: '1.25rem' }}>
+              <div className="page-header" style={{ marginBottom: '0.85rem' }}>
+                <div>
+                  <h3 style={{ margin: 0 }}>Recent stock activity</h3>
+                  <p style={{ margin: '0.3rem 0 0', color: 'var(--text-muted)', fontSize: '0.78rem' }}>
+                    Shows up to 100 movements from the latest 500 shop activity entries.
+                  </p>
+                </div>
+              </div>
+              <div className="table-wrap">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Product</th>
+                      <th>Branch</th>
+                      <th>Reason</th>
+                      <th>Units</th>
+                      <th>Recorded by</th>
+                      <th>Note</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {recentStockMovements.length > 0 ? recentStockMovements.map((log) => {
+                      const movement = log.stockMovement;
+                      const reasonLabels: Record<StockMovementReason, string> = {
+                        sale: 'Sale',
+                        opening_stock: 'Opening stock',
+                        restock: 'Restock',
+                        count_correction: 'Count correction',
+                        damaged: 'Damaged / expired',
+                        customer_return: 'Customer return',
+                        branch_transfer: 'Branch transfer',
+                        product_removed: 'Product removed',
+                      };
+                      const branchLabel = movement.reason === 'branch_transfer'
+                        ? `${branchMap[movement.fromBranchId || ''] || 'Branch'} → ${branchMap[movement.toBranchId || ''] || 'Branch'}`
+                        : branchMap[movement.branchId] || '—';
+                      return (
+                        <tr key={log.id}>
+                          <td>{new Date(log.createdAt).toLocaleString()}</td>
+                          <td style={{ fontWeight: 600, color: 'var(--text)' }}>{movement.productName}</td>
+                          <td>{branchLabel}</td>
+                          <td>{reasonLabels[movement.reason]}</td>
+                          <td style={{ color: movement.quantityDelta >= 0 ? 'var(--success)' : 'var(--danger)', fontWeight: 700 }}>
+                            {movement.reason === 'branch_transfer' ? 'Moved' : `${movement.quantityDelta > 0 ? '+' : ''}${movement.quantityDelta}`}
+                          </td>
+                          <td>{log.userEmail}</td>
+                          <td>{movement.note || '—'}</td>
+                        </tr>
+                      );
+                    }) : (
+                      <tr>
+                        <td colSpan={7} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '1.5rem' }}>
+                          No stock activity recorded yet.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
             <PaginationControls
               totalItems={filteredProducts.length}
@@ -3096,7 +3259,7 @@ export default function Page() {
                 <div style={{ padding: '1rem', backgroundColor: 'var(--info-light)', borderRadius: 'var(--radius)', marginBottom: '1rem', border: '1px solid var(--info-bg)' }}>
                   <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--info)' }}>💡 Use the Sales Desk for multi-item transactions. This form is for quick single-item sales.</p>
                 </div>
-                <form onSubmit={(e) => { makeProductSale(e); setShowSaleModal(false); }}>
+                <form onSubmit={(e) => { if (makeProductSale(e)) setShowSaleModal(false); }}>
                   <div className="form">
                     <label className="field">
                       <span>Product</span>
@@ -3180,22 +3343,93 @@ export default function Page() {
                       </select>
                     </label>
                     <label className="field">
-                      <span>Initial Stock</span>
-                      <input type="number" value={productForm.stock} onChange={(e) => setProductForm({ ...productForm, stock: Number(e.target.value) })} required />
+                      <span>{productForm.id ? 'Stock on hand' : 'Opening stock'}</span>
+                      <input type="number" min="0" step="0.01" value={productForm.stock} onChange={(e) => setProductForm({ ...productForm, stock: Number(e.target.value) })} required />
                     </label>
                     <label className="field">
                       <span>Purchase Price (UGX)</span>
-                      <input type="number" value={productForm.purchasePrice} onChange={(e) => setProductForm({ ...productForm, purchasePrice: Number(e.target.value) })} required />
+                      <input type="number" min="0" step="0.01" value={productForm.purchasePrice} onChange={(e) => setProductForm({ ...productForm, purchasePrice: Number(e.target.value) })} required />
                     </label>
                     <label className="field">
                       <span>Selling Price (UGX)</span>
-                      <input type="number" value={productForm.salePrice} onChange={(e) => setProductForm({ ...productForm, salePrice: Number(e.target.value) })} required />
+                      <input type="number" min="0" step="0.01" value={productForm.salePrice} onChange={(e) => setProductForm({ ...productForm, salePrice: Number(e.target.value) })} required />
                     </label>
                   </div>
                 </div>
                 <div className="modal-footer">
                   <button type="button" className="edit-btn" onClick={() => setShowProductModal(false)}>Cancel</button>
                   <button type="submit" className="primary">Save Product</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {showStockAdjustmentModal && (
+          <div className="modal-overlay">
+            <div className="modal-content" role="dialog" aria-modal="true" aria-labelledby="stock-adjustment-title">
+              <div className="modal-header">
+                <div>
+                  <h3 id="stock-adjustment-title">Adjust stock</h3>
+                  {products.find((product) => product.id === stockAdjustmentForm.productId) && (
+                    <p style={{ margin: '0.3rem 0 0', color: 'var(--text-muted)', fontSize: '0.78rem' }}>
+                      On hand: {products.find((product) => product.id === stockAdjustmentForm.productId)?.stock}
+                    </p>
+                  )}
+                </div>
+                <button type="button" className="modal-close" onClick={() => setShowStockAdjustmentModal(false)} aria-label="Close stock adjustment">&times;</button>
+              </div>
+              <form onSubmit={saveStockAdjustment}>
+                <div className="modal-body">
+                  <div className="form">
+                    <label className="field">
+                      <span>Product</span>
+                      <select value={stockAdjustmentForm.productId} onChange={(e) => setStockAdjustmentForm((prev) => ({ ...prev, productId: e.target.value }))} required>
+                        <option value="">Select product</option>
+                        {products.map((product) => (
+                          <option key={product.id} value={product.id}>{product.name} · {product.stock} on hand</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Change</span>
+                      <select value={stockAdjustmentForm.direction} onChange={(e) => setStockAdjustmentForm((prev) => ({ ...prev, direction: e.target.value as 'add' | 'remove' }))}>
+                        <option value="add">Add stock</option>
+                        <option value="remove">Remove stock</option>
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Quantity</span>
+                      <input type="number" min="0.01" step="0.01" value={stockAdjustmentForm.quantity} onChange={(e) => setStockAdjustmentForm((prev) => ({ ...prev, quantity: Number(e.target.value) }))} required />
+                    </label>
+                    <label className="field">
+                      <span>Reason</span>
+                      <select
+                        value={stockAdjustmentForm.reason}
+                        onChange={(e) => {
+                          const reason = e.target.value as typeof stockAdjustmentForm.reason;
+                          setStockAdjustmentForm((prev) => ({
+                            ...prev,
+                            reason,
+                            direction: reason === 'damaged' ? 'remove' : reason === 'customer_return' ? 'add' : prev.direction,
+                          }));
+                        }}
+                      >
+                        <option value="restock">Restock / received</option>
+                        <option value="count_correction">Count correction</option>
+                        <option value="damaged">Damaged / expired</option>
+                        <option value="customer_return">Customer return</option>
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Note (optional)</span>
+                      <textarea value={stockAdjustmentForm.note} onChange={(e) => setStockAdjustmentForm((prev) => ({ ...prev, note: e.target.value }))} maxLength={160} rows={3} placeholder="Reason or reference number" />
+                    </label>
+                  </div>
+                </div>
+                <div className="modal-footer">
+                  <button type="button" className="edit-btn" onClick={() => setShowStockAdjustmentModal(false)}>Cancel</button>
+                  <button type="submit" className="primary">Save adjustment</button>
                 </div>
               </form>
             </div>

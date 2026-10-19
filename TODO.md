@@ -18,4 +18,12 @@
 - [x] Establish truthful setup/configuration documentation without publishing or copying Firebase secrets.
 - [x] Refresh the shared shell and responsive operator experience while retaining access to the current operational screens.
 - [x] Add backward-compatible product category, SKU, and barcode fields, duplicate identifier checks, and Enter-to-add scanning for stocked retail products.
-- [ ] Run the applicable static checks/build, review the diff, create a coherent section commit, and push it to `origin/main`.
+- [x] Run the applicable static checks/build, review the diff, create a coherent section commit, and push it to `origin/main` (`92c22f0`, pushed to `alphacortexai/AlphaPOS:main`).
+
+## 4. Retail inventory controls — in progress
+
+- [x] Keep the product/category/SKU/barcode catalog compatible with existing Firestore records and protect stock and price inputs from invalid negative values.
+- [x] Record and display structured stock changes for opening stock, checkout sales, restocks, count corrections, damaged/expired goods, customer returns, product removal, and product branch changes; identify product, branch, quantity, reason, time, and staff member.
+- [x] Make receiving and stock adjustments usable from a dedicated form that validates available stock and records a reason/note.
+- [x] Preserve the current activity-log retention boundary (latest 500 shop events; inventory view shows up to 100 movement events) until a versioned, separately stored movement ledger can be deployed safely.
+- [ ] Add supplier receiving and durable long-term inventory movement history in a later compatible storage increment.
