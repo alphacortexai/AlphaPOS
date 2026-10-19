@@ -34,5 +34,8 @@
 - [x] Group each cart sale's line items under one transaction identifier while preserving legacy sale records that have no identifier.
 - [x] Capture optional customer name/phone, payment method, and optional tender reference on quick product sales, multi-item checkout, and direct service sales; retain walk-in checkout.
 - [x] Make clear that card-terminal, mobile-money, bank-transfer, and other non-cash options are recorded locally only and do not process payments.
-- [ ] Add grouped printable receipts and explicit returns/refunds without silently rewriting prior sale history.
-- [ ] Add jurisdiction-specific business tax configuration and reliable Firestore transaction-level stock/tender persistence before treating checkout as production-hardened.
+- [x] Add a register-first counter: category tiles, barcode search, line and ticket discounts, held tickets, split tender, cash change, and an open/close drawer with expected cash.
+- [x] Add grouped printable receipts and explicit returns that restore stock without rewriting the original sale.
+- [x] Add shop tax settings (name, rate, included or added at checkout) and show tax on the receipt and dashboard. This is a shop calculation, not a filing integration.
+- [x] Remember named customers and an on-account balance. Offer an on-device counter when Firebase is not configured.
+- [ ] Add reliable Firestore transaction-level stock and tender persistence before treating checkout as production-hardened. The shop is still saved as one document.
