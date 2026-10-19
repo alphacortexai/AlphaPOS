@@ -260,7 +260,7 @@ export default function Page() {
   const [reportsSalesPage, setReportsSalesPage] = useState(1);
   const [activityLogsPage, setActivityLogsPage] = useState(1);
   const [dashboardPeriod, setDashboardPeriod] = useState<DashboardPeriod>('weekly');
-  const [insightTrendRange, setInsightTrendRange] = useState<InsightTrendRange>(30);
+  const [insightTrendRange, setInsightTrendRange] = useState<InsightTrendRange>(7);
   const [productSearchQuery, setProductSearchQuery] = useState('');
   const [productBranchFilter, setProductBranchFilter] = useState('');
   const [productStockFilter, setProductStockFilter] = useState<'all' | 'low' | 'out'>('all');
@@ -919,6 +919,23 @@ export default function Page() {
 
     return { mostSold, topRevenue, trendDays, maxRevenue, points, areaPoints, yTicks, xTicks, totalRevenue, averageRevenue, trendMap };
   }, [insightTrendRange, sales]);
+
+  const shopWeek = useMemo(() => {
+    const today = new Date();
+    const days = Array.from({ length: 7 }, (_, idx) => {
+      const date = new Date(today);
+      date.setHours(12, 0, 0, 0);
+      date.setDate(today.getDate() - (6 - idx));
+      return { key: date.toISOString().slice(0, 10), label: date.toLocaleDateString(undefined, { weekday: 'short' }), revenue: 0 };
+    });
+    const byDay = new Map(days.map((day) => [day.key, day]));
+    sales.forEach((sale) => {
+      const bucket = byDay.get(new Date(sale.createdAt).toISOString().slice(0, 10));
+      if (bucket) bucket.revenue += sale.amount;
+    });
+    const max = days.reduce((peak, day) => Math.max(peak, day.revenue), 0);
+    return { days, max, total: days.reduce((sum, day) => sum + day.revenue, 0) };
+  }, [sales]);
 
   // Filtered products for inventory
   const filteredProducts = useMemo(() => {
@@ -2335,34 +2352,40 @@ export default function Page() {
           </select>
         </div>
 
-        <nav className="sidebar-nav">
-          <div className="nav-group-label">Overview</div>
-          <button className={`nav-button ${view === 'dashboard' ? 'active' : ''}`} onClick={() => { setView('dashboard'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">◫</span><span>Dashboard</span></button>
+        <button type="button" className={`sell-launch${view === 'sales' ? ' active' : ''}`} onClick={() => { setView('sales'); setIsSidebarOpen(false); }}>
+          <span>Register</span>
+          <small>Take a sale</small>
+        </button>
 
-          <div className="nav-group-label">Sell</div>
-          <button className={`nav-button ${view === 'sales' ? 'active' : ''}`} onClick={() => { setView('sales'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">▣</span><span>Register</span></button>
-          <button className={`nav-button ${view === 'sales_history' ? 'active' : ''}`} onClick={() => { setView('sales_history'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">≡</span><span>Sales History</span></button>
+        <nav className="sidebar-nav">
+          <div className="nav-group-label">Counter</div>
+          <button className={`nav-button ${view === 'dashboard' ? 'active' : ''}`} onClick={() => { setView('dashboard'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">◫</span><span>Today</span></button>
+          <button className={`nav-button ${view === 'sales_history' ? 'active' : ''}`} onClick={() => { setView('sales_history'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">≡</span><span>Sales</span></button>
           <button className={`nav-button ${view === 'customers' ? 'active' : ''}`} onClick={() => { setView('customers'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">☺</span><span>Customers</span></button>
+
           <div className="nav-group-label">Stock</div>
-          <button className={`nav-button ${view === 'products' ? 'active' : ''}`} onClick={() => { setView('products'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">□</span><span>Inventory</span></button>
+          <button className={`nav-button ${view === 'products' ? 'active' : ''}`} onClick={() => { setView('products'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">□</span><span>Products</span></button>
           <button className={`nav-button ${view === 'services' ? 'active' : ''}`} onClick={() => { setView('services'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">✦</span><span>Services</span></button>
 
-          <div className="nav-group-label">Management</div>
+          <div className="nav-group-label">Books</div>
           <button className={`nav-button ${view === 'expenses' ? 'active' : ''}`} onClick={() => { setView('expenses'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">−</span><span>Expenses</span></button>
-          <button className={`nav-button ${view === 'users' ? 'active' : ''}`} onClick={() => { setView('users'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">◎</span><span>Staff</span></button>
-          <button className={`nav-button ${view === 'activity_logs' ? 'active' : ''}`} onClick={() => { setView('activity_logs'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">⌘</span><span>Activity Logs</span></button>
           <button className={`nav-button ${view === 'reports' ? 'active' : ''}`} onClick={() => { setView('reports'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">▤</span><span>Reports</span></button>
           <button className={`nav-button ${view === 'accounts' ? 'active' : ''}`} onClick={() => { setView('accounts'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">⌁</span><span>Accounts</span></button>
+
+          <div className="nav-group-label">Shop</div>
+          <button className={`nav-button ${view === 'users' ? 'active' : ''}`} onClick={() => { setView('users'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">◎</span><span>Staff</span></button>
+          <button className={`nav-button ${view === 'activity_logs' ? 'active' : ''}`} onClick={() => { setView('activity_logs'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">⌘</span><span>Activity</span></button>
           {isShopOwner && <button className={`nav-button ${view === 'settings' ? 'active' : ''}`} onClick={() => { setView('settings'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">⚙</span><span>Settings</span></button>}
         </nav>
 
         <div className="sidebar-footer">
-          <div className="user-info">
-            <button onClick={() => setView('profile')} style={{ background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left', width: '100%' }}>
-              <div>{authUser.displayName}</div>
-              <div style={{ opacity: 0.6 }}>{authUser.email}</div>
-            </button>
-          </div>
+          <button className="user-chip" onClick={() => setView('profile')}>
+            <span className="user-avatar" aria-hidden="true">{(authUser.displayName || authUser.email || 'U').trim().charAt(0).toUpperCase()}</span>
+            <span className="user-chip-text">
+              <strong>{authUser.displayName}</strong>
+              <small>{authUser.email}</small>
+            </span>
+          </button>
           <button className="logout-button" onClick={handleLogout}>Sign Out</button>
         </div>
 
@@ -2381,21 +2404,38 @@ export default function Page() {
         <header className="main-header">
           <div className="header-title">
             <button className="mobile-menu-toggle" onClick={() => setIsSidebarOpen(true)} aria-label="Open menu">Menu</button>
-            <h1>
-              {view === 'dashboard' ? 'Dashboard' :
-               view === 'sales' ? 'Register' :
-               view === 'sales_history' ? 'Sales history' :
-               view === 'customers' ? 'Customers' :
-               view === 'products' ? 'Inventory' :
-               view === 'services' ? 'Services' :
-               view === 'expenses' ? 'Expenses' :
-               view === 'users' ? 'Staff' :
-               view === 'activity_logs' ? 'Activity' :
-               view === 'reports' ? 'Reports' :
-               view === 'accounts' ? 'Accounts' :
-               view === 'settings' ? 'Settings' :
-               view.charAt(0).toUpperCase() + view.slice(1)}
-            </h1>
+            <div>
+              <h1>
+                {view === 'dashboard' ? 'Today' :
+                 view === 'sales' ? 'Register' :
+                 view === 'sales_history' ? 'Sales' :
+                 view === 'customers' ? 'Customers' :
+                 view === 'products' ? 'Products' :
+                 view === 'services' ? 'Services' :
+                 view === 'expenses' ? 'Expenses' :
+                 view === 'users' ? 'Staff' :
+                 view === 'activity_logs' ? 'Activity' :
+                 view === 'reports' ? 'Reports' :
+                 view === 'accounts' ? 'Accounts' :
+                 view === 'settings' ? 'Settings' :
+                 'Profile'}
+              </h1>
+              <p className="header-kicker">
+                {view === 'dashboard' ? 'What the shop took in, what is low, and whether the drawer is open.' :
+                 view === 'sales' ? 'Scan an item, take payment, and hand over the receipt.' :
+                 view === 'sales_history' ? 'Find a receipt, print it again, or take a return.' :
+                 view === 'customers' ? 'People who bought on a name, and what they still owe.' :
+                 view === 'products' ? 'What is on the shelf, what it cost, and what just moved.' :
+                 view === 'services' ? 'Work you sell that is not a stocked product.' :
+                 view === 'expenses' ? 'Money that left the shop, grouped so the books stay clear.' :
+                 view === 'users' ? 'Who can sell, count stock, or run the shop.' :
+                 view === 'activity_logs' ? 'A plain record of who changed what.' :
+                 view === 'reports' ? 'Today, this week, and this month in one place.' :
+                 view === 'accounts' ? 'Where sales land and where expenses come out.' :
+                 view === 'settings' ? 'Shop name, tax, receipt, branches, and backup.' :
+                 `${currentShop?.shopName || 'My Shop'} · ${roleLabels[role]}`}
+              </p>
+            </div>
           </div>
           <div className="status-container">
             <span className="status">{status}</span>
@@ -2403,7 +2443,7 @@ export default function Page() {
         </header>
 
         {view === 'dashboard' && (
-          <section>
+          <section className="today-board">
             <div className="office-toolbar">
               <label>
                 Period
@@ -2414,31 +2454,37 @@ export default function Page() {
                   <option value="yearly">This year</option>
                 </select>
               </label>
-              <button className="primary" onClick={handleDashboardRefresh} disabled={isRefreshingDashboard || authUser.uid === LOCAL_OPERATOR_ID} title={authUser.uid === LOCAL_OPERATOR_ID ? 'This counter already saves on this device.' : 'Reload the shop record and recalculate costs'}>
-                {isRefreshingDashboard ? 'Refreshing…' : 'Reload shop'}
-              </button>
+              <div className="today-actions">
+                <button className="edit-btn" onClick={handleDashboardRefresh} disabled={isRefreshingDashboard || authUser.uid === LOCAL_OPERATOR_ID} title={authUser.uid === LOCAL_OPERATOR_ID ? 'This counter already saves on this device.' : 'Reload the shop record and recalculate costs'}>
+                  {isRefreshingDashboard ? 'Refreshing…' : 'Reload'}
+                </button>
+                <button className="primary" onClick={() => setView('sales')}>Open register</button>
+              </div>
             </div>
+
+            <article className="today-hero">
+              <div>
+                <p>{dashboardPeriod === 'daily' ? 'Sales today' : dashboardPeriod === 'weekly' ? 'Sales this week' : dashboardPeriod === 'monthly' ? 'Sales this month' : 'Sales this year'}</p>
+                <strong>{formatUGX(dashboardMetrics.sales.value)}</strong>
+                <Badge value={dashboardMetrics.sales.change} />
+              </div>
+              <dl>
+                <div><dt>Receipts</dt><dd>{dashboardMetrics.receipts}</dd></div>
+                <div><dt>Average ticket</dt><dd>{formatUGX(dashboardMetrics.receipts > 0 ? dashboardMetrics.sales.value / dashboardMetrics.receipts : 0)}</dd></div>
+                <div><dt>Net</dt><dd className={dashboardMetrics.netProfit.value >= 0 ? 'is-positive' : 'is-negative'}>{formatUGX(dashboardMetrics.netProfit.value)}</dd></div>
+              </dl>
+            </article>
 
             <div className="kpi-grid">
               <article className="kpi">
-                <p>Sales</p>
-                <strong>{formatUGX(dashboardMetrics.sales.value)}</strong>
-                <Badge value={dashboardMetrics.sales.change} />
-              </article>
-              <article className="kpi">
                 <p>Expenses</p>
-                <strong>{formatUGX(dashboardMetrics.expenses.value)}</strong>
+                <strong className="is-negative">{formatUGX(dashboardMetrics.expenses.value)}</strong>
                 <Badge value={dashboardMetrics.expenses.change} />
               </article>
               <article className="kpi">
                 <p>Gross profit</p>
-                <strong>{formatUGX(dashboardMetrics.grossProfit.value)}</strong>
+                <strong className={dashboardMetrics.grossProfit.value >= 0 ? 'is-positive' : 'is-negative'}>{formatUGX(dashboardMetrics.grossProfit.value)}</strong>
                 <Badge value={dashboardMetrics.grossProfit.change} />
-              </article>
-              <article className="kpi">
-                <p>Net profit</p>
-                <strong className={dashboardMetrics.netProfit.value >= 0 ? 'is-positive' : 'is-negative'}>{formatUGX(dashboardMetrics.netProfit.value)}</strong>
-                <Badge value={dashboardMetrics.netProfit.change} />
               </article>
               <article className="kpi">
                 <p>{taxSettings.enabled ? taxSettings.name : 'Tax'}</p>
@@ -2446,22 +2492,45 @@ export default function Page() {
                 <span className="badge badge-info">{taxSettings.enabled ? `${taxSettings.ratePercent}%` : 'Off'}</span>
               </article>
               <article className="kpi">
-                <p>Receipts</p>
-                <strong>{dashboardMetrics.receipts}</strong>
-                <span className="badge badge-info">In this period</span>
-              </article>
-              <article className="kpi">
-                <p>Catalog</p>
-                <strong>{dashboardMetrics.products}</strong>
-                <span className={`badge ${products.some((product) => product.stock > 0 && product.stock < 10) ? 'badge-warning' : 'badge-success'}`}>
-                  {products.filter((product) => product.stock > 0 && product.stock < 10).length} low
-                </span>
-              </article>
-              <article className="kpi">
-                <p>{defaultAccount?.name || 'Cash account'}</p>
+                <p>{defaultAccount?.name || 'Cash'}</p>
                 <strong>{formatUGX(defaultAccount ? (accountBalances.get(defaultAccount.id) || 0) : 0)}</strong>
-                <span className="badge badge-info">Balance</span>
+                <span className="badge badge-info">Account</span>
               </article>
+            </div>
+
+            <div className="attention-grid">
+              <div className="card">
+                <div className="insight-header-row">
+                  <h3>Needs a look</h3>
+                  <button type="button" className="edit-btn" onClick={() => setView('products')}>Products</button>
+                </div>
+                {products.filter((product) => product.stock < 10).length > 0 ? (
+                  <ul className="attention-list">
+                    {products.filter((product) => product.stock < 10).slice(0, 5).map((product) => (
+                      <li key={product.id}>
+                        <span>{product.name}</span>
+                        <b className={product.stock === 0 ? 'is-negative' : ''}>{product.stock === 0 ? 'Out' : `${product.stock} left`}</b>
+                      </li>
+                    ))}
+                  </ul>
+                ) : <p className="muted-copy">Every product has at least 10 on hand.</p>}
+              </div>
+              <div className="card drawer-card">
+                <h3>Cash drawer</h3>
+                {openCashSession ? (
+                  <>
+                    <p className="drawer-state">Open</p>
+                    <p className="muted-copy">Expected in the till</p>
+                    <strong>{formatUGX(sessionExpectedCash)}</strong>
+                  </>
+                ) : (
+                  <>
+                    <p className="drawer-state is-closed">Closed</p>
+                    <p className="muted-copy">Open the drawer on the register before the first cash sale.</p>
+                  </>
+                )}
+                <button type="button" className="primary" onClick={() => setView('sales')}>{openCashSession ? 'Go to register' : 'Open the register'}</button>
+              </div>
             </div>
 
             <div className="insight-stats-grid">
@@ -2469,9 +2538,9 @@ export default function Page() {
                 <h3>Most sold</h3>
                 {dashboardInsights.mostSold.length > 0 ? (
                   <ol className="rank-list">
-                    {dashboardInsights.mostSold.map((item) => (
+                    {dashboardInsights.mostSold.map((item, index) => (
                       <li key={`${item.type}-${item.name}`}>
-                        <span><strong>{item.name}</strong><small>{item.type}</small></span>
+                        <span><i>{index + 1}</i><strong>{item.name}</strong><small>{item.type}</small></span>
                         <b>{item.qty}</b>
                       </li>
                     ))}
@@ -2482,9 +2551,9 @@ export default function Page() {
                 <h3>Highest revenue</h3>
                 {dashboardInsights.topRevenue.length > 0 ? (
                   <ol className="rank-list">
-                    {dashboardInsights.topRevenue.map((item) => (
+                    {dashboardInsights.topRevenue.map((item, index) => (
                       <li key={`${item.type}-${item.name}-revenue`}>
-                        <span><strong>{item.name}</strong><small>{item.type}</small></span>
+                        <span><i>{index + 1}</i><strong>{item.name}</strong><small>{item.type}</small></span>
                         <b>{formatUGX(item.revenue)}</b>
                       </li>
                     ))}
@@ -2510,18 +2579,32 @@ export default function Page() {
                   </select>
                 </label>
               </div>
-              <div className="trend-bars" role="img" aria-label={`Sales trend for the last ${insightTrendRange} days`}>
-                {dashboardInsights.trendDays.map((day, index) => {
-                  const labelEvery = insightTrendRange <= 7 ? 1 : insightTrendRange <= 14 ? 2 : insightTrendRange <= 30 ? 5 : insightTrendRange <= 60 ? 10 : 14;
-                  const height = dashboardInsights.maxRevenue > 0 ? Math.max(day.revenue > 0 ? 8 : 0, (day.revenue / dashboardInsights.maxRevenue) * 100) : 0;
-                  const showLabel = index % labelEvery === 0 || index === dashboardInsights.trendDays.length - 1;
-                  return (
-                    <div key={day.date} className="trend-col" title={`${day.date}: ${formatUGX(day.revenue)}`}>
-                      <span style={{ height: `${height}%` }} />
-                      {showLabel && <em>{day.date.slice(5)}</em>}
-                    </div>
-                  );
-                })}
+              <div className="trend-plot">
+                <div className="trend-scale" aria-hidden="true">
+                  <span>{formatUGX(dashboardInsights.maxRevenue)}</span>
+                  <span>{formatUGX(dashboardInsights.maxRevenue / 2)}</span>
+                  <span>0</span>
+                </div>
+                <div className="trend-canvas">
+                  <div className="trend-bars" role="img" aria-label={`Sales trend for the last ${insightTrendRange} days`}>
+                    {dashboardInsights.trendDays.map((day, index) => {
+                      const labelEvery = insightTrendRange <= 7 ? 1 : insightTrendRange <= 14 ? 2 : insightTrendRange <= 30 ? 5 : insightTrendRange <= 60 ? 10 : 14;
+                      const height = dashboardInsights.maxRevenue > 0 ? (day.revenue / dashboardInsights.maxRevenue) * 100 : 0;
+                      const showLabel = insightTrendRange <= 7 || index % labelEvery === 0 || index === dashboardInsights.trendDays.length - 1;
+                      const axisLabel = insightTrendRange <= 7
+                        ? new Date(`${day.date}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short' })
+                        : day.date.slice(5);
+                      const peakIndex = dashboardInsights.trendDays.reduce((found, entry, entryIndex) => entry.revenue > 0 && entry.revenue === dashboardInsights.maxRevenue ? entryIndex : found, -1);
+                      return (
+                        <div key={day.date} className={`trend-col${day.revenue > 0 ? ' has-sale' : ''}`} title={`${day.date}: ${formatUGX(day.revenue)}`}>
+                          {index === peakIndex && <b style={{ bottom: `calc(${height}% + 6px)` }}>{formatUGX(day.revenue)}</b>}
+                          <span style={{ height: `${height}%` }} />
+                          {showLabel && <em>{axisLabel}</em>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
               <div className="insight-trend-footer">
                 <p>Peak day <strong>{formatUGX(dashboardInsights.maxRevenue)}</strong></p>
@@ -2770,6 +2853,7 @@ export default function Page() {
               <h2>Service Catalog</h2>
             </div>
             <div className="card" style={{ marginBottom: '1rem' }}>
+              <h3>Sell a service</h3>
               <div className="field" style={{ maxWidth: '320px' }}>
                 <label>Credit service sales to account</label>
                 <select value={selectedSaleAccountId || ''} onChange={(e) => setSaleAccountId(e.target.value)}>
@@ -2779,6 +2863,7 @@ export default function Page() {
               {renderCheckoutDetailsFields()}
             </div>
             <div className="card" style={{ marginBottom: '1rem' }}>
+              <h3>Service catalog</h3>
               <form onSubmit={saveService} className="office-form">
                 <div className="field">
                   <label>Service Name</label>
@@ -2927,8 +3012,21 @@ export default function Page() {
 
                 <button className="edit-btn" onClick={() => { const today = new Date().toISOString().split('T')[0]; setSalesDateFilter(today); setSalesRangeStart(today); setSalesRangeEnd(today); setSalesHistoryViewMode('day'); }}>Today</button>
               </div>
+              <div className="kpi-grid cols-3">
+                <article className="kpi">
+                  <p>Receipts</p>
+                  <strong>{groupedSales.length}</strong>
+                </article>
+                <article className="kpi">
+                  <p>Total</p>
+                  <strong>{formatUGX(groupedSales.reduce((sum, sale) => sum + sale.total, 0))}</strong>
+                </article>
+                <article className="kpi">
+                  <p>Margin</p>
+                  <strong className={groupedSales.reduce((sum, sale) => sum + sale.profit, 0) >= 0 ? 'is-positive' : 'is-negative'}>{showRegisterMargin ? formatUGX(groupedSales.reduce((sum, sale) => sum + sale.profit, 0)) : '—'}</strong>
+                </article>
+              </div>
 
-  
             <div className="table-wrap">
                 <table className="data-table">
                   <thead>
@@ -2973,7 +3071,7 @@ export default function Page() {
                       ))
                     ) : (
                       <tr>
-                        <td colSpan={7} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>No sales recorded for this period</td>
+                        <td colSpan={7} className="empty-cell">No sales recorded for this period</td>
                       </tr>
                     )}
                   </tbody>
@@ -3267,6 +3365,25 @@ export default function Page() {
               <h2>Business Reports & Analytics</h2>
             </div>
 
+            <div className="card trend-card">
+              <div className="insight-header-row">
+                <div>
+                  <h3>Last 7 days</h3>
+                  <p className="muted-copy">Register sales and returns, by day</p>
+                </div>
+                <p className="muted-copy">Week total <strong>{formatUGX(shopWeek.total)}</strong></p>
+              </div>
+              <div className="week-strip" role="img" aria-label="Sales for the last 7 days">
+                {shopWeek.days.map((day) => (
+                  <div key={day.key} className="week-day" title={`${day.label}: ${formatUGX(day.revenue)}`}>
+                    <span style={{ height: `${shopWeek.max > 0 ? Math.max(day.revenue > 0 ? 8 : 0, (day.revenue / shopWeek.max) * 100) : 0}%` }} />
+                    <em>{day.label}</em>
+                    <small>{day.revenue === 0 ? '—' : formatUGX(day.revenue)}</small>
+                  </div>
+                ))}
+              </div>
+            </div>
+
             <div className="report-grid">
               <div className="card">
                 <h4>Today</h4>
@@ -3394,6 +3511,7 @@ export default function Page() {
                 <label>Search</label>
                 <input value={customerQuery} placeholder="Name or phone" onChange={(event) => setCustomerQuery(event.target.value)} />
               </div>
+              <p className="filter-count">{customers.length} customer{customers.length === 1 ? '' : 's'}</p>
             </div>
             <div className="table-wrap">
               <table className="data-table">
