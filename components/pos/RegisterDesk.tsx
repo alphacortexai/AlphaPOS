@@ -418,6 +418,8 @@ export default function RegisterDesk({
               </div>
               <button type="button" className="modal-close" onClick={() => setPaymentOpen(false)} aria-label="Close payment">×</button>
             </header>
+            <div className="pos-pay-layout">
+            <div className="pos-pay-main">
             <div className="pos-methods">
               {(Object.keys(PAYMENT_METHOD_LABELS) as PaymentMethod[]).map((method) => (
                 <button key={method} type="button" className={payment.method === method ? 'active' : ''} onClick={() => setPayment((prev) => ({ ...prev, method, cashTendered: method === 'cash' ? String(total) : prev.cashTendered }))}>{PAYMENT_METHOD_LABELS[method]}</button>
@@ -443,24 +445,10 @@ export default function RegisterDesk({
               </div>
             )}
             {cashIsPrimary && (
-              <div className="pos-cashbox">
-                <div className="pos-due-readout">
-                  <span>Cash received</span>
-                  <strong>{formatMoney(cashTendered)}</strong>
-                  <em>{cashTendered >= primaryAmount ? `Change ${formatMoney(cashTendered - primaryAmount)}` : `Still short ${formatMoney(primaryAmount - cashTendered)}`}</em>
-                </div>
-                <div className="pos-quick-cash">
-                  <button type="button" onClick={() => setPayment((prev) => ({ ...prev, cashTendered: String(primaryAmount) }))}>Exact</button>
-                  {cashNumbers.map((note) => <button key={note} type="button" onClick={() => setPayment((prev) => ({ ...prev, cashTendered: String(Number(prev.cashTendered || 0) + Number(note)) }))}>{formatMoney(Number(note))}</button>)}
-                </div>
-                <div className="pos-numpad">
-                  {['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '00', '⌫'].map((key) => (
-                    <button key={key} type="button" onClick={() => setPayment((prev) => {
-                      if (key === '⌫') return { ...prev, cashTendered: prev.cashTendered.slice(0, -1) };
-                      return { ...prev, cashTendered: `${prev.cashTendered === '0' ? '' : prev.cashTendered}${key}`.slice(0, 9) };
-                    })}>{key}</button>
-                  ))}
-                </div>
+              <div className="pos-due-readout">
+                <span>Cash received</span>
+                <strong>{formatMoney(cashTendered)}</strong>
+                <em>{cashTendered >= primaryAmount ? `Change ${formatMoney(cashTendered - primaryAmount)}` : `Still short ${formatMoney(primaryAmount - cashTendered)}`}</em>
               </div>
             )}
             {payment.method !== 'cash' && (
@@ -471,6 +459,24 @@ export default function RegisterDesk({
             )}
             <p className="pos-pay-note">Card, mobile money, and bank payments are saved on the sale. AlphaPOS does not charge the customer’s account or card.</p>
             {needsCustomer && !customerName.trim() && <p className="pos-pay-warning">Enter the customer name before putting a sale on account.</p>}
+            </div>
+            {cashIsPrimary && (
+              <div className="pos-cashbox">
+                <div className="pos-quick-cash">
+                  <button type="button" onClick={() => setPayment((prev) => ({ ...prev, cashTendered: String(primaryAmount) }))}>Exact</button>
+                  {cashNumbers.map((note) => <button key={note} type="button" onClick={() => setPayment((prev) => ({ ...prev, cashTendered: String(Number(prev.cashTendered || 0) + Number(note)) }))}>{formatMoney(Number(note))}</button>)}
+                </div>
+                <div className="pos-numpad">
+                  {['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '00', '←'].map((key) => (
+                    <button key={key} type="button" onClick={() => setPayment((prev) => {
+                      if (key === '←') return { ...prev, cashTendered: prev.cashTendered.slice(0, -1) };
+                      return { ...prev, cashTendered: `${prev.cashTendered === '0' ? '' : prev.cashTendered}${key}`.slice(0, 9) };
+                    })}>{key}</button>
+                  ))}
+                </div>
+              </div>
+            )}
+            </div>
             <button type="button" className="primary pos-charge" disabled={!canCharge} onClick={() => {
               const tenders = buildTenders();
               if (!tenders) return;

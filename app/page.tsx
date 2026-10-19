@@ -181,6 +181,15 @@ const removeUndefinedDeep = <T,>(value: T): T => {
 const emptyCheckout = { customerName: '', customerPhone: '', paymentMethod: 'cash' as PaymentMethod, paymentReference: '' };
 const roleLabels: Record<Role, string> = { shop_owner: 'Owner', admin: 'Admin', manager: 'Manager', cashier: 'Cashier', stock: 'Stock' };
 
+function heatLevel(revenue: number, max: number) {
+  if (revenue <= 0 || max <= 0) return 0;
+  const ratio = revenue / max;
+  if (ratio >= 0.999) return 4;
+  if (ratio >= 0.66) return 3;
+  if (ratio >= 0.33) return 2;
+  return 1;
+}
+
 const normalizeHeldTickets = (value: unknown): HeldTicket[] => {
   if (!Array.isArray(value)) return [];
   return value.flatMap((item) => {
@@ -882,10 +891,10 @@ export default function Page() {
     const today = new Date();
     const trendDays = Array.from({ length: insightTrendRange }, (_, idx) => {
       const d = new Date(today);
-      d.setHours(0, 0, 0, 0);
+      d.setHours(12, 0, 0, 0);
       d.setDate(today.getDate() - (insightTrendRange - 1 - idx));
       const key = d.toISOString().slice(0, 10);
-      return { date: key, revenue: 0 };
+      return { date: key, revenue: 0, expense: 0 };
     });
     const trendMap = new Map(trendDays.map((item) => [item.date, item]));
 
@@ -894,31 +903,20 @@ export default function Page() {
       const bucket = trendMap.get(key);
       if (bucket) bucket.revenue += sale.amount;
     });
+    expenses.forEach((expense) => {
+      const key = new Date(expense.createdAt).toISOString().slice(0, 10);
+      const bucket = trendMap.get(key);
+      if (bucket) bucket.expense += expense.amount;
+    });
 
     const maxRevenue = trendDays.reduce((max, day) => Math.max(max, day.revenue), 0);
+    const chartMax = trendDays.reduce((max, day) => Math.max(max, day.revenue, day.expense), 0);
     const totalRevenue = trendDays.reduce((acc, day) => acc + day.revenue, 0);
+    const totalExpense = trendDays.reduce((acc, day) => acc + day.expense, 0);
     const averageRevenue = trendDays.length > 0 ? totalRevenue / trendDays.length : 0;
-    const points = trendDays
-      .map((day, idx) => {
-        const x = trendDays.length === 1 ? 0 : (idx / (trendDays.length - 1)) * 100;
-        const y = maxRevenue > 0 ? 100 - (day.revenue / maxRevenue) * 100 : 100;
-        return `${x},${y}`;
-      })
-      .join(' ');
 
-    const areaPoints = `0,100 ${points} 100,100`;
-    const yTicks = [1, 0.75, 0.5, 0.25, 0].map((factor) => {
-      const y = (1 - factor) * 100;
-      return { y, value: maxRevenue * factor };
-    });
-
-    const xTicks = trendDays.map((day, index) => {
-      const x = trendDays.length === 1 ? 0 : (index / (trendDays.length - 1)) * 100;
-      return { x, label: day.date.slice(5) };
-    });
-
-    return { mostSold, topRevenue, trendDays, maxRevenue, points, areaPoints, yTicks, xTicks, totalRevenue, averageRevenue, trendMap };
-  }, [insightTrendRange, sales]);
+    return { mostSold, topRevenue, trendDays, maxRevenue, chartMax, totalRevenue, totalExpense, averageRevenue };
+  }, [insightTrendRange, sales, expenses]);
 
   const shopWeek = useMemo(() => {
     const today = new Date();
@@ -935,6 +933,23 @@ export default function Page() {
     });
     const max = days.reduce((peak, day) => Math.max(peak, day.revenue), 0);
     return { days, max, total: days.reduce((sum, day) => sum + day.revenue, 0) };
+  }, [sales]);
+
+  const salesHeat = useMemo(() => {
+    const today = new Date();
+    const days = Array.from({ length: 28 }, (_, idx) => {
+      const date = new Date(today);
+      date.setHours(12, 0, 0, 0);
+      date.setDate(today.getDate() - (27 - idx));
+      return { key: date.toISOString().slice(0, 10), label: date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }), revenue: 0 };
+    });
+    const byDay = new Map(days.map((day) => [day.key, day]));
+    sales.forEach((sale) => {
+      const bucket = byDay.get(new Date(sale.createdAt).toISOString().slice(0, 10));
+      if (bucket) bucket.revenue += sale.amount;
+    });
+    const max = days.reduce((peak, day) => Math.max(peak, day.revenue), 0);
+    return { days, max, active: days.filter((day) => day.revenue > 0).length };
   }, [sales]);
 
   // Filtered products for inventory
@@ -1367,7 +1382,7 @@ export default function Page() {
       grouped.set(groupName, (grouped.get(groupName) || 0) + expense.amount);
     });
     const total = [...grouped.values()].reduce((sum, value) => sum + value, 0);
-    const colors = ['#ef4444', '#f59e0b', '#3b82f6', '#10b981', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316'];
+    const colors = ['#1f6feb', '#7eb6ff', '#123a73', '#5b8def', '#9ec5ff', '#3d5a80', '#4cc9f0', '#90e0ef'];
     const segments = [...grouped.entries()].map(([name, amount], idx) => ({
       name, amount, percentage: total > 0 ? (amount / total) * 100 : 0, color: colors[idx % colors.length]
     })).sort((a, b) => b.amount - a.amount);
@@ -2443,175 +2458,189 @@ export default function Page() {
         </header>
 
         {view === 'dashboard' && (
-          <section className="today-board">
-            <div className="office-toolbar">
-              <label>
-                Period
-                <select value={dashboardPeriod} onChange={(e) => setDashboardPeriod(e.target.value as DashboardPeriod)} className="period-select">
-                  <option value="daily">Today</option>
-                  <option value="weekly">This week</option>
-                  <option value="monthly">This month</option>
-                  <option value="yearly">This year</option>
-                </select>
-              </label>
-              <div className="today-actions">
-                <button className="edit-btn" onClick={handleDashboardRefresh} disabled={isRefreshingDashboard || authUser.uid === LOCAL_OPERATOR_ID} title={authUser.uid === LOCAL_OPERATOR_ID ? 'This counter already saves on this device.' : 'Reload the shop record and recalculate costs'}>
-                  {isRefreshingDashboard ? 'Refreshing…' : 'Reload'}
-                </button>
-                <button className="primary" onClick={() => setView('sales')}>Open register</button>
-              </div>
-            </div>
-
-            <article className="today-hero">
-              <div>
-                <p>{dashboardPeriod === 'daily' ? 'Sales today' : dashboardPeriod === 'weekly' ? 'Sales this week' : dashboardPeriod === 'monthly' ? 'Sales this month' : 'Sales this year'}</p>
-                <strong>{formatUGX(dashboardMetrics.sales.value)}</strong>
-                <Badge value={dashboardMetrics.sales.change} />
-              </div>
-              <dl>
-                <div><dt>Receipts</dt><dd>{dashboardMetrics.receipts}</dd></div>
-                <div><dt>Average ticket</dt><dd>{formatUGX(dashboardMetrics.receipts > 0 ? dashboardMetrics.sales.value / dashboardMetrics.receipts : 0)}</dd></div>
-                <div><dt>Net</dt><dd className={dashboardMetrics.netProfit.value >= 0 ? 'is-positive' : 'is-negative'}>{formatUGX(dashboardMetrics.netProfit.value)}</dd></div>
-              </dl>
-            </article>
-
-            <div className="kpi-grid">
-              <article className="kpi">
-                <p>Expenses</p>
-                <strong className="is-negative">{formatUGX(dashboardMetrics.expenses.value)}</strong>
-                <Badge value={dashboardMetrics.expenses.change} />
-              </article>
-              <article className="kpi">
-                <p>Gross profit</p>
-                <strong className={dashboardMetrics.grossProfit.value >= 0 ? 'is-positive' : 'is-negative'}>{formatUGX(dashboardMetrics.grossProfit.value)}</strong>
-                <Badge value={dashboardMetrics.grossProfit.change} />
-              </article>
-              <article className="kpi">
-                <p>{taxSettings.enabled ? taxSettings.name : 'Tax'}</p>
-                <strong>{formatUGX(dashboardMetrics.tax.value)}</strong>
-                <span className="badge badge-info">{taxSettings.enabled ? `${taxSettings.ratePercent}%` : 'Off'}</span>
-              </article>
-              <article className="kpi">
-                <p>{defaultAccount?.name || 'Cash'}</p>
-                <strong>{formatUGX(defaultAccount ? (accountBalances.get(defaultAccount.id) || 0) : 0)}</strong>
-                <span className="badge badge-info">Account</span>
-              </article>
-            </div>
-
-            <div className="attention-grid">
-              <div className="card">
-                <div className="insight-header-row">
-                  <h3>Needs a look</h3>
-                  <button type="button" className="edit-btn" onClick={() => setView('products')}>Products</button>
-                </div>
-                {products.filter((product) => product.stock < 10).length > 0 ? (
-                  <ul className="attention-list">
-                    {products.filter((product) => product.stock < 10).slice(0, 5).map((product) => (
-                      <li key={product.id}>
-                        <span>{product.name}</span>
-                        <b className={product.stock === 0 ? 'is-negative' : ''}>{product.stock === 0 ? 'Out' : `${product.stock} left`}</b>
-                      </li>
-                    ))}
-                  </ul>
-                ) : <p className="muted-copy">Every product has at least 10 on hand.</p>}
-              </div>
-              <div className="card drawer-card">
-                <h3>Cash drawer</h3>
-                {openCashSession ? (
-                  <>
-                    <p className="drawer-state">Open</p>
-                    <p className="muted-copy">Expected in the till</p>
-                    <strong>{formatUGX(sessionExpectedCash)}</strong>
-                  </>
-                ) : (
-                  <>
-                    <p className="drawer-state is-closed">Closed</p>
-                    <p className="muted-copy">Open the drawer on the register before the first cash sale.</p>
-                  </>
-                )}
-                <button type="button" className="primary" onClick={() => setView('sales')}>{openCashSession ? 'Go to register' : 'Open the register'}</button>
-              </div>
-            </div>
-
-            <div className="insight-stats-grid">
-              <div className="card">
-                <h3>Most sold</h3>
-                {dashboardInsights.mostSold.length > 0 ? (
-                  <ol className="rank-list">
-                    {dashboardInsights.mostSold.map((item, index) => (
-                      <li key={`${item.type}-${item.name}`}>
-                        <span><i>{index + 1}</i><strong>{item.name}</strong><small>{item.type}</small></span>
-                        <b>{item.qty}</b>
-                      </li>
-                    ))}
-                  </ol>
-                ) : <p className="muted-copy">No sales in the shop yet.</p>}
-              </div>
-              <div className="card">
-                <h3>Highest revenue</h3>
-                {dashboardInsights.topRevenue.length > 0 ? (
-                  <ol className="rank-list">
-                    {dashboardInsights.topRevenue.map((item, index) => (
-                      <li key={`${item.type}-${item.name}-revenue`}>
-                        <span><i>{index + 1}</i><strong>{item.name}</strong><small>{item.type}</small></span>
-                        <b>{formatUGX(item.revenue)}</b>
-                      </li>
-                    ))}
-                  </ol>
-                ) : <p className="muted-copy">No revenue recorded yet.</p>}
-              </div>
-            </div>
-
-            <div className="card trend-card">
-              <div className="insight-header-row">
-                <div>
-                  <h3>Sales trend</h3>
-                  <p className="muted-copy">Daily revenue for the last {insightTrendRange} days</p>
-                </div>
-                <label>
-                  Window
-                  <select value={insightTrendRange} onChange={(e) => setInsightTrendRange(Number(e.target.value) as InsightTrendRange)}>
-                    <option value={7}>7 days</option>
-                    <option value={14}>14 days</option>
-                    <option value={30}>30 days</option>
-                    <option value={60}>60 days</option>
-                    <option value={100}>100 days</option>
-                  </select>
-                </label>
-              </div>
-              <div className="trend-plot">
-                <div className="trend-scale" aria-hidden="true">
-                  <span>{formatUGX(dashboardInsights.maxRevenue)}</span>
-                  <span>{formatUGX(dashboardInsights.maxRevenue / 2)}</span>
-                  <span>0</span>
-                </div>
-                <div className="trend-canvas">
-                  <div className="trend-bars" role="img" aria-label={`Sales trend for the last ${insightTrendRange} days`}>
-                    {dashboardInsights.trendDays.map((day, index) => {
-                      const labelEvery = insightTrendRange <= 7 ? 1 : insightTrendRange <= 14 ? 2 : insightTrendRange <= 30 ? 5 : insightTrendRange <= 60 ? 10 : 14;
-                      const height = dashboardInsights.maxRevenue > 0 ? (day.revenue / dashboardInsights.maxRevenue) * 100 : 0;
-                      const showLabel = insightTrendRange <= 7 || index % labelEvery === 0 || index === dashboardInsights.trendDays.length - 1;
-                      const axisLabel = insightTrendRange <= 7
-                        ? new Date(`${day.date}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short' })
-                        : day.date.slice(5);
-                      const peakIndex = dashboardInsights.trendDays.reduce((found, entry, entryIndex) => entry.revenue > 0 && entry.revenue === dashboardInsights.maxRevenue ? entryIndex : found, -1);
-                      return (
-                        <div key={day.date} className={`trend-col${day.revenue > 0 ? ' has-sale' : ''}`} title={`${day.date}: ${formatUGX(day.revenue)}`}>
-                          {index === peakIndex && <b style={{ bottom: `calc(${height}% + 6px)` }}>{formatUGX(day.revenue)}</b>}
-                          <span style={{ height: `${height}%` }} />
-                          {showLabel && <em>{axisLabel}</em>}
-                        </div>
-                      );
-                    })}
+          <section className="studio">
+            {(() => {
+              const hour = new Date().getHours();
+              const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+              const named = authUser.displayName && authUser.displayName !== 'Counter' ? authUser.displayName.split(' ')[0] : '';
+              const periodNoun = dashboardPeriod === 'daily' ? 'today' : dashboardPeriod === 'weekly' ? 'this week' : dashboardPeriod === 'monthly' ? 'this month' : 'this year';
+              const lowStock = products.filter((product) => product.stock < 10).slice(0, 4);
+              const labelEvery = insightTrendRange <= 7 ? 1 : insightTrendRange <= 14 ? 2 : insightTrendRange <= 30 ? 5 : insightTrendRange <= 60 ? 10 : 14;
+              const barHeight = (value: number) => dashboardInsights.chartMax > 0 && value > 0 ? Math.max(8, (value / dashboardInsights.chartMax) * 100) : 0;
+              return (
+                <>
+                  <div className="studio-top">
+                    <div>
+                      <h2>{named ? `${greeting}, ${named}` : greeting}</h2>
+                      <p>Stay on the sales, the stock, and the drawer.</p>
+                    </div>
+                    <div className="studio-controls">
+                      <label>
+                        Period
+                        <select value={dashboardPeriod} onChange={(e) => setDashboardPeriod(e.target.value as DashboardPeriod)}>
+                          <option value="daily">Today</option>
+                          <option value="weekly">This week</option>
+                          <option value="monthly">This month</option>
+                          <option value="yearly">This year</option>
+                        </select>
+                      </label>
+                      <button className="edit-btn" onClick={handleDashboardRefresh} disabled={isRefreshingDashboard || authUser.uid === LOCAL_OPERATOR_ID} title={authUser.uid === LOCAL_OPERATOR_ID ? 'This counter already saves on this device.' : 'Reload the shop record and recalculate costs'}>
+                        {isRefreshingDashboard ? 'Refreshing…' : 'Reload'}
+                      </button>
+                      <button className="primary" onClick={() => setView('sales')}>Open register</button>
+                    </div>
                   </div>
-                </div>
-              </div>
-              <div className="insight-trend-footer">
-                <p>Peak day <strong>{formatUGX(dashboardInsights.maxRevenue)}</strong></p>
-                <p>Window total <strong>{formatUGX(dashboardInsights.totalRevenue)}</strong></p>
-                <p>Average day <strong>{formatUGX(dashboardInsights.averageRevenue)}</strong></p>
-              </div>
-            </div>
+
+                  <div className="studio-layout">
+                    <div>
+                      <div className="stat-grid">
+                        <article className="stat-card">
+                          <header><span className="stat-icon" aria-hidden="true">↗</span><Badge value={dashboardMetrics.sales.change} /></header>
+                          <p>Sales {periodNoun}</p>
+                          <strong>{formatUGX(dashboardMetrics.sales.value)}</strong>
+                          <span className="stat-note">{dashboardMetrics.receipts} receipt{dashboardMetrics.receipts === 1 ? '' : 's'} · avg {formatUGX(dashboardMetrics.receipts > 0 ? dashboardMetrics.sales.value / dashboardMetrics.receipts : 0)}</span>
+                        </article>
+                        <article className="stat-card">
+                          <header><span className="stat-icon" aria-hidden="true">≡</span><Badge value={dashboardMetrics.grossProfit.change} /></header>
+                          <p>Gross profit</p>
+                          <strong className={dashboardMetrics.grossProfit.value >= 0 ? 'is-positive' : 'is-negative'}>{formatUGX(dashboardMetrics.grossProfit.value)}</strong>
+                          <span className="stat-note">{taxSettings.enabled ? `${taxSettings.name} ${formatUGX(dashboardMetrics.tax.value)}` : 'Tax is off'}</span>
+                        </article>
+                        <article className="stat-card">
+                          <header><span className="stat-icon is-soft" aria-hidden="true">−</span><Badge value={dashboardMetrics.expenses.change} /></header>
+                          <p>Expenses {periodNoun}</p>
+                          <strong className="is-negative">{formatUGX(dashboardMetrics.expenses.value)}</strong>
+                          <span className="stat-note">{defaultAccount?.name || 'Cash'} balance {formatUGX(defaultAccount ? (accountBalances.get(defaultAccount.id) || 0) : 0)}</span>
+                        </article>
+                        <article className="stat-card">
+                          <header><span className="stat-icon" aria-hidden="true">◆</span><Badge value={dashboardMetrics.netProfit.change} /></header>
+                          <p>Net {periodNoun}</p>
+                          <strong className={dashboardMetrics.netProfit.value >= 0 ? 'is-positive' : 'is-negative'}>{formatUGX(dashboardMetrics.netProfit.value)}</strong>
+                          <span className="stat-note">After tax, cost, and expenses</span>
+                        </article>
+                      </div>
+
+                      <div className="studio-charts">
+                        <article className="card heat-card">
+                          <div className="insight-header-row">
+                            <div>
+                              <h3>Sales map</h3>
+                              <p className="muted-copy">Last 28 days. Darker days took in more.</p>
+                            </div>
+                          </div>
+                          <div className="heat-grid" role="img" aria-label={`Sales map. ${salesHeat.active} of 28 days had sales. Peak ${formatUGX(salesHeat.max)}.`}>
+                            {salesHeat.days.map((day) => (
+                              <span key={day.key} className="heat-cell" data-level={heatLevel(day.revenue, salesHeat.max)} title={`${day.label}: ${formatUGX(day.revenue)}`} />
+                            ))}
+                          </div>
+                          <div className="heat-legend">
+                            <span>Quiet</span>
+                            <i data-level="0" /><i data-level="1" /><i data-level="2" /><i data-level="3" /><i data-level="4" />
+                            <span>Busy</span>
+                            <em>{salesHeat.active} active day{salesHeat.active === 1 ? '' : 's'}</em>
+                          </div>
+                        </article>
+
+                        <article className="card pair-card">
+                          <div className="insight-header-row">
+                            <div>
+                              <h3>Sales and expenses</h3>
+                              <p className="muted-copy">Same days, side by side</p>
+                            </div>
+                            <label>
+                              Window
+                              <select value={insightTrendRange} onChange={(e) => setInsightTrendRange(Number(e.target.value) as InsightTrendRange)}>
+                                <option value={7}>7 days</option>
+                                <option value={14}>14 days</option>
+                                <option value={30}>30 days</option>
+                                <option value={60}>60 days</option>
+                                <option value={100}>100 days</option>
+                              </select>
+                            </label>
+                          </div>
+                          <div className="pair-legend">
+                            <span><i className="is-sales" />Sales</span>
+                            <span><i className="is-expense" />Expenses</span>
+                          </div>
+                          <div className="pair-chart" role="img" aria-label={`Sales and expenses for the last ${insightTrendRange} days. Sales ${formatUGX(dashboardInsights.totalRevenue)}. Expenses ${formatUGX(dashboardInsights.totalExpense)}.`}>
+                            {dashboardInsights.trendDays.map((day, index) => {
+                              const showLabel = insightTrendRange <= 14 || index % labelEvery === 0 || index === dashboardInsights.trendDays.length - 1;
+                              const axisLabel = insightTrendRange <= 7
+                                ? new Date(`${day.date}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short' })
+                                : insightTrendRange <= 14
+                                  ? new Date(`${day.date}T12:00:00`).toLocaleDateString(undefined, { weekday: 'narrow' })
+                                  : day.date.slice(8);
+                              return (
+                                <div key={day.date} className="pair-col" title={`${day.date}: sales ${formatUGX(day.revenue)}, expenses ${formatUGX(day.expense)}`}>
+                                  <div className="pair-bars">
+                                    <span className="is-sales" style={{ height: `${barHeight(day.revenue)}%` }} />
+                                    <span className="is-expense" style={{ height: `${barHeight(day.expense)}%` }} />
+                                  </div>
+                                  {showLabel ? <em>{axisLabel}</em> : <em aria-hidden="true" />}
+                                </div>
+                              );
+                            })}
+                          </div>
+                          <div className="insight-trend-footer">
+                            <p>Peak sales <strong>{formatUGX(dashboardInsights.maxRevenue)}</strong></p>
+                            <p>Sales <strong>{formatUGX(dashboardInsights.totalRevenue)}</strong></p>
+                            <p>Expenses <strong>{formatUGX(dashboardInsights.totalExpense)}</strong></p>
+                          </div>
+                        </article>
+                      </div>
+                    </div>
+
+                    <aside className="studio-side">
+                      <div className="card drawer-card">
+                        <h3>Cash drawer</h3>
+                        {openCashSession ? (
+                          <>
+                            <p className="drawer-state">Open</p>
+                            <p className="muted-copy">Expected in the till</p>
+                            <strong>{formatUGX(sessionExpectedCash)}</strong>
+                          </>
+                        ) : (
+                          <>
+                            <p className="drawer-state is-closed">Closed</p>
+                            <p className="muted-copy">Open the drawer on the register before the first cash sale.</p>
+                          </>
+                        )}
+                        <button type="button" className="primary" onClick={() => setView('sales')}>{openCashSession ? 'Go to register' : 'Open the register'}</button>
+                      </div>
+                      <div className="card">
+                        <div className="insight-header-row">
+                          <h3>Needs a look</h3>
+                          <button type="button" className="edit-btn" onClick={() => setView('products')}>Products</button>
+                        </div>
+                        {lowStock.length > 0 ? (
+                          <ul className="attention-list">
+                            {lowStock.map((product) => (
+                              <li key={product.id}>
+                                <span>{product.name}</span>
+                                <b className={product.stock === 0 ? 'is-negative' : ''}>{product.stock === 0 ? 'Out' : `${product.stock} left`}</b>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : <p className="muted-copy">Every product has at least 10 on hand.</p>}
+                      </div>
+                      <div className="card">
+                        <h3>Most sold</h3>
+                        {dashboardInsights.mostSold.length > 0 ? (
+                          <ol className="rank-list">
+                            {dashboardInsights.mostSold.map((item, index) => (
+                              <li key={`${item.type}-${item.name}`}>
+                                <span><i>{index + 1}</i><strong>{item.name}</strong><small>{item.type}</small></span>
+                                <b>{item.qty}</b>
+                              </li>
+                            ))}
+                          </ol>
+                        ) : <p className="muted-copy">No sales in the shop yet.</p>}
+                      </div>
+                    </aside>
+                  </div>
+                </>
+              );
+            })()}
           </section>
         )}
 
