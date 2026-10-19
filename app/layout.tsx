@@ -6,8 +6,8 @@ import type { ReactNode } from 'react';
 
 
 export const metadata = {
-  title: 'AlphaPOS Pro',
-  description: 'Professional Point of Sale Management System with Firebase & Google Auth',
+  title: 'AlphaPOS | Point of Sale',
+  description: 'Sales, inventory, services and day-to-day business operations in one workspace.',
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

@@ -23,7 +23,7 @@ type AuditStamp = {
   updatedByEmail?: string;
 };
 
-type Product = { id: string; name: string; branchId: string; stock: number; purchasePrice: number; salePrice: number } & AuditStamp;
+type Product = { id: string; name: string; branchId: string; stock: number; purchasePrice: number; salePrice: number; sku?: string; barcode?: string; category?: string } & AuditStamp;
 type ServiceType = 'direct_cost' | 'shared_cost';
 type Service = { id: string; name: string; branchId: string; salePrice: number; serviceType: ServiceType; directCost: number; monthlySharedCost: number; expenseGroupId?: string } & AuditStamp;
 type Sale = { id: string; type: 'product' | 'service'; itemName: string; branchId: string; qty: number; amount: number; cost: number; accountId?: string } & AuditStamp;
@@ -153,7 +153,7 @@ export default function Page() {
   const [isRefreshingDashboard, setIsRefreshingDashboard] = useState(false);
 
   const [branchForm, setBranchForm] = useState({ name: '', location: '', id: '' });
-  const [productForm, setProductForm] = useState({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0 });
+  const [productForm, setProductForm] = useState({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0, sku: '', barcode: '', category: '' });
   const [serviceForm, setServiceForm] = useState({ name: '', branchId: '', amount: 0, serviceType: 'direct_cost' as ServiceType, directCost: 0, monthlySharedCost: 0, expenseGroupId: '' });
   const [saleForm, setSaleForm] = useState({ productId: '', qty: 1 });
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -193,7 +193,7 @@ export default function Page() {
     if (!query) return topSellingProducts;
 
     return products
-      .filter((product) => product.stock > 0 && product.name.toLowerCase().includes(query))
+      .filter((product) => product.stock > 0 && [product.name, product.sku, product.barcode, product.category].some((value) => value?.toLowerCase().includes(query)))
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [products, quickSaleSearchQuery, topSellingProducts]);
   const filteredQuickSaleServices = useMemo(() => {
@@ -483,7 +483,7 @@ export default function Page() {
     setUsers([]);
     setActivityLogs([]);
     setBranchForm({ name: '', location: '', id: '' });
-    setProductForm({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0 });
+    setProductForm({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0, sku: '', barcode: '', category: '' });
     setServiceForm({ name: '', branchId: '', amount: 0, serviceType: 'direct_cost', directCost: 0, monthlySharedCost: 0, expenseGroupId: '' });
     setSaleForm({ productId: '', qty: 1 });
     setExpenseForm({ id: '', title: '', branchId: '', amount: 0, expenseGroupId: '', accountId: '' });
@@ -722,7 +722,8 @@ export default function Page() {
   // Filtered products for inventory
   const filteredProducts = useMemo(() => {
     return products.filter(p => {
-      const matchesSearch = p.name.toLowerCase().includes(productSearchQuery.toLowerCase());
+      const query = productSearchQuery.trim().toLowerCase();
+      const matchesSearch = [p.name, p.sku, p.barcode, p.category].some((value) => value?.toLowerCase().includes(query));
       const matchesBranch = !productBranchFilter || p.branchId === productBranchFilter;
       const matchesStock = 
         productStockFilter === 'all' ? true :
@@ -789,17 +790,27 @@ export default function Page() {
 
   const saveProduct = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!productForm.name || !productForm.branchId) return;
-    if (productForm.id) {
-      setProducts((prev) => prev.map((p) => (p.id === productForm.id ? { ...p, ...productForm, ...updatedAuditStamp() } : p)));
-      setStatus('Product updated.');
-      logActivity('edit_inventory', `Updated product "${productForm.name}"`);
-    } else {
-      setProducts((prev) => [...prev, { ...productForm, id: crypto.randomUUID(), ...currentAuditStamp() }]);
-      setStatus('Product added.');
-      logActivity('add_inventory', `Added product "${productForm.name}"`);
+    const name = productForm.name.trim();
+    const sku = productForm.sku.trim().toUpperCase();
+    const barcode = productForm.barcode.trim();
+    if (!name || !productForm.branchId) return;
+    const identifiers = [sku, barcode].filter(Boolean).map((identifier) => identifier.toLowerCase());
+    const duplicateIdentifier = products.some((product) => product.id !== productForm.id && [product.sku, product.barcode].some((identifier) => identifier && identifiers.includes(identifier.trim().toLowerCase())));
+    if (duplicateIdentifier) {
+      showNotification('That SKU or barcode is already assigned to another product.', 'error');
+      return;
     }
-    setProductForm({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0 });
+    const productDetails = { ...productForm, name, sku: sku || undefined, barcode: barcode || undefined, category: productForm.category.trim() || undefined };
+    if (productForm.id) {
+      setProducts((prev) => prev.map((p) => (p.id === productForm.id ? { ...p, ...productDetails, ...updatedAuditStamp() } : p)));
+      setStatus('Product updated.');
+      logActivity('edit_inventory', `Updated product "${name}"`);
+    } else {
+      setProducts((prev) => [...prev, { ...productDetails, id: crypto.randomUUID(), ...currentAuditStamp() }]);
+      setStatus('Product added.');
+      logActivity('add_inventory', `Added product "${name}"`);
+    }
+    setProductForm({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0, sku: '', barcode: '', category: '' });
     setShowProductModal(false);
   };
 
@@ -1617,7 +1628,7 @@ export default function Page() {
       <div className="auth-container">
         <div className="auth-card">
           <span className="auth-badge">v2.0 Beta</span>
-          <h1>AlphaPOS Pro</h1>
+          <h1>AlphaPOS</h1>
           <p>The ultimate point of sale for modern businesses.</p>
           <ul className="auth-highlights">
             <li>Multi-branch inventory management</li>
@@ -1638,8 +1649,8 @@ export default function Page() {
       <div className={`sidebar-overlay ${isSidebarOpen ? 'show' : ''}`} onClick={() => setIsSidebarOpen(false)}></div>
       <aside className={`sidebar ${isSidebarOpen ? 'open' : ''}`}>
         <div className="sidebar-header">
-          <h2>📊 AlphaPOS</h2>
-          <div className="sidebar-subtitle">v2.0 Pro</div>
+          <h2><span className="brand-mark" aria-hidden="true">A</span> AlphaPOS</h2>
+          <div className="sidebar-subtitle">Point of sale · Operations</div>
         </div>
 
         <div className="sidebar-section">
@@ -1655,21 +1666,21 @@ export default function Page() {
 
         <nav className="sidebar-nav">
           <div className="nav-group-label">Overview</div>
-          <button className={`nav-button ${view === 'dashboard' ? 'active' : ''}`} onClick={() => { setView('dashboard'); setIsSidebarOpen(false); }}><span className="nav-icon">📈</span><span>Dashboard</span></button>
+          <button className={`nav-button ${view === 'dashboard' ? 'active' : ''}`} onClick={() => { setView('dashboard'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">◫</span><span>Dashboard</span></button>
 
           <div className="nav-group-label">Operations</div>
-          <button className={`nav-button ${view === 'sales' ? 'active' : ''}`} onClick={() => { setView('sales'); setIsSidebarOpen(false); }}><span className="nav-icon">🛒</span><span>Sales Desk</span></button>
-          <button className={`nav-button ${view === 'sales_history' ? 'active' : ''}`} onClick={() => { setView('sales_history'); setIsSidebarOpen(false); }}><span className="nav-icon">🧾</span><span>Sales History</span></button>
-          <button className={`nav-button ${view === 'products' ? 'active' : ''}`} onClick={() => { setView('products'); setIsSidebarOpen(false); }}><span className="nav-icon">📦</span><span>Inventory</span></button>
-          <button className={`nav-button ${view === 'services' ? 'active' : ''}`} onClick={() => { setView('services'); setIsSidebarOpen(false); }}><span className="nav-icon">🧰</span><span>Services</span></button>
+          <button className={`nav-button ${view === 'sales' ? 'active' : ''}`} onClick={() => { setView('sales'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">▣</span><span>Sales Desk</span></button>
+          <button className={`nav-button ${view === 'sales_history' ? 'active' : ''}`} onClick={() => { setView('sales_history'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">≡</span><span>Sales History</span></button>
+          <button className={`nav-button ${view === 'products' ? 'active' : ''}`} onClick={() => { setView('products'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">□</span><span>Inventory</span></button>
+          <button className={`nav-button ${view === 'services' ? 'active' : ''}`} onClick={() => { setView('services'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">✦</span><span>Services</span></button>
 
           <div className="nav-group-label">Management</div>
-          <button className={`nav-button ${view === 'expenses' ? 'active' : ''}`} onClick={() => { setView('expenses'); setIsSidebarOpen(false); }}><span className="nav-icon">💰</span><span>Expenses</span></button>
-          <button className={`nav-button ${view === 'users' ? 'active' : ''}`} onClick={() => { setView('users'); setIsSidebarOpen(false); }}><span className="nav-icon">👥</span><span>Staff</span></button>
-          <button className={`nav-button ${view === 'activity_logs' ? 'active' : ''}`} onClick={() => { setView('activity_logs'); setIsSidebarOpen(false); }}><span className="nav-icon">📜</span><span>Activity Logs</span></button>
-          <button className={`nav-button ${view === 'reports' ? 'active' : ''}`} onClick={() => { setView('reports'); setIsSidebarOpen(false); }}><span className="nav-icon">📊</span><span>Reports</span></button>
-          <button className={`nav-button ${view === 'accounts' ? 'active' : ''}`} onClick={() => { setView('accounts'); setIsSidebarOpen(false); }}><span className="nav-icon">🏦</span><span>Accounts</span></button>
-          {isShopOwner && <button className={`nav-button ${view === 'settings' ? 'active' : ''}`} onClick={() => { setView('settings'); setIsSidebarOpen(false); }}><span className="nav-icon">⚙️</span><span>Settings</span></button>}
+          <button className={`nav-button ${view === 'expenses' ? 'active' : ''}`} onClick={() => { setView('expenses'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">−</span><span>Expenses</span></button>
+          <button className={`nav-button ${view === 'users' ? 'active' : ''}`} onClick={() => { setView('users'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">◎</span><span>Staff</span></button>
+          <button className={`nav-button ${view === 'activity_logs' ? 'active' : ''}`} onClick={() => { setView('activity_logs'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">⌘</span><span>Activity Logs</span></button>
+          <button className={`nav-button ${view === 'reports' ? 'active' : ''}`} onClick={() => { setView('reports'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">▤</span><span>Reports</span></button>
+          <button className={`nav-button ${view === 'accounts' ? 'active' : ''}`} onClick={() => { setView('accounts'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">⌁</span><span>Accounts</span></button>
+          {isShopOwner && <button className={`nav-button ${view === 'settings' ? 'active' : ''}`} onClick={() => { setView('settings'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">⚙</span><span>Settings</span></button>}
         </nav>
 
         <div className="sidebar-footer">
@@ -1700,17 +1711,17 @@ export default function Page() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-md)' }}>
             <button className="mobile-menu-toggle" onClick={() => setIsSidebarOpen(true)}>☰</button>
             <h1 style={{ margin: 0, fontSize: '1.5rem', fontWeight: 700, letterSpacing: '-0.02em' }}>
-              {view === 'dashboard' ? '📊 Dashboard Overview' : 
-               view === 'sales' ? '🛒 Sales Desk' :
-               view === 'sales_history' ? '🧾 Sales History' :
-               view === 'products' ? '📦 Inventory Management' :
-               view === 'services' ? '🧰 Service Catalog' :
-               view === 'expenses' ? '💰 Expense Tracking' :
-               view === 'users' ? '👥 Staff Management' :
-               view === 'activity_logs' ? '🧾 Activity Logs' :
-               view === 'reports' ? '📈 Business Reports' :
-               view === 'accounts' ? '🏦 Accounts' :
-               view === 'settings' ? '⚙️ System Settings' :
+              {view === 'dashboard' ? 'Dashboard overview' :
+               view === 'sales' ? 'Sales desk' :
+               view === 'sales_history' ? 'Sales history' :
+               view === 'products' ? 'Inventory management' :
+               view === 'services' ? 'Service catalog' :
+               view === 'expenses' ? 'Expense tracking' :
+               view === 'users' ? 'Staff management' :
+               view === 'activity_logs' ? 'Activity logs' :
+               view === 'reports' ? 'Business reports' :
+               view === 'accounts' ? 'Accounts' :
+               view === 'settings' ? 'System settings' :
                view.charAt(0).toUpperCase() + view.slice(1)}
             </h1>
           </div>
@@ -1912,7 +1923,7 @@ export default function Page() {
           <section>
             <div className="page-header">
               <h2>Product Inventory</h2>
-              <button className="primary" onClick={() => { setProductForm({ id: '', name: '', branchId: branches[0]?.id || '', stock: 0, purchasePrice: 0, salePrice: 0 }); setShowProductModal(true); }}>
+              <button className="primary" onClick={() => { setProductForm({ id: '', name: '', branchId: branches[0]?.id || '', stock: 0, purchasePrice: 0, salePrice: 0, sku: '', barcode: '', category: '' }); setShowProductModal(true); }}>
                 + Add Product
               </button>
             </div>
@@ -1923,7 +1934,7 @@ export default function Page() {
                 <label>Search Product</label>
                 <input 
                   type="text" 
-                  placeholder="Search by name..." 
+                  placeholder="Search name, category, SKU or barcode..."
                   value={productSearchQuery}
                   onChange={(e) => setProductSearchQuery(e.target.value)}
                 />
@@ -1960,7 +1971,8 @@ export default function Page() {
               <table className="data-table">
                 <thead>
                   <tr>
-                    <th>Product Name</th>
+                    <th>Product</th>
+                    <th>SKU / Barcode</th>
                     <th>Branch</th>
                     <th>Stock</th>
                     <th>Purchase</th>
@@ -1973,7 +1985,14 @@ export default function Page() {
                   {filteredProducts.length > 0 ? (
                     productsPagination.rows.map((p) => (
                       <tr key={p.id} style={{ opacity: p.stock === 0 ? 0.6 : 1 }}>
-                        <td style={{ fontWeight: 600, color: 'var(--text)' }}>{p.name}</td>
+                        <td style={{ fontWeight: 600, color: 'var(--text)' }}>
+                          {p.name}
+                          {p.category && <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', fontWeight: 400 }}>{p.category}</div>}
+                        </td>
+                        <td>
+                          <div>{p.sku || '—'}</div>
+                          {p.barcode && <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>{p.barcode}</div>}
+                        </td>
                         <td>{branchMap[p.branchId]}</td>
                         <td>
                           <span className={`badge ${p.stock === 0 ? 'badge-danger' : p.stock < 10 ? 'badge-warning' : 'badge-success'}`}>
@@ -1984,7 +2003,7 @@ export default function Page() {
                         <td>{formatUGX(p.salePrice)}</td>
                         <td style={{ color: 'var(--success)', fontWeight: 600 }}>{formatUGX(p.salePrice - p.purchasePrice)}</td>
                         <td>
-                          <button className="edit-btn" onClick={() => { setProductForm(p); setShowProductModal(true); }}>Edit</button>
+                          <button className="edit-btn" onClick={() => { setProductForm({ ...p, sku: p.sku || '', barcode: p.barcode || '', category: p.category || '' }); setShowProductModal(true); }}>Edit</button>
                           <button className="edit-btn" onClick={() => restockProduct(p.id)}>+ Stock</button>
                           <button className="delete-btn" onClick={() => { setProducts(prev => prev.filter(x => x.id !== p.id)); logActivity('delete_inventory', `Deleted product "${p.name}"`); }}>Delete</button>
                         </td>
@@ -1992,7 +2011,7 @@ export default function Page() {
                     ))
                   ) : (
                     <tr>
-                      <td colSpan={7} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>
+                      <td colSpan={8} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>
                         No products found matching your filters.
                       </td>
                     </tr>
@@ -2027,9 +2046,23 @@ export default function Page() {
                     <label>Quick Search Item</label>
                     <input
                       type="text"
-                      placeholder="Search item to sell..."
+                      placeholder="Scan barcode or search by name, SKU, or category..."
                       value={quickSaleSearchQuery}
                       onChange={(e) => setQuickSaleSearchQuery(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key !== 'Enter') return;
+                        const scannedCode = quickSaleSearchQuery.trim().toLowerCase();
+                        if (!scannedCode) return;
+                        const matches = products.filter((product) => product.stock > 0 && [product.sku, product.barcode].some((identifier) => identifier?.trim().toLowerCase() === scannedCode));
+                        if (matches.length === 1) {
+                          e.preventDefault();
+                          addProductToCart(matches[0].id);
+                          setQuickSaleSearchQuery('');
+                        } else if (matches.length > 1) {
+                          e.preventDefault();
+                          showNotification('More than one product matches this code. Check product identifiers.', 'error');
+                        }
+                      }}
                     />
                   </div>
                   <div className="filter-group" style={{ marginBottom: 0, minWidth: '220px' }}>
@@ -2044,6 +2077,7 @@ export default function Page() {
                   {filteredQuickSaleProducts.map(p => (
                     <div key={p.id} className="card" style={{ cursor: 'pointer', transition: 'all 0.2s ease', padding: '0.55rem' }} onClick={() => addProductToCart(p.id)}>
                       <div style={{ fontSize: '0.84rem', fontWeight: 600, color: 'var(--text)', marginBottom: '0.3rem' }}>{p.name}</div>
+                      {(p.sku || p.barcode) && <div style={{ color: 'var(--text-muted)', fontSize: '0.68rem', marginBottom: '0.3rem' }}>{p.sku || p.barcode}</div>}
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
                         <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--success)' }}>{formatUGX(p.salePrice)}</span>
                         <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>x{p.stock}</span>
@@ -3125,6 +3159,18 @@ export default function Page() {
                     <label className="field">
                       <span>Product Name</span>
                       <input value={productForm.name} onChange={(e) => setProductForm({ ...productForm, name: e.target.value })} required />
+                    </label>
+                    <label className="field">
+                      <span>Category</span>
+                      <input value={productForm.category} onChange={(e) => setProductForm({ ...productForm, category: e.target.value })} placeholder="e.g. Beverages" />
+                    </label>
+                    <label className="field">
+                      <span>SKU</span>
+                      <input value={productForm.sku} onChange={(e) => setProductForm({ ...productForm, sku: e.target.value })} autoCapitalize="characters" />
+                    </label>
+                    <label className="field">
+                      <span>Barcode</span>
+                      <input value={productForm.barcode} onChange={(e) => setProductForm({ ...productForm, barcode: e.target.value })} inputMode="numeric" />
                     </label>
                     <label className="field">
                       <span>Branch</span>
