@@ -9,7 +9,7 @@ import ReceiptDialog from '../components/pos/ReceiptDialog';
 import ReturnDialog, { type ReturnableLine } from '../components/pos/ReturnDialog';
 import { LOCAL_OPERATOR_ID, readLocalShop, writeLocalShop } from '../lib/pos/localShop';
 import { buildSalesDigest, claimSalesEmailSend, defaultSalesEmailSettings, finishSalesEmailSend, normalizeSalesEmailSettings, previousSalesPeriod, type SalesDigest, type SalesEmailSettings } from '../lib/pos/salesEmail';
-import { completeEmailLinkSignIn, sendStaffSignInLink, staffSignInError, takeInvitedShopId } from '../lib/pos/staffInvite';
+import { completeEmailLinkSignIn, rememberInviteFromUrl, sendStaffSignInLink, staffSignInError, takeInvitedShopId } from '../lib/pos/staffInvite';
 import {
   customerAccountBalance,
   defaultReceiptSettings,
@@ -357,6 +357,7 @@ export default function Page() {
     let unsubscribe = () => {};
     let cancelled = false;
     void (async () => {
+      rememberInviteFromUrl();
       try {
         await completeEmailLinkSignIn(auth);
       } catch (error) {
@@ -1453,10 +1454,42 @@ export default function Page() {
 
   const emailStaffSignInLink = async (email: string, staffRole: Role) => {
     await saveShopMembership(email, staffRole);
-    await sendStaffSignInLink(email, activeShopOwnerUid);
-    const message = `Sign-in email sent to ${email}. They open the link to enter as ${roleLabels[staffRole]}.`;
-    setStatus(message);
-    showNotification(message, 'success', 5000);
+    const shopName = availableShops.find((shop) => shop.ownerUid === activeShopOwnerUid)?.shopName || 'My Shop';
+    const link = new URL(window.location.pathname || '/', window.location.origin);
+    link.searchParams.set('email', email.trim().toLowerCase());
+    link.searchParams.set('shop', activeShopOwnerUid);
+    let firebaseFailure = '';
+    try {
+      await sendStaffSignInLink(email, activeShopOwnerUid);
+    } catch (error) {
+      firebaseFailure = staffSignInError(error);
+    }
+    let shopEmailSent = false;
+    if (firebaseFailure && firebaseApp && authUser && authUser.uid !== LOCAL_OPERATOR_ID) {
+      const idToken = await getAuth(firebaseApp).currentUser?.getIdToken().catch(() => '');
+      if (idToken) {
+        const response = await fetch('/api/email/invite', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ idToken, email, roleLabel: roleLabels[staffRole], shopName, link: link.toString() }),
+        }).catch(() => null);
+        const payload = await response?.json().catch(() => null) as { ok?: boolean } | null;
+        shopEmailSent = !!payload?.ok;
+      }
+    }
+    if (!firebaseFailure) {
+      const message = `Sign-in email sent to ${email}. They open the link to enter as ${roleLabels[staffRole]}.`;
+      setStatus(message);
+      showNotification(message, 'success', 5000);
+      return;
+    }
+    if (shopEmailSent) {
+      const message = `Invite emailed to ${email} for ${roleLabels[staffRole]}. They open the link and sign in with that address.`;
+      setStatus(message);
+      showNotification(message, 'success', 6000);
+      return;
+    }
+    throw Object.assign(new Error(firebaseFailure), { code: 'alphapos/firebase' });
   };
 
   const saveUser = async (e: React.FormEvent) => {
