@@ -25,5 +25,6 @@
 - [x] Keep the product/category/SKU/barcode catalog compatible with existing Firestore records and protect stock and price inputs from invalid negative values.
 - [x] Record and display structured stock changes for opening stock, checkout sales, restocks, count corrections, damaged/expired goods, customer returns, product removal, and product branch changes; identify product, branch, quantity, reason, time, and staff member.
 - [x] Make receiving and stock adjustments usable from a dedicated form that validates available stock and records a reason/note.
+- [x] Capture optional supplier, invoice/reference, and unit cost for a one-product receipt; record that metadata and update the product's latest purchase cost when provided.
 - [x] Preserve the current activity-log retention boundary (latest 500 shop events; inventory view shows up to 100 movement events) until a versioned, separately stored movement ledger can be deployed safely.
-- [ ] Add supplier receiving and durable long-term inventory movement history in a later compatible storage increment.
+- [ ] Add a supplier directory, multi-line purchasing workflow, and durable long-term inventory movement history in a later compatible storage increment.

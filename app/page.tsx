@@ -59,6 +59,9 @@ type StockMovementAudit = {
   reason: StockMovementReason;
   fromBranchId?: string;
   toBranchId?: string;
+  supplierName?: string;
+  reference?: string;
+  unitCost?: number;
   note?: string;
 };
 type ActivityLog = {
@@ -167,7 +170,7 @@ export default function Page() {
 
   const [branchForm, setBranchForm] = useState({ name: '', location: '', id: '' });
   const [productForm, setProductForm] = useState({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0, sku: '', barcode: '', category: '' });
-  const [stockAdjustmentForm, setStockAdjustmentForm] = useState({ productId: '', direction: 'add' as 'add' | 'remove', quantity: 1, reason: 'restock' as Exclude<StockMovementReason, 'sale' | 'opening_stock' | 'branch_transfer'>, note: '' });
+  const [stockAdjustmentForm, setStockAdjustmentForm] = useState({ productId: '', direction: 'add' as 'add' | 'remove', quantity: 1, reason: 'restock' as Exclude<StockMovementReason, 'sale' | 'opening_stock' | 'branch_transfer'>, note: '', supplierName: '', reference: '', unitCost: '' });
   const [serviceForm, setServiceForm] = useState({ name: '', branchId: '', amount: 0, serviceType: 'direct_cost' as ServiceType, directCost: 0, monthlySharedCost: 0, expenseGroupId: '' });
   const [saleForm, setSaleForm] = useState({ productId: '', qty: 1 });
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -498,7 +501,7 @@ export default function Page() {
     setActivityLogs([]);
     setBranchForm({ name: '', location: '', id: '' });
     setProductForm({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0, sku: '', barcode: '', category: '' });
-    setStockAdjustmentForm({ productId: '', direction: 'add', quantity: 1, reason: 'restock', note: '' });
+    setStockAdjustmentForm({ productId: '', direction: 'add', quantity: 1, reason: 'restock', note: '', supplierName: '', reference: '', unitCost: '' });
     setShowStockAdjustmentModal(false);
     setServiceForm({ name: '', branchId: '', amount: 0, serviceType: 'direct_cost', directCost: 0, monthlySharedCost: 0, expenseGroupId: '' });
     setSaleForm({ productId: '', qty: 1 });
@@ -815,7 +818,8 @@ export default function Page() {
     quantityDelta: number,
     reason: StockMovementReason,
     note?: string,
-    branchTransfer?: { fromBranchId: string; toBranchId: string }
+    branchTransfer?: { fromBranchId: string; toBranchId: string },
+    receiptMetadata?: Pick<StockMovementAudit, 'supplierName' | 'reference' | 'unitCost'>
   ) => {
     if (quantityDelta === 0 && reason !== 'branch_transfer') return;
     const stockMovement: StockMovementAudit = {
@@ -825,6 +829,7 @@ export default function Page() {
       quantityDelta,
       reason,
       ...(branchTransfer ? branchTransfer : {}),
+      ...(receiptMetadata ? receiptMetadata : {}),
       ...(note?.trim() ? { note: note.trim() } : {}),
     };
     const quantityLabel = quantityDelta > 0 ? `+${quantityDelta}` : `${quantityDelta}`;
@@ -1346,7 +1351,7 @@ export default function Page() {
       showNotification('Product not found', 'error');
       return;
     }
-    setStockAdjustmentForm({ productId, direction: 'add', quantity: 1, reason: 'restock', note: '' });
+    setStockAdjustmentForm({ productId, direction: 'add', quantity: 1, reason: 'restock', note: '', supplierName: '', reference: '', unitCost: '' });
     setShowStockAdjustmentModal(true);
   };
 
@@ -1354,8 +1359,14 @@ export default function Page() {
     e.preventDefault();
     const product = products.find((item) => item.id === stockAdjustmentForm.productId);
     const quantity = Number(stockAdjustmentForm.quantity);
+    const unitCostInput = stockAdjustmentForm.unitCost.trim();
+    const unitCost = unitCostInput ? Number(unitCostInput) : undefined;
     if (!product || !Number.isFinite(quantity) || quantity <= 0) {
       showNotification('Choose a product and enter a quantity greater than zero.', 'error');
+      return;
+    }
+    if (stockAdjustmentForm.reason === 'restock' && unitCostInput && (!Number.isFinite(unitCost) || (unitCost ?? -1) < 0)) {
+      showNotification('Enter a valid non-negative unit cost.', 'error');
       return;
     }
     if (stockAdjustmentForm.reason === 'damaged' && stockAdjustmentForm.direction !== 'remove') {
@@ -1375,12 +1386,28 @@ export default function Page() {
       showNotification(`Only ${product.stock} units are available to remove.`, 'error');
       return;
     }
-    setProducts((prev) => prev.map((item) => item.id === product.id ? { ...item, stock: item.stock + quantityDelta, ...updatedAuditStamp() } : item));
-    logStockMovement(product, quantityDelta, stockAdjustmentForm.reason, stockAdjustmentForm.note);
+    const receiptMetadata: Pick<StockMovementAudit, 'supplierName' | 'reference' | 'unitCost'> | undefined = stockAdjustmentForm.reason === 'restock' ? {
+      ...(stockAdjustmentForm.supplierName.trim() ? { supplierName: stockAdjustmentForm.supplierName.trim() } : {}),
+      ...(stockAdjustmentForm.reference.trim() ? { reference: stockAdjustmentForm.reference.trim() } : {}),
+      ...(unitCost !== undefined ? { unitCost } : {}),
+    } : undefined;
+    const receiptNote = stockAdjustmentForm.reason === 'restock' ? [
+      stockAdjustmentForm.supplierName.trim() ? `Supplier: ${stockAdjustmentForm.supplierName.trim()}` : '',
+      stockAdjustmentForm.reference.trim() ? `Reference: ${stockAdjustmentForm.reference.trim()}` : '',
+      unitCost !== undefined ? `Unit cost: ${formatUGX(unitCost)}` : '',
+    ].filter(Boolean).join(' · ') : '';
+    const movementNote = [stockAdjustmentForm.note.trim(), receiptNote].filter(Boolean).join(' | ');
+    setProducts((prev) => prev.map((item) => item.id === product.id ? {
+      ...item,
+      stock: item.stock + quantityDelta,
+      ...(stockAdjustmentForm.reason === 'restock' && unitCost !== undefined ? { purchasePrice: unitCost } : {}),
+      ...updatedAuditStamp(),
+    } : item));
+    logStockMovement(product, quantityDelta, stockAdjustmentForm.reason, movementNote, undefined, receiptMetadata);
     setStatus(`Stock adjusted for ${product.name}.`);
     showNotification(`${product.name}: ${quantityDelta > 0 ? '+' : ''}${quantityDelta} units recorded.`, 'success');
     setShowStockAdjustmentModal(false);
-    setStockAdjustmentForm({ productId: '', direction: 'add', quantity: 1, reason: 'restock', note: '' });
+    setStockAdjustmentForm({ productId: '', direction: 'add', quantity: 1, reason: 'restock', note: '', supplierName: '', reference: '', unitCost: '' });
   };
 
   const filteredSales = useMemo(() => {
@@ -2020,9 +2047,15 @@ export default function Page() {
           <section>
             <div className="page-header">
               <h2>Product Inventory</h2>
-              <button className="primary" onClick={() => { setProductForm({ id: '', name: '', branchId: branches[0]?.id || '', stock: 0, purchasePrice: 0, salePrice: 0, sku: '', barcode: '', category: '' }); setShowProductModal(true); }}>
-                + Add Product
-              </button>
+              <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+                <button className="edit-btn" disabled={products.length === 0} onClick={() => {
+                  setStockAdjustmentForm({ productId: '', direction: 'add', quantity: 1, reason: 'restock', note: '', supplierName: '', reference: '', unitCost: '' });
+                  setShowStockAdjustmentModal(true);
+                }}>Receive stock</button>
+                <button className="primary" onClick={() => { setProductForm({ id: '', name: '', branchId: branches[0]?.id || '', stock: 0, purchasePrice: 0, salePrice: 0, sku: '', barcode: '', category: '' }); setShowProductModal(true); }}>
+                  + Add Product
+                </button>
+              </div>
             </div>
 
             {/* Inventory Search & Filter */}
@@ -3370,7 +3403,7 @@ export default function Page() {
             <div className="modal-content" role="dialog" aria-modal="true" aria-labelledby="stock-adjustment-title">
               <div className="modal-header">
                 <div>
-                  <h3 id="stock-adjustment-title">Adjust stock</h3>
+                  <h3 id="stock-adjustment-title">Receive or adjust stock</h3>
                   {products.find((product) => product.id === stockAdjustmentForm.productId) && (
                     <p style={{ margin: '0.3rem 0 0', color: 'var(--text-muted)', fontSize: '0.78rem' }}>
                       On hand: {products.find((product) => product.id === stockAdjustmentForm.productId)?.stock}
@@ -3415,21 +3448,37 @@ export default function Page() {
                           }));
                         }}
                       >
-                        <option value="restock">Restock / received</option>
+                        <option value="restock">Supplier receipt / restock</option>
                         <option value="count_correction">Count correction</option>
                         <option value="damaged">Damaged / expired</option>
                         <option value="customer_return">Customer return</option>
                       </select>
                     </label>
+                    {stockAdjustmentForm.reason === 'restock' && (
+                      <>
+                        <label className="field">
+                          <span>Supplier (optional)</span>
+                          <input value={stockAdjustmentForm.supplierName} onChange={(e) => setStockAdjustmentForm((prev) => ({ ...prev, supplierName: e.target.value }))} maxLength={80} placeholder="Supplier name" />
+                        </label>
+                        <label className="field">
+                          <span>Invoice / reference (optional)</span>
+                          <input value={stockAdjustmentForm.reference} onChange={(e) => setStockAdjustmentForm((prev) => ({ ...prev, reference: e.target.value }))} maxLength={80} placeholder="Supplier invoice number" />
+                        </label>
+                        <label className="field">
+                          <span>Latest unit cost (UGX, optional)</span>
+                          <input type="number" min="0" step="0.01" value={stockAdjustmentForm.unitCost} onChange={(e) => setStockAdjustmentForm((prev) => ({ ...prev, unitCost: e.target.value }))} placeholder="Leave blank to keep current cost" />
+                        </label>
+                      </>
+                    )}
                     <label className="field">
                       <span>Note (optional)</span>
-                      <textarea value={stockAdjustmentForm.note} onChange={(e) => setStockAdjustmentForm((prev) => ({ ...prev, note: e.target.value }))} maxLength={160} rows={3} placeholder="Reason or reference number" />
+                      <textarea value={stockAdjustmentForm.note} onChange={(e) => setStockAdjustmentForm((prev) => ({ ...prev, note: e.target.value }))} maxLength={160} rows={3} placeholder="Delivery condition or adjustment details" />
                     </label>
                   </div>
                 </div>
                 <div className="modal-footer">
                   <button type="button" className="edit-btn" onClick={() => setShowStockAdjustmentModal(false)}>Cancel</button>
-                  <button type="submit" className="primary">Save adjustment</button>
+                  <button type="submit" className="primary">{stockAdjustmentForm.reason === 'restock' ? 'Receive stock' : 'Save adjustment'}</button>
                 </div>
               </form>
             </div>
