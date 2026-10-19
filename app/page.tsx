@@ -450,7 +450,7 @@ export default function Page() {
           setRole(selectedShop?.role || 'shop_owner');
           hasLoadedUserDataRef.current = true;
           isSwitchingShopRef.current = false;
-          setStatus(`Viewing ${selectedShop?.shopName || 'selected shop'} as ${selectedShop?.role || role}.`);
+          setStatus(`Viewing ${selectedShop?.shopName || 'selected shop'} as ${roleLabels[selectedShop?.role || role]}.`);
           return true;
         }
         const data = snap.data();
@@ -476,7 +476,7 @@ export default function Page() {
         }
         hasLoadedUserDataRef.current = true;
         isSwitchingShopRef.current = false;
-        setStatus(`Viewing ${selectedShop?.shopName || 'selected shop'} as ${selectedShop?.role || role}.`);
+        setStatus(`Viewing ${selectedShop?.shopName || 'selected shop'} as ${roleLabels[selectedShop?.role || role]}.`);
         return true;
       } catch (error) {
         setStatus(`Failed to load your data: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -775,7 +775,8 @@ export default function Page() {
     const grossProfit = revenue - taxCollected - cost - sharedServiceCost;
     const netProfit = grossProfit - expenseTotal;
 
-    return { revenue, taxCollected, cost: cost + sharedServiceCost, expenseTotal, grossProfit, netProfit, salesCount: periodSales.length };
+    const receiptCount = new Set(periodSales.map((sale) => transactionKey(sale))).size;
+    return { revenue, taxCollected, cost: cost + sharedServiceCost, expenseTotal, grossProfit, netProfit, salesCount: periodSales.length, receiptCount };
   };
 
   const getMetrics = (period: 'day' | 'week' | 'month', offset: number = 0) => {
@@ -828,7 +829,8 @@ export default function Page() {
         value: current.taxCollected,
         change: calculateChange(current.taxCollected, previous.taxCollected),
         period: dashboardPeriod
-      }
+      },
+      receipts: current.receiptCount,
     };
   }, [sales, expenses, products, dashboardPeriod, services, getBusinessDayRange]);
 
@@ -2019,13 +2021,11 @@ export default function Page() {
   const activityLogsPagination = paginateData(activityLogs, activityLogsPage, setActivityLogsPage);
 
   const PaginationControls = ({ totalItems, totalPages, page, start, end, onPrevious, onNext }: { totalItems: number; totalPages: number; page: number; start: number; end: number; onPrevious: () => void; onNext: () => void }) => (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.75rem', gap: '0.75rem', flexWrap: 'wrap' }}>
-      <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-        Showing {totalItems === 0 ? 0 : start + 1}–{end} of {totalItems}
-      </span>
-      <div style={{ display: 'flex', gap: '0.5rem' }}>
+    <div className="pager">
+      <span>Showing {totalItems === 0 ? 0 : start + 1}–{end} of {totalItems}</span>
+      <div className="pager-actions">
         <button className="edit-btn" disabled={page <= 1} onClick={onPrevious}>Previous</button>
-        <span style={{ alignSelf: 'center', fontSize: '0.85rem' }}>Page {page} / {totalPages}</span>
+        <span>Page {page} / {totalPages}</span>
         <button className="edit-btn" disabled={page >= totalPages} onClick={onNext}>Next</button>
       </div>
     </div>
@@ -2369,9 +2369,7 @@ export default function Page() {
         {notification && (
           <div className={`notification-toast ${notification.type}`}>
             <div className="notification-content">
-              <span className="notification-icon">
-                {notification.type === 'success' ? '✅' : notification.type === 'error' ? '❌' : 'ℹ️'}
-              </span>
+              <span className={`notification-icon ${notification.type}`} aria-hidden="true" />
               <span className="notification-message">{notification.message}</span>
             </div>
             <button className="notification-close" onClick={() => setNotification(null)}>✕</button>
@@ -2380,222 +2378,157 @@ export default function Page() {
       </aside>
 
       <main className={`main${view === 'sales' ? ' main-register' : ''}`} style={{ display: 'flex', flexDirection: 'column' }}>
-        <header className="main-header" style={{ padding: 'var(--space-lg) var(--space-xl)', margin: '0 0 var(--space-xl) 0', borderBottom: '1px solid var(--border)', background: 'var(--bg)', position: 'sticky', top: 0, zIndex: 40 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-md)' }}>
-            <button className="mobile-menu-toggle" onClick={() => setIsSidebarOpen(true)}>☰</button>
-            <h1 style={{ margin: 0, fontSize: '1.5rem', fontWeight: 700, letterSpacing: '-0.02em' }}>
-              {view === 'dashboard' ? 'Dashboard overview' :
+        <header className="main-header">
+          <div className="header-title">
+            <button className="mobile-menu-toggle" onClick={() => setIsSidebarOpen(true)} aria-label="Open menu">Menu</button>
+            <h1>
+              {view === 'dashboard' ? 'Dashboard' :
                view === 'sales' ? 'Register' :
                view === 'sales_history' ? 'Sales history' :
                view === 'customers' ? 'Customers' :
-               view === 'products' ? 'Inventory management' :
-               view === 'services' ? 'Service catalog' :
-               view === 'expenses' ? 'Expense tracking' :
-               view === 'users' ? 'Staff management' :
-               view === 'activity_logs' ? 'Activity logs' :
-               view === 'reports' ? 'Business reports' :
+               view === 'products' ? 'Inventory' :
+               view === 'services' ? 'Services' :
+               view === 'expenses' ? 'Expenses' :
+               view === 'users' ? 'Staff' :
+               view === 'activity_logs' ? 'Activity' :
+               view === 'reports' ? 'Reports' :
                view === 'accounts' ? 'Accounts' :
-               view === 'settings' ? 'System settings' :
+               view === 'settings' ? 'Settings' :
                view.charAt(0).toUpperCase() + view.slice(1)}
             </h1>
           </div>
-          <div className="status-container" style={{ margin: 0 }}>
-            <span className="status" style={{ fontSize: '0.75rem', padding: '0.4rem 0.8rem' }}>{status}</span>
+          <div className="status-container">
+            <span className="status">{status}</span>
           </div>
         </header>
 
         {view === 'dashboard' && (
           <section>
-            {/* Dashboard Period Selector */}
-            <div className="dashboard-controls">
-              <div className="filter-group">
-                <label>Time Period</label>
-                <select 
-                  value={dashboardPeriod} 
-                  onChange={(e) => setDashboardPeriod(e.target.value as DashboardPeriod)}
-                  className="period-select"
-                >
-                  <option value="daily">Daily</option>
-                  <option value="weekly">Weekly</option>
-                  <option value="monthly">Monthly</option>
-                  <option value="yearly">Yearly</option>
+            <div className="office-toolbar">
+              <label>
+                Period
+                <select value={dashboardPeriod} onChange={(e) => setDashboardPeriod(e.target.value as DashboardPeriod)} className="period-select">
+                  <option value="daily">Today</option>
+                  <option value="weekly">This week</option>
+                  <option value="monthly">This month</option>
+                  <option value="yearly">This year</option>
                 </select>
-              </div>
-              <button className="dashboard-refresh-btn" onClick={handleDashboardRefresh} disabled={isRefreshingDashboard}>
-                <span className="refresh-btn-icon" aria-hidden="true">{isRefreshingDashboard ? '⏳' : '🧮'}</span>
-                <span>{isRefreshingDashboard ? 'Refreshing data…' : 'Refresh Data'}</span>
+              </label>
+              <button className="primary" onClick={handleDashboardRefresh} disabled={isRefreshingDashboard || authUser.uid === LOCAL_OPERATOR_ID} title={authUser.uid === LOCAL_OPERATOR_ID ? 'This counter already saves on this device.' : 'Reload the shop record and recalculate costs'}>
+                {isRefreshingDashboard ? 'Refreshing…' : 'Reload shop'}
               </button>
             </div>
 
-            {/* KPI Cards Grid */}
-            <div className="grid dashboard-metrics-grid">
-              <div className="card dashboard-card">
-                <span className="dashboard-card-icon" aria-hidden="true">💵</span>
-                <h4>Sales ({dashboardPeriod})</h4>
-                <div className="card-value">{formatUGX(dashboardMetrics.sales.value)}</div>
+            <div className="kpi-grid">
+              <article className="kpi">
+                <p>Sales</p>
+                <strong>{formatUGX(dashboardMetrics.sales.value)}</strong>
                 <Badge value={dashboardMetrics.sales.change} />
-              </div>
-              <div className="card dashboard-card">
-                <span className="dashboard-card-icon" aria-hidden="true">💰</span>
-                <h4>Expenses ({dashboardPeriod})</h4>
-                <div className="card-value">{formatUGX(dashboardMetrics.expenses.value)}</div>
+              </article>
+              <article className="kpi">
+                <p>Expenses</p>
+                <strong>{formatUGX(dashboardMetrics.expenses.value)}</strong>
                 <Badge value={dashboardMetrics.expenses.change} />
-              </div>
-              <div className="card dashboard-card">
-                <span className="dashboard-card-icon" aria-hidden="true">📈</span>
-                <h4>Net Profit ({dashboardPeriod})</h4>
-                <div className="card-value" style={{ color: 'var(--success)' }}>{formatUGX(dashboardMetrics.netProfit.value)}</div>
-                <Badge value={dashboardMetrics.netProfit.change} />
-              </div>
-              <div className="card dashboard-card">
-                <span className="dashboard-card-icon" aria-hidden="true">％</span>
-                <h4>Tax ({dashboardPeriod})</h4>
-                <div className="card-value">{formatUGX(dashboardMetrics.tax.value)}</div>
-                <span className="badge badge-info">{taxSettings.enabled ? taxSettings.name : 'Not configured'}</span>
-              </div>
-              <div className="card dashboard-card">
-                <span className="dashboard-card-icon" aria-hidden="true">📦</span>
-                <h4>Products in Stock</h4>
-                <div className="card-value">{dashboardMetrics.products}</div>
-                <span className="badge badge-info">Total Items</span>
-              </div>
-              <div className="card dashboard-card">
-                <span className="dashboard-card-icon" aria-hidden="true">📊</span>
-                <h4>Gross Profit ({dashboardPeriod})</h4>
-                <div className="card-value">{formatUGX(dashboardMetrics.grossProfit.value)}</div>
+              </article>
+              <article className="kpi">
+                <p>Gross profit</p>
+                <strong>{formatUGX(dashboardMetrics.grossProfit.value)}</strong>
                 <Badge value={dashboardMetrics.grossProfit.change} />
+              </article>
+              <article className="kpi">
+                <p>Net profit</p>
+                <strong className={dashboardMetrics.netProfit.value >= 0 ? 'is-positive' : 'is-negative'}>{formatUGX(dashboardMetrics.netProfit.value)}</strong>
+                <Badge value={dashboardMetrics.netProfit.change} />
+              </article>
+              <article className="kpi">
+                <p>{taxSettings.enabled ? taxSettings.name : 'Tax'}</p>
+                <strong>{formatUGX(dashboardMetrics.tax.value)}</strong>
+                <span className="badge badge-info">{taxSettings.enabled ? `${taxSettings.ratePercent}%` : 'Off'}</span>
+              </article>
+              <article className="kpi">
+                <p>Receipts</p>
+                <strong>{dashboardMetrics.receipts}</strong>
+                <span className="badge badge-info">In this period</span>
+              </article>
+              <article className="kpi">
+                <p>Catalog</p>
+                <strong>{dashboardMetrics.products}</strong>
+                <span className={`badge ${products.some((product) => product.stock > 0 && product.stock < 10) ? 'badge-warning' : 'badge-success'}`}>
+                  {products.filter((product) => product.stock > 0 && product.stock < 10).length} low
+                </span>
+              </article>
+              <article className="kpi">
+                <p>{defaultAccount?.name || 'Cash account'}</p>
+                <strong>{formatUGX(defaultAccount ? (accountBalances.get(defaultAccount.id) || 0) : 0)}</strong>
+                <span className="badge badge-info">Balance</span>
+              </article>
+            </div>
+
+            <div className="insight-stats-grid">
+              <div className="card">
+                <h3>Most sold</h3>
+                {dashboardInsights.mostSold.length > 0 ? (
+                  <ol className="rank-list">
+                    {dashboardInsights.mostSold.map((item) => (
+                      <li key={`${item.type}-${item.name}`}>
+                        <span><strong>{item.name}</strong><small>{item.type}</small></span>
+                        <b>{item.qty}</b>
+                      </li>
+                    ))}
+                  </ol>
+                ) : <p className="muted-copy">No sales in the shop yet.</p>}
               </div>
-              <div className="card dashboard-card">
-                <span className="dashboard-card-icon" aria-hidden="true">🏦</span>
-                <h4>Default Account</h4>
-                <div className="card-value">{defaultAccount?.name || 'No Account'}</div>
-                <span className="badge badge-info">{formatUGX(defaultAccount ? (accountBalances.get(defaultAccount.id) || 0) : 0)}</span>
-              </div>
-              <div className="card dashboard-card">
-                <span className="dashboard-card-icon" aria-hidden="true">🎯</span>
-                <h4>Transactions ({dashboardPeriod})</h4>
-                <div className="card-value">{sales.filter(s => {
-                  const d = new Date(s.createdAt);
-                  const now = new Date();
-                  if (dashboardPeriod === 'daily') return d.toDateString() === now.toDateString();
-                  if (dashboardPeriod === 'weekly') return d.getTime() >= new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay()).getTime();
-                  if (dashboardPeriod === 'monthly') return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
-                  return d.getFullYear() === now.getFullYear();
-                }).length}</div>
-                <span className="badge badge-success">Total</span>
+              <div className="card">
+                <h3>Highest revenue</h3>
+                {dashboardInsights.topRevenue.length > 0 ? (
+                  <ol className="rank-list">
+                    {dashboardInsights.topRevenue.map((item) => (
+                      <li key={`${item.type}-${item.name}-revenue`}>
+                        <span><strong>{item.name}</strong><small>{item.type}</small></span>
+                        <b>{formatUGX(item.revenue)}</b>
+                      </li>
+                    ))}
+                  </ol>
+                ) : <p className="muted-copy">No revenue recorded yet.</p>}
               </div>
             </div>
 
-            <div className="card insight-card">
+            <div className="card trend-card">
               <div className="insight-header-row">
-                <h3 className="insight-title">📌 Insights</h3>
-                <div className="insight-actions">
-                  <div className="filter-group insight-filter-group">
-                    <label>Sales Trend Window</label>
-                    <select value={insightTrendRange} onChange={(e) => setInsightTrendRange(Number(e.target.value) as InsightTrendRange)}>
-                      <option value={7}>Last 7 days</option>
-                      <option value={14}>Last 14 days</option>
-                      <option value={30}>Last 30 days</option>
-                      <option value={60}>Last 60 days</option>
-                      <option value={100}>Last 100 days</option>
-                    </select>
-                  </div>
-                  <button className="dashboard-refresh-btn" onClick={handleDashboardRefresh} disabled={isRefreshingDashboard}>
-                    <span className="refresh-btn-icon" aria-hidden="true">{isRefreshingDashboard ? '⏳' : '🔄'}</span>
-                    <span>{isRefreshingDashboard ? 'Refreshing…' : 'Refresh Insights'}</span>
-                  </button>
-                </div>
-              </div>
-
-              <div className="insight-stats-grid">
                 <div>
-                  <h4>1) Most sold product/service</h4>
-                  {dashboardInsights.mostSold.length > 0 ? (
-                    <div className="insight-list">
-                      {dashboardInsights.mostSold.map((item, i) => (
-                        <p key={i} className="insight-list-item">
-                          <span className="insight-list-rank">#{i+1}</span>
-                          <strong>{item.name}</strong> <span className="insight-list-type">({item.type})</span> — {item.qty} units
-                        </p>
-                      ))}
-                    </div>
-                  ) : <p style={{ margin: 0 }}>No sales data yet.</p>}
+                  <h3>Sales trend</h3>
+                  <p className="muted-copy">Daily revenue for the last {insightTrendRange} days</p>
                 </div>
-                <div>
-                  <h4>2) Product/service with most revenue</h4>
-                  {dashboardInsights.topRevenue.length > 0 ? (
-                    <div className="insight-list">
-                      {dashboardInsights.topRevenue.map((item, i) => (
-                        <p key={i} className="insight-list-item">
-                          <span className="insight-list-rank">#{i+1}</span>
-                          <strong>{item.name}</strong> <span className="insight-list-type">({item.type})</span> — {formatUGX(item.revenue)}
-                        </p>
-                      ))}
-                    </div>
-                  ) : <p style={{ margin: 0 }}>No revenue data yet.</p>}
-                </div>
+                <label>
+                  Window
+                  <select value={insightTrendRange} onChange={(e) => setInsightTrendRange(Number(e.target.value) as InsightTrendRange)}>
+                    <option value={7}>7 days</option>
+                    <option value={14}>14 days</option>
+                    <option value={30}>30 days</option>
+                    <option value={60}>60 days</option>
+                    <option value={100}>100 days</option>
+                  </select>
+                </label>
               </div>
-
-              <div className="insight-trend-section">
-                <div className="insight-trend-header">
-                  <h4 className="insight-trend-title">3) Sales trend (last {insightTrendRange} days)</h4>
-                  <div className="insight-legend">
-                    <div className="insight-legend-item">
-                      <div className="insight-legend-dot"></div>
-                      <span>Daily Revenue</span>
+              <div className="trend-bars" role="img" aria-label={`Sales trend for the last ${insightTrendRange} days`}>
+                {dashboardInsights.trendDays.map((day, index) => {
+                  const labelEvery = insightTrendRange <= 7 ? 1 : insightTrendRange <= 14 ? 2 : insightTrendRange <= 30 ? 5 : insightTrendRange <= 60 ? 10 : 14;
+                  const height = dashboardInsights.maxRevenue > 0 ? Math.max(day.revenue > 0 ? 8 : 0, (day.revenue / dashboardInsights.maxRevenue) * 100) : 0;
+                  const showLabel = index % labelEvery === 0 || index === dashboardInsights.trendDays.length - 1;
+                  return (
+                    <div key={day.date} className="trend-col" title={`${day.date}: ${formatUGX(day.revenue)}`}>
+                      <span style={{ height: `${height}%` }} />
+                      {showLabel && <em>{day.date.slice(5)}</em>}
                     </div>
-                  </div>
-                </div>
-                <div className="insight-trend-chart">
-                  <svg viewBox="-14 0 122 116" preserveAspectRatio="xMidYMid meet" aria-label={`Sales trend for last ${insightTrendRange} days`}>
-                    {/* Grid lines + y-axis labels */}
-                    {dashboardInsights.yTicks.map((tick, idx) => (
-                      <g key={idx}>
-                        <line x1="0" y1={tick.y} x2="100" y2={tick.y} stroke="var(--border)" strokeWidth="0.5" strokeDasharray="2,2" />
-                        <text x="-1" y={tick.y + 1.5} textAnchor="end" className="trend-axis-label">
-                          {formatUGX(tick.value)}
-                        </text>
-                      </g>
-                    ))}
-                    <line x1="0" y1="100" x2="100" y2="100" stroke="var(--text-muted)" strokeWidth="0.6" />
-                    <line x1="0" y1="0" x2="0" y2="100" stroke="var(--text-muted)" strokeWidth="0.6" />
-
-                    <polygon points={dashboardInsights.areaPoints} fill="url(#trendFill)" />
-                    <defs>
-                      <linearGradient id="trendFill" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="var(--info)" stopOpacity="0.25" />
-                        <stop offset="100%" stopColor="var(--info)" stopOpacity="0.02" />
-                      </linearGradient>
-                    </defs>
-                    <polyline points={dashboardInsights.points} fill="none" stroke="var(--info)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
-                    {/* Data points */}
-                    {dashboardInsights.points.split(' ').map((p, i) => {
-                      const [x, y] = p.split(',');
-                      const day = dashboardInsights.trendDays[i];
-                      return (
-                        <circle key={i} cx={x} cy={y} r="1.5" fill="var(--bg)" stroke="var(--info)" strokeWidth="1">
-                          <title>{`${day?.date || ''}: ${formatUGX(day?.revenue || 0)}`}</title>
-                        </circle>
-                      );
-                    })}
-
-                    {dashboardInsights.xTicks.map((tick, idx) => (
-                      <text key={idx} x={tick.x} y="108.5" textAnchor={idx === 0 ? 'start' : idx === dashboardInsights.xTicks.length - 1 ? 'end' : 'middle'} className="trend-axis-label">
-                        {tick.label}
-                      </text>
-                    ))}
-                    <text x="50" y="114" textAnchor="middle" className="trend-axis-title">Date</text>
-                    <text x="-12" y="50" textAnchor="middle" transform="rotate(-90 -12 50)" className="trend-axis-title">Revenue (UGX)</text>
-                  </svg>
-                </div>
-                <div className="insight-trend-footer">
-                  <p className="insight-trend-meta">Peak day: <strong>{formatUGX(dashboardInsights.maxRevenue)}</strong></p>
-                  <p className="insight-trend-meta">Total window revenue: <strong>{formatUGX(dashboardInsights.totalRevenue)}</strong></p>
-                  <p className="insight-trend-meta insight-trend-meta-muted">Average/day: <strong>{formatUGX(dashboardInsights.averageRevenue)}</strong></p>
-                </div>
+                  );
+                })}
+              </div>
+              <div className="insight-trend-footer">
+                <p>Peak day <strong>{formatUGX(dashboardInsights.maxRevenue)}</strong></p>
+                <p>Window total <strong>{formatUGX(dashboardInsights.totalRevenue)}</strong></p>
+                <p>Average day <strong>{formatUGX(dashboardInsights.averageRevenue)}</strong></p>
               </div>
             </div>
-
           </section>
         )}
 
@@ -2682,7 +2615,7 @@ export default function Page() {
                         <td>{branchMap[p.branchId]}</td>
                         <td>
                           <span className={`badge ${p.stock === 0 ? 'badge-danger' : p.stock < 10 ? 'badge-warning' : 'badge-success'}`}>
-                            {p.stock === 0 ? '❌ Out' : p.stock < 10 ? '⚠️ Low' : '✅ ' + p.stock}
+                            {p.stock === 0 ? 'Out' : p.stock < 10 ? `Low · ${p.stock}` : p.stock}
                           </span>
                         </td>
                         <td>{formatUGX(p.purchasePrice)}</td>
@@ -2846,7 +2779,7 @@ export default function Page() {
               {renderCheckoutDetailsFields()}
             </div>
             <div className="card" style={{ marginBottom: '1rem' }}>
-              <form onSubmit={saveService} style={{ display: 'grid', gap: '0.75rem', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', alignItems: 'end' }}>
+              <form onSubmit={saveService} className="office-form">
                 <div className="field">
                   <label>Service Name</label>
                   <input type="text" value={serviceForm.name} onChange={(e) => setServiceForm((prev) => ({ ...prev, name: e.target.value }))} placeholder="e.g. Phone Repair" />
@@ -3047,13 +2980,13 @@ export default function Page() {
                 </table>
               </div>
 
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.75rem', gap: '0.75rem', flexWrap: 'wrap' }}>
-                <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+              <div className="pager">
+                <span>
                   Showing {groupedSales.length === 0 ? 0 : (salesHistoryPage - 1) * salesHistoryPageSize + 1}–{Math.min(salesHistoryPage * salesHistoryPageSize, groupedSales.length)} of {groupedSales.length}
                 </span>
-                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <div className="pager-actions">
                   <button className="edit-btn" disabled={salesHistoryPage <= 1} onClick={() => setSalesHistoryPage((prev) => Math.max(1, prev - 1))}>Previous</button>
-                  <span style={{ alignSelf: 'center', fontSize: '0.85rem' }}>Page {salesHistoryPage} / {salesHistoryTotalPages}</span>
+                  <span>Page {salesHistoryPage} / {salesHistoryTotalPages}</span>
                   <button className="edit-btn" disabled={salesHistoryPage >= salesHistoryTotalPages} onClick={() => setSalesHistoryPage((prev) => Math.min(salesHistoryTotalPages, prev + 1))}>Next</button>
                 </div>
               </div>
@@ -3064,7 +2997,7 @@ export default function Page() {
         {view === 'expenses' && (
           <section>
             <div className="page-header">
-              <h2>💰 Expense Tracking</h2>
+              <h2>Expenses</h2>
               <button className="primary" onClick={() => { setExpenseForm({ id: '', title: '', branchId: branches[0]?.id || '', amount: 0, expenseGroupId: '', accountId: defaultAccount?.id || '' }); setShowExpenseModal(true); }}>
                 + Add Expense
               </button>
@@ -3072,26 +3005,26 @@ export default function Page() {
             
             {/* Expense Summary */}
             {expenses.length > 0 && (
-              <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', marginBottom: '2rem' }}>
-                <div className="card">
-                  <h4 style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase', margin: 0, marginBottom: '0.5rem' }}>Total Expenses</h4>
-                  <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--danger)' }}>{formatUGX(expenses.reduce((sum, e) => sum + e.amount, 0))}</div>
-                  <span className="badge badge-danger" style={{ marginTop: '0.5rem' }}>All Time</span>
-                </div>
-                <div className="card">
-                  <h4 style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase', margin: 0, marginBottom: '0.5rem' }}>This Month</h4>
-                  <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--danger)' }}>{formatUGX(expenses.filter(e => {
+              <div className="kpi-grid">
+                <article className="kpi">
+                  <p>Total expenses</p>
+                  <strong className="is-negative">{formatUGX(expenses.reduce((sum, e) => sum + e.amount, 0))}</strong>
+                  <span className="badge badge-danger">All time</span>
+                </article>
+                <article className="kpi">
+                  <p>This month</p>
+                  <strong className="is-negative">{formatUGX(expenses.filter(e => {
                     const d = new Date(e.createdAt);
                     const now = new Date();
                     return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
-                  }).reduce((sum, e) => sum + e.amount, 0))}</div>
-                  <span className="badge badge-warning" style={{ marginTop: '0.5rem' }}>Current Month</span>
-                </div>
-                <div className="card">
-                  <h4 style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase', margin: 0, marginBottom: '0.5rem' }}>Total Records</h4>
-                  <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text)' }}>{expenses.length}</div>
-                  <span className="badge badge-info" style={{ marginTop: '0.5rem' }}>Transactions</span>
-                </div>
+                  }).reduce((sum, e) => sum + e.amount, 0))}</strong>
+                  <span className="badge badge-warning">Current month</span>
+                </article>
+                <article className="kpi">
+                  <p>Records</p>
+                  <strong>{expenses.length}</strong>
+                  <span className="badge badge-info">Transactions</span>
+                </article>
               </div>
             )}
             
@@ -3121,7 +3054,7 @@ export default function Page() {
               {expenseGroups.length > 0 && (
                 <div style={{ display: 'flex', gap: '0.6rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
                   {expenseGroups.map((group) => (
-                    <div key={group.id} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', background: 'var(--surface-strong)', border: '1px solid var(--border)', borderRadius: '999px', padding: '0.35rem 0.7rem' }}>
+                    <div key={group.id} className="group-chip">
                       {editingExpenseGroupId === group.id ? (
                         <>
                           <input value={editingExpenseGroupName} onChange={(e) => setEditingExpenseGroupName(e.target.value)} style={{ minWidth: '140px' }} />
@@ -3131,8 +3064,8 @@ export default function Page() {
                       ) : (
                         <>
                           <span className="badge badge-info" style={{ fontWeight: 600 }}>{group.name}</span>
-                          <button type="button" className="edit-btn" title={`Edit ${group.name}`} aria-label={`Edit ${group.name}`} onClick={() => { setEditingExpenseGroupId(group.id); setEditingExpenseGroupName(group.name); }} style={{ width: 26, height: 26, borderRadius: '50%', padding: 0, lineHeight: 1 }}>
-                            +
+                          <button type="button" className="edit-btn" title={`Edit ${group.name}`} aria-label={`Edit ${group.name}`} onClick={() => { setEditingExpenseGroupId(group.id); setEditingExpenseGroupName(group.name); }}>
+                            Edit
                           </button>
                         </>
                       )}
@@ -3146,7 +3079,7 @@ export default function Page() {
             </div>
             <div className="card" style={{ marginBottom: '1rem' }}>
               <h4 style={{ marginTop: 0 }}>Expense Group Distribution</h4>
-              <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
+              <div className="segmented">
                 {(['day', '7days', '14days', 'month', '3months', '6months', '1year'] as ExpenseChartRange[]).map((range) => (
                   <button key={range} type="button" className={expenseChartRange === range ? 'primary' : 'edit-btn'} onClick={() => setExpenseChartRange(range)}>
                     {range === 'day' ? 'Per day' : range === '7days' ? '7 days' : range === '14days' ? '14 days' : range === 'month' ? 'Month' : range === '3months' ? '3 months' : range === '6months' ? '6 months' : '1 year'}
@@ -3154,7 +3087,7 @@ export default function Page() {
                 ))}
               </div>
               {expenseChartData.total > 0 ? (
-                <div style={{ display: 'grid', gridTemplateColumns: '160px 1fr', gap: '1rem', alignItems: 'center' }}>
+                <div className="expense-chart">
                   <div style={{ width: 160, height: 160, borderRadius: '50%', background: `conic-gradient(${expenseChartData.segments.map((s, i) => `${s.color} ${expenseChartData.segments.slice(0, i).reduce((a, b) => a + b.percentage, 0)}% ${(expenseChartData.segments.slice(0, i + 1).reduce((a, b) => a + b.percentage, 0))}%`).join(', ')})` }} />
                   <div style={{ display: 'grid', gap: '0.5rem' }}>
                     {expenseChartData.segments.map((segment) => (
@@ -3168,7 +3101,7 @@ export default function Page() {
               ) : <div style={{ color: 'var(--text-muted)' }}>No expenses in this period.</div>}
             </div>
 
-            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            <div className="segmented">
               <button type="button" className={expensesViewMode === 'all' ? 'primary' : 'edit-btn'} onClick={() => setExpensesViewMode('all')}>
                 All expenses
               </button>
@@ -3239,7 +3172,7 @@ export default function Page() {
         {view === 'users' && (
           <section>
             <div className="page-header">
-              <h2>👥 Staff Management</h2>
+              <h2>Staff</h2>
               {canManageUsers && (
                 <button className="primary" onClick={() => { setUserForm({ id: '', name: '', email: '', role: 'cashier', branchId: branches[0]?.id || '' }); setShowUserModal(true); }}>
                   + Invite Staff
@@ -3251,22 +3184,22 @@ export default function Page() {
               <>
                 {/* Staff Summary */}
                 {users.length > 0 && (
-                  <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', marginBottom: '2rem' }}>
-                    <div className="card">
-                    <h4 style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase', margin: 0, marginBottom: '0.5rem' }}>Total Staff</h4>
-                    <div style={{ fontSize: '1.1rem', fontWeight: 700 }}>{users.length}</div>
-                      <span className="badge badge-info" style={{ marginTop: '0.5rem' }}>Members</span>
-                    </div>
-                    <div className="card">
-                    <h4 style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase', margin: 0, marginBottom: '0.5rem' }}>Cashiers</h4>
-                    <div style={{ fontSize: '1.1rem', fontWeight: 700 }}>{users.filter(u => u.role === 'cashier').length}</div>
-                      <span className="badge badge-success" style={{ marginTop: '0.5rem' }}>Active</span>
-                    </div>
-                    <div className="card">
-                    <h4 style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase', margin: 0, marginBottom: '0.5rem' }}>Managers</h4>
-                    <div style={{ fontSize: '1.1rem', fontWeight: 700 }}>{users.filter(u => u.role === 'manager').length}</div>
-                      <span className="badge badge-warning" style={{ marginTop: '0.5rem' }}>Supervisors</span>
-                    </div>
+                  <div className="kpi-grid">
+                    <article className="kpi">
+                      <p>Staff</p>
+                      <strong>{users.length}</strong>
+                      <span className="badge badge-info">Members</span>
+                    </article>
+                    <article className="kpi">
+                      <p>Cashiers</p>
+                      <strong>{users.filter(u => u.role === 'cashier').length}</strong>
+                      <span className="badge badge-success">On the counter</span>
+                    </article>
+                    <article className="kpi">
+                      <p>Managers</p>
+                      <strong>{users.filter(u => u.role === 'manager').length}</strong>
+                      <span className="badge badge-warning">Supervisors</span>
+                    </article>
                   </div>
                 )}
                 
@@ -3291,7 +3224,7 @@ export default function Page() {
                             <td>{u.email}</td>
                             <td>
                               <span className={`badge ${u.role === 'manager' ? 'badge-warning' : 'badge-success'}`}>
-                                {u.role === 'manager' ? '👔 Manager' : u.role === 'admin' ? '🛡️ Admin' : '💼 Cashier'}
+                                {roleLabels[u.role] || u.role}
                               </span>
                             </td>
                             <td>{branchMap[u.branchId]}</td>
@@ -3322,7 +3255,7 @@ export default function Page() {
               </>
             ) : (
               <div className="card">
-                <p style={{ margin: 0 }}>⚠️ Only shop owners can manage staff members.</p>
+                <p className="muted-copy">Only the shop owner can manage staff.</p>
               </div>
             )}
           </section>
@@ -3334,83 +3267,43 @@ export default function Page() {
               <h2>Business Reports & Analytics</h2>
             </div>
 
-            <div className="grid" style={{ gridTemplateColumns: 'repeat(2, 1fr)' }}>
+            <div className="report-grid">
               <div className="card">
-                <h4>Daily Summary</h4>
-                <div style={{ marginTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                  <div>
-                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Today's Sales</div>
-                    <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text)' }}>{formatUGX(getMetrics('day', 0).revenue)}</div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Today's Expenses</div>
-                    <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--danger)' }}>{formatUGX(getMetrics('day', 0).expenseTotal)}</div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Today's Net Profit</div>
-                    <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--success)' }}>{formatUGX(getMetrics('day', 0).netProfit)}</div>
-                  </div>
+                <h4>Today</h4>
+                <div className="metric-stack">
+                  <div><span>Sales</span><strong>{formatUGX(getMetrics('day', 0).revenue)}</strong></div>
+                  <div><span>Expenses</span><strong className="is-negative">{formatUGX(getMetrics('day', 0).expenseTotal)}</strong></div>
+                  <div><span>Net profit</span><strong className={getMetrics('day', 0).netProfit >= 0 ? 'is-positive' : 'is-negative'}>{formatUGX(getMetrics('day', 0).netProfit)}</strong></div>
                 </div>
               </div>
-
               <div className="card">
-                <h4>Weekly Summary</h4>
-                <div style={{ marginTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                  <div>
-                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Week's Sales</div>
-                    <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text)' }}>{formatUGX(getMetrics('week', 0).revenue)}</div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Week's Expenses</div>
-                    <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--danger)' }}>{formatUGX(getMetrics('week', 0).expenseTotal)}</div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Week's Net Profit</div>
-                    <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--success)' }}>{formatUGX(getMetrics('week', 0).netProfit)}</div>
-                  </div>
+                <h4>This week</h4>
+                <div className="metric-stack">
+                  <div><span>Sales</span><strong>{formatUGX(getMetrics('week', 0).revenue)}</strong></div>
+                  <div><span>Expenses</span><strong className="is-negative">{formatUGX(getMetrics('week', 0).expenseTotal)}</strong></div>
+                  <div><span>Net profit</span><strong className={getMetrics('week', 0).netProfit >= 0 ? 'is-positive' : 'is-negative'}>{formatUGX(getMetrics('week', 0).netProfit)}</strong></div>
                 </div>
               </div>
-
               <div className="card">
-                <h4>Monthly Summary</h4>
-                <div style={{ marginTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                  <div>
-                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Month's Sales</div>
-                    <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text)' }}>{formatUGX(getMetrics('month', 0).revenue)}</div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Month's Expenses</div>
-                    <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--danger)' }}>{formatUGX(getMetrics('month', 0).expenseTotal)}</div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Month's Gross Profit</div>
-                    <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--success)' }}>{formatUGX(getMetrics('month', 0).grossProfit)}</div>
-                  </div>
+                <h4>This month</h4>
+                <div className="metric-stack">
+                  <div><span>Sales</span><strong>{formatUGX(getMetrics('month', 0).revenue)}</strong></div>
+                  <div><span>Expenses</span><strong className="is-negative">{formatUGX(getMetrics('month', 0).expenseTotal)}</strong></div>
+                  <div><span>Gross profit</span><strong className={getMetrics('month', 0).grossProfit >= 0 ? 'is-positive' : 'is-negative'}>{formatUGX(getMetrics('month', 0).grossProfit)}</strong></div>
                 </div>
               </div>
-
               <div className="card">
-                <h4>Inventory Status</h4>
-                <div style={{ marginTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                  <div>
-                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Total Products</div>
-                    <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text)' }}>{products.length}</div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Low Stock Items</div>
-                    <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--warning)' }}>{products.filter(p => p.stock < 10).length}</div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Total Stock Value</div>
-                    <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--info)' }}>{formatUGX(products.reduce((a, p) => a + (p.stock * p.purchasePrice), 0))}</div>
-                  </div>
+                <h4>Inventory</h4>
+                <div className="metric-stack">
+                  <div><span>Products</span><strong>{products.length}</strong></div>
+                  <div><span>Below 10 on hand</span><strong>{products.filter(p => p.stock < 10).length}</strong></div>
+                  <div><span>Stock value</span><strong>{formatUGX(products.reduce((a, p) => a + (p.stock * p.purchasePrice), 0))}</strong></div>
                 </div>
               </div>
             </div>
 
-            <div style={{ marginTop: '3rem' }}>
-              <h3 style={{ marginBottom: '1.5rem' }}>All Sales Transactions</h3>
-  
+            <div className="table-block">
+              <h3>Sales lines</h3>
             <div className="table-wrap">
                 <table className="data-table">
                   <thead>
@@ -3423,22 +3316,23 @@ export default function Page() {
                       <th>Revenue</th>
                       <th>Cost</th>
                       <th>Profit</th>
-                      <th>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {reportsSalesPagination.rows.map((s) => (
+                    {reportsSalesPagination.rows.length > 0 ? reportsSalesPagination.rows.map((s) => (
                       <tr key={s.id}>
                         <td>{new Date(s.createdAt).toLocaleDateString()}</td>
                         <td><span className="badge badge-info">{s.type}</span></td>
-                        <td style={{ fontWeight: 600 }}>{s.itemName}</td>
+                        <td className="cell-strong">{s.itemName}</td>
                         <td>{branchMap[s.branchId]}</td>
                         <td>{s.qty}</td>
                         <td>{formatUGX(s.amount)}</td>
                         <td>{formatUGX(s.cost)}</td>
-                        <td style={{ color: 'var(--success)', fontWeight: 600 }}>{formatUGX(s.amount - s.cost)}</td>
+                        <td className={s.amount - s.cost >= 0 ? 'money-in' : 'money-out'}>{formatUGX(s.amount - s.cost)}</td>
                       </tr>
-                    ))}
+                    )) : (
+                      <tr><td colSpan={8} className="empty-cell">No sales recorded yet.</td></tr>
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -3456,10 +3350,8 @@ export default function Page() {
         )}
 
         {view === 'activity_logs' && (
-          <section className="card activity-log-card" style={{ marginTop: '1rem' }}>
-            <h2 style={{ marginTop: 0 }}>All User Activities</h2>
-            <p style={{ color: 'var(--text-muted)' }}>Sale, add inventory, add stock, delete, edit, and add user actions for all roles.</p>
-
+          <section>
+            <p className="section-lead">Sales, stock, staff, and settings changes for this shop.</p>
             <div className="table-wrap">
               <table className="data-table">
                 <thead>
@@ -3472,11 +3364,11 @@ export default function Page() {
                     <tr key={log.id}>
                       <td>{new Date(log.createdAt).toLocaleString()}</td>
                       <td>{log.userEmail}</td>
-                      <td>{log.role}</td>
-                      <td>{log.action}</td>
+                      <td><span className="badge badge-info">{roleLabels[log.role] || log.role}</span></td>
+                      <td className="activity-action">{log.action.replaceAll('_', ' ')}</td>
                       <td>{log.details}</td>
                     </tr>
-                  )) : <tr><td colSpan={5}>No activity logs yet.</td></tr>}
+                  )) : <tr><td colSpan={5} className="empty-cell">No activity yet.</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -3539,28 +3431,31 @@ export default function Page() {
             <div className="page-header">
               <h2>Shop Settings</h2>
             </div>
-            <div style={{ display: 'flex', gap: '1rem', marginBottom: '2rem', borderBottom: '1px solid var(--border)' }}>
-              <button onClick={() => setSettingsTab('shop')} style={{ padding: '0.75rem 1.5rem', borderBottom: settingsTab === 'shop' ? '3px solid var(--primary)' : 'none', background: 'none', cursor: 'pointer', fontWeight: settingsTab === 'shop' ? 600 : 400 }}>Shop Information</button>
-              <button onClick={() => setSettingsTab('branches')} style={{ padding: '0.75rem 1.5rem', borderBottom: settingsTab === 'branches' ? '3px solid var(--primary)' : 'none', background: 'none', cursor: 'pointer', fontWeight: settingsTab === 'branches' ? 600 : 400 }}>Manage Branches</button>
-              <button onClick={() => setSettingsTab('time')} style={{ padding: '0.75rem 1.5rem', borderBottom: settingsTab === 'time' ? '3px solid var(--primary)' : 'none', background: 'none', cursor: 'pointer', fontWeight: settingsTab === 'time' ? 600 : 400 }}>Time & Timezone</button>
-              <button onClick={() => setSettingsTab('accounts')} style={{ padding: '0.75rem 1.5rem', borderBottom: settingsTab === 'accounts' ? '3px solid var(--primary)' : 'none', background: 'none', cursor: 'pointer', fontWeight: settingsTab === 'accounts' ? 600 : 400 }}>Accounts</button>
-              <button onClick={() => setSettingsTab('tax')} style={{ padding: '0.75rem 1.5rem', borderBottom: settingsTab === 'tax' ? '3px solid var(--primary)' : 'none', background: 'none', cursor: 'pointer', fontWeight: settingsTab === 'tax' ? 600 : 400 }}>Tax</button>
-              <button onClick={() => setSettingsTab('receipt')} style={{ padding: '0.75rem 1.5rem', borderBottom: settingsTab === 'receipt' ? '3px solid var(--primary)' : 'none', background: 'none', cursor: 'pointer', fontWeight: settingsTab === 'receipt' ? 600 : 400 }}>Receipt</button>
-              <button onClick={() => setSettingsTab('backup')} style={{ padding: '0.75rem 1.5rem', borderBottom: settingsTab === 'backup' ? '3px solid var(--primary)' : 'none', background: 'none', cursor: 'pointer', fontWeight: settingsTab === 'backup' ? 600 : 400 }}>Backup & Restore</button>
+            <div className="settings-tabs" role="tablist">
+              {([
+                ['shop', 'Shop'],
+                ['branches', 'Branches'],
+                ['time', 'Business day'],
+                ['accounts', 'Accounts'],
+                ['tax', 'Tax'],
+                ['receipt', 'Receipt'],
+                ['backup', 'Backup'],
+              ] as const).map(([tab, label]) => (
+                <button key={tab} type="button" role="tab" aria-selected={settingsTab === tab} className={settingsTab === tab ? 'active' : ''} onClick={() => setSettingsTab(tab)}>{label}</button>
+              ))}
             </div>
 
             {settingsTab === 'shop' && (
               <div className="card">
-                <h3>Shop Information</h3>
-                <div style={{ marginTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                  <div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '0.5rem' }}>Shop Name</div>
-                    <div style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--text)', marginBottom: '1rem' }}>{currentShop?.shopName || 'My Shop'}</div>
-                    {isShopOwner && (
-                      <button className="primary" onClick={() => { setShopNameForm(currentShop?.shopName || ''); setShowSettingsModal(true); }}>Edit Shop Name</button>
-                    )}
-                  </div>
+                <h3>Shop</h3>
+                <div className="fact-list">
+                  <div><span>Name</span><strong>{currentShop?.shopName || 'My Shop'}</strong></div>
+                  <div><span>Branches</span><strong>{branches.length}</strong></div>
+                  <div><span>Your role</span><strong>{roleLabels[role]}</strong></div>
                 </div>
+                {isShopOwner && (
+                  <button className="primary" onClick={() => { setShopNameForm(currentShop?.shopName || ''); setShowSettingsModal(true); }}>Edit shop name</button>
+                )}
               </div>
             )}
 
@@ -3783,9 +3678,18 @@ export default function Page() {
 
         {view === 'accounts' && (
           <section>
+            <div className="kpi-grid">
+              {accounts.map((account) => (
+                <article className="kpi" key={account.id}>
+                  <p>{account.name}</p>
+                  <strong className={(accountBalances.get(account.id) || 0) >= 0 ? 'is-positive' : 'is-negative'}>{formatUGX(accountBalances.get(account.id) || 0)}</strong>
+                  <span className="badge badge-info">{account.isDefault ? 'Default' : 'Account'}</span>
+                </article>
+              ))}
+            </div>
             <div className="card">
               <h3>Accounts</h3>
-              <p style={{ color: 'var(--text-muted)' }}>Sales (products and services) are credited to the selected account below (or default CASH). Expenses are deducted from the selected expense account.</p>
+              <p className="muted-copy">Sales are credited to the account chosen at the counter. Expenses are deducted from the account selected on the expense.</p>
               <form onSubmit={createAccount} className="form" style={{ marginTop: '1rem' }}>
                 <label className="field">
                   <span>Account Name</span>
@@ -3838,21 +3742,13 @@ export default function Page() {
 
         {view === 'profile' && (
           <section>
-            <div className="card">
-              <h3>Your Profile</h3>
-              <div style={{ marginTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                <div>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Name</div>
-                  <div style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--text)' }}>{authUser?.displayName}</div>
-                </div>
-                <div>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Email</div>
-                  <div style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--text)' }}>{authUser?.email}</div>
-                </div>
-                <div>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Current Role</div>
-                  <div style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--text)' }}>{roleLabels[role]}</div>
-                </div>
+            <div className="card profile-card">
+              <h3>Your profile</h3>
+              <div className="fact-list">
+                <div><span>Name</span><strong>{authUser?.displayName}</strong></div>
+                <div><span>Email</span><strong>{authUser?.email}</strong></div>
+                <div><span>Role</span><strong>{roleLabels[role]}</strong></div>
+                <div><span>Shop</span><strong>{currentShop?.shopName || 'My Shop'}</strong></div>
               </div>
             </div>
           </section>
@@ -3881,12 +3777,12 @@ export default function Page() {
           <div className="modal-overlay">
             <div className="modal-content" style={{ maxWidth: '500px' }}>
               <div className="modal-header">
-                <h3>🛒 Quick Sale</h3>
+                <h3>Quick sale</h3>
                 <button className="modal-close" onClick={() => setShowSaleModal(false)}>&times;</button>
               </div>
               <div className="modal-body">
                 <div style={{ padding: '1rem', backgroundColor: 'var(--info-light)', borderRadius: 'var(--radius)', marginBottom: '1rem', border: '1px solid var(--info-bg)' }}>
-                  <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--info)' }}>💡 Use the Sales Desk for multi-item transactions. This form is for quick single-item sales.</p>
+                  <p className="muted-copy">Use the register for a multi-item sale. This form records one product.</p>
                 </div>
                 <form onSubmit={(e) => { if (makeProductSale(e)) setShowSaleModal(false); }}>
                   <div className="form">
