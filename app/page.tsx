@@ -26,7 +26,16 @@ type AuditStamp = {
 type Product = { id: string; name: string; branchId: string; stock: number; purchasePrice: number; salePrice: number; sku?: string; barcode?: string; category?: string } & AuditStamp;
 type ServiceType = 'direct_cost' | 'shared_cost';
 type Service = { id: string; name: string; branchId: string; salePrice: number; serviceType: ServiceType; directCost: number; monthlySharedCost: number; expenseGroupId?: string } & AuditStamp;
-type Sale = { id: string; type: 'product' | 'service'; itemName: string; branchId: string; qty: number; amount: number; cost: number; accountId?: string } & AuditStamp;
+type PaymentMethod = 'cash' | 'mobile_money' | 'card_terminal' | 'bank_transfer' | 'on_account' | 'other';
+type Sale = { id: string; type: 'product' | 'service'; itemName: string; branchId: string; qty: number; amount: number; cost: number; accountId?: string; transactionId?: string; customerName?: string; customerPhone?: string; paymentMethod?: PaymentMethod; paymentReference?: string } & AuditStamp;
+const PAYMENT_METHOD_LABELS: Record<PaymentMethod, string> = {
+  cash: 'Cash',
+  mobile_money: 'Mobile money',
+  card_terminal: 'Card terminal (record only)',
+  bank_transfer: 'Bank transfer (record only)',
+  on_account: 'On account',
+  other: 'Other (record only)',
+};
 type ExpenseGroup = { id: string; name: string } & AuditStamp;
 type Expense = { id: string; title: string; branchId: string; amount: number; expenseGroupId?: string; accountId?: string } & AuditStamp;
 type StaffUser = { id: string; name: string; email: string; role: Role; branchId: string } & AuditStamp;
@@ -173,6 +182,7 @@ export default function Page() {
   const [stockAdjustmentForm, setStockAdjustmentForm] = useState({ productId: '', direction: 'add' as 'add' | 'remove', quantity: 1, reason: 'restock' as Exclude<StockMovementReason, 'sale' | 'opening_stock' | 'branch_transfer'>, note: '', supplierName: '', reference: '', unitCost: '' });
   const [serviceForm, setServiceForm] = useState({ name: '', branchId: '', amount: 0, serviceType: 'direct_cost' as ServiceType, directCost: 0, monthlySharedCost: 0, expenseGroupId: '' });
   const [saleForm, setSaleForm] = useState({ productId: '', qty: 1 });
+  const [checkoutDetails, setCheckoutDetails] = useState({ customerName: '', customerPhone: '', paymentMethod: 'cash' as PaymentMethod, paymentReference: '' });
   const [cart, setCart] = useState<CartItem[]>([]);
   const [selectedBranchForSale, setSelectedBranchForSale] = useState('');
   const [expenseForm, setExpenseForm] = useState({ id: '', title: '', branchId: '', amount: 0, expenseGroupId: '', accountId: '' });
@@ -505,6 +515,9 @@ export default function Page() {
     setShowStockAdjustmentModal(false);
     setServiceForm({ name: '', branchId: '', amount: 0, serviceType: 'direct_cost', directCost: 0, monthlySharedCost: 0, expenseGroupId: '' });
     setSaleForm({ productId: '', qty: 1 });
+    setCheckoutDetails({ customerName: '', customerPhone: '', paymentMethod: 'cash', paymentReference: '' });
+    setCart([]);
+    setSaleAccountId('');
     setExpenseForm({ id: '', title: '', branchId: '', amount: 0, expenseGroupId: '', accountId: '' });
     setUserForm({ id: '', name: '', email: '', role: 'cashier', branchId: '' });
   };
@@ -839,6 +852,56 @@ export default function Page() {
     logActivity(`stock_${reason}`, details, stockMovement);
   };
 
+  const createCheckoutMetadata = () => ({
+    transactionId: crypto.randomUUID(),
+    ...(checkoutDetails.customerName.trim() ? { customerName: checkoutDetails.customerName.trim() } : {}),
+    ...(checkoutDetails.customerPhone.trim() ? { customerPhone: checkoutDetails.customerPhone.trim() } : {}),
+    paymentMethod: checkoutDetails.paymentMethod,
+    ...(
+      checkoutDetails.paymentMethod !== 'cash' && checkoutDetails.paymentMethod !== 'on_account' && checkoutDetails.paymentReference.trim()
+        ? { paymentReference: checkoutDetails.paymentReference.trim() }
+        : {}
+    ),
+  });
+
+  const renderCheckoutDetailsFields = () => (
+    <>
+      <div className="form" style={{ marginTop: '0.85rem', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))' }}>
+        <label className="field">
+          <span>Customer name (optional)</span>
+          <input value={checkoutDetails.customerName} onChange={(e) => setCheckoutDetails((prev) => ({ ...prev, customerName: e.target.value }))} maxLength={100} autoComplete="name" />
+        </label>
+        <label className="field">
+          <span>Customer phone (optional)</span>
+          <input value={checkoutDetails.customerPhone} onChange={(e) => setCheckoutDetails((prev) => ({ ...prev, customerPhone: e.target.value }))} maxLength={40} inputMode="tel" autoComplete="tel" />
+        </label>
+        <label className="field">
+          <span>Payment method</span>
+          <select value={checkoutDetails.paymentMethod} onChange={(e) => {
+            const paymentMethod = e.target.value as PaymentMethod;
+            setCheckoutDetails((prev) => ({ ...prev, paymentMethod, paymentReference: paymentMethod === 'cash' || paymentMethod === 'on_account' ? '' : prev.paymentReference }));
+          }}>
+            <option value="cash">Cash</option>
+            <option value="mobile_money">Mobile money (record only)</option>
+            <option value="card_terminal">Card terminal (record only)</option>
+            <option value="bank_transfer">Bank transfer (record only)</option>
+            <option value="on_account">On account</option>
+            <option value="other">Other (record only)</option>
+          </select>
+        </label>
+        {checkoutDetails.paymentMethod !== 'cash' && checkoutDetails.paymentMethod !== 'on_account' && (
+          <label className="field">
+            <span>Payment reference (optional)</span>
+            <input value={checkoutDetails.paymentReference} onChange={(e) => setCheckoutDetails((prev) => ({ ...prev, paymentReference: e.target.value }))} maxLength={100} />
+          </label>
+        )}
+      </div>
+      <p style={{ margin: '0.4rem 0 0', color: 'var(--text-muted)', fontSize: '0.74rem' }}>
+        Non-cash tenders are recorded for the sale only; AlphaPOS does not process the payment.
+      </p>
+    </>
+  );
+
   const saveProduct = (e: React.FormEvent) => {
     e.preventDefault();
     const name = productForm.name.trim();
@@ -940,11 +1003,13 @@ export default function Page() {
       amount: service.salePrice,
       cost: service.serviceType === 'direct_cost' ? service.directCost : 0,
       accountId: selectedSaleAccountId,
+      ...createCheckoutMetadata(),
       ...currentAuditStamp(),
     };
     setSales((prev) => [newSale, ...prev]);
     logActivity('sale', `Sold service "${service.name}"`);
     showNotification(`${service.name} sold successfully`, 'success');
+    setCheckoutDetails({ customerName: '', customerPhone: '', paymentMethod: 'cash', paymentReference: '' });
   };
 
 
@@ -1285,6 +1350,7 @@ export default function Page() {
       showNotification(`Not enough stock for "${insufficientItem.itemName}". Check the inventory and try again.`, 'error');
       return;
     }
+    const transactionMetadata = createCheckoutMetadata();
     const newSales = cart.map(item => ({
       id: crypto.randomUUID(),
       type: item.itemType,
@@ -1294,6 +1360,7 @@ export default function Page() {
       amount: getEffectiveUnitPrice(item) * item.qty,
       cost: item.unitCost * item.qty,
       accountId: selectedSaleAccountId,
+      ...transactionMetadata,
       ...currentAuditStamp(),
     }));
     setSales(prev => [...newSales, ...prev]);
@@ -1310,6 +1377,7 @@ export default function Page() {
     logActivity('sale', `Completed cart sale with ${cart.length} item(s)`);
     showNotification(`Sale completed! ${cart.length} item(s) sold.`, 'success');
     setCart([]);
+    setCheckoutDetails({ customerName: '', customerPhone: '', paymentMethod: 'cash', paymentReference: '' });
     setShowSaleModal(false);
   };
 
@@ -1333,6 +1401,7 @@ export default function Page() {
       amount: p.salePrice * saleForm.qty,
       cost: p.purchasePrice * saleForm.qty,
       accountId: selectedSaleAccountId,
+      ...createCheckoutMetadata(),
       ...currentAuditStamp(),
     };
     setSales((prev) => [newSale, ...prev]);
@@ -1340,6 +1409,7 @@ export default function Page() {
     logStockMovement(p, -saleForm.qty, 'sale', `Sale ${newSale.id.slice(0, 8)}`);
     logActivity('sale', `Sold ${saleForm.qty} of "${p.name}"`);
     setSaleForm({ productId: '', qty: 1 });
+    setCheckoutDetails({ customerName: '', customerPhone: '', paymentMethod: 'cash', paymentReference: '' });
     setStatus('Sale recorded.');
     return true;
   };
@@ -2351,6 +2421,7 @@ export default function Page() {
                           </div>
                         ))}
                       </div>
+                      {renderCheckoutDetailsFields()}
                       <div style={{ borderTop: '2px solid var(--border)', paddingTop: '1rem', marginTop: '1rem' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem', fontSize: '0.9rem' }}>
                           <span>Subtotal:</span>
@@ -2382,6 +2453,7 @@ export default function Page() {
                   {accounts.map((account) => <option key={account.id} value={account.id}>{account.name}{account.isDefault ? ' (Default)' : ''}</option>)}
                 </select>
               </div>
+              {renderCheckoutDetailsFields()}
             </div>
             <div className="card" style={{ marginBottom: '1rem' }}>
               <form onSubmit={saveService} style={{ display: 'grid', gap: '0.75rem', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', alignItems: 'end' }}>
@@ -2540,6 +2612,7 @@ export default function Page() {
                     <tr>
                       <th>Date & Time</th>
                       <th>Item</th>
+                      <th>Transaction / customer / tender</th>
                       <th>Qty</th>
                       <th>Total</th>
                       <th>Profit</th>
@@ -2552,6 +2625,14 @@ export default function Page() {
                         <tr key={s.id}>
                           <td>{new Date(s.createdAt).toLocaleString()}</td>
                           <td style={{ fontWeight: 600 }}>{s.itemName}</td>
+                          <td>
+                            <div style={{ fontWeight: 600 }}>{s.transactionId ? `#${s.transactionId.slice(0, 8)}` : 'Legacy sale'}</div>
+                            <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>{s.customerName || 'Walk-in'}{s.customerPhone ? ` · ${s.customerPhone}` : ''}</div>
+                            <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>
+                              {s.paymentMethod ? PAYMENT_METHOD_LABELS[s.paymentMethod] || s.paymentMethod : 'Tender not recorded'}
+                              {s.paymentReference ? ` · Ref ${s.paymentReference}` : ''}
+                            </div>
+                          </td>
                           <td>{s.qty}</td>
                           <td>{formatUGX(s.amount)}</td>
                           <td style={{ color: 'var(--success)', fontWeight: 600 }}>{formatUGX(s.amount - s.cost)}</td>
@@ -2566,7 +2647,7 @@ export default function Page() {
                       ))
                     ) : (
                       <tr>
-                        <td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>No sales recorded for this period</td>
+                        <td colSpan={7} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>No sales recorded for this period</td>
                       </tr>
                     )}
                   </tbody>
@@ -3308,6 +3389,7 @@ export default function Page() {
                       <input type="number" min={1} max={products.find(p => p.id === saleForm.productId)?.stock || 1} value={saleForm.qty} onChange={(e) => setSaleForm({ ...saleForm, qty: Number(e.target.value) })} required />
                     </label>
                   </div>
+                  {renderCheckoutDetailsFields()}
                   {saleForm.productId && (
                     <div style={{ marginTop: '1rem', padding: '1rem', backgroundColor: 'var(--bg-subtle)', borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}>
                       {(() => {

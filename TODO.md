@@ -28,3 +28,11 @@
 - [x] Capture optional supplier, invoice/reference, and unit cost for a one-product receipt; record that metadata and update the product's latest purchase cost when provided.
 - [x] Preserve the current activity-log retention boundary (latest 500 shop events; inventory view shows up to 100 movement events) until a versioned, separately stored movement ledger can be deployed safely.
 - [ ] Add a supplier directory, multi-line purchasing workflow, and durable long-term inventory movement history in a later compatible storage increment.
+
+## 5. Checkout transaction details — in progress
+
+- [x] Group each cart sale's line items under one transaction identifier while preserving legacy sale records that have no identifier.
+- [x] Capture optional customer name/phone, payment method, and optional tender reference on quick product sales, multi-item checkout, and direct service sales; retain walk-in checkout.
+- [x] Make clear that card-terminal, mobile-money, bank-transfer, and other non-cash options are recorded locally only and do not process payments.
+- [ ] Add grouped printable receipts and explicit returns/refunds without silently rewriting prior sale history.
+- [ ] Add jurisdiction-specific business tax configuration and reliable Firestore transaction-level stock/tender persistence before treating checkout as production-hardened.
