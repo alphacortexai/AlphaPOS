@@ -2,11 +2,42 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type Dispatch, type SetStateAction } from 'react';
 import { firebaseApp } from '../lib.firebase';
-import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth';
+import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
 import { collection, doc, getDoc, getDocs, getFirestore, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
+import RegisterDesk from '../components/pos/RegisterDesk';
+import ReceiptDialog from '../components/pos/ReceiptDialog';
+import ReturnDialog, { type ReturnableLine } from '../components/pos/ReturnDialog';
+import { LOCAL_OPERATOR_ID, readLocalShop, writeLocalShop } from '../lib/pos/localShop';
+import {
+  customerAccountBalance,
+  defaultReceiptSettings,
+  defaultTaxSettings,
+  nextDocumentNumber,
+  normalizeCashSessions,
+  normalizeCustomers,
+  normalizeReceiptSettings,
+  normalizeTaxSettings,
+  PAYMENT_METHOD_LABELS,
+  receiptPrefix,
+  returnableQuantity,
+  roundMoney,
+  sessionCashTaken,
+  settleCart,
+  tendersCoverTotal,
+  transactionKey,
+  type CartDiscount,
+  type CashSession,
+  type Customer,
+  type PaymentMethod,
+  type ReceiptModel,
+  type ReceiptSettings,
+  type TaxSettings,
+  type Tender,
+} from '../lib/pos/retail';
 
+type SessionUser = { uid: string; email: string | null; displayName: string | null };
 type Role = 'shop_owner' | 'admin' | 'manager' | 'cashier' | 'stock';
-type View = 'dashboard' | 'sales_history' | 'products' | 'sales' | 'services' | 'expenses' | 'users' | 'branches' | 'reports' | 'settings' | 'accounts' | 'profile' | 'activity_logs';
+type View = 'dashboard' | 'sales_history' | 'products' | 'sales' | 'services' | 'expenses' | 'users' | 'branches' | 'reports' | 'settings' | 'accounts' | 'profile' | 'activity_logs' | 'customers';
 type DashboardPeriod = 'daily' | 'weekly' | 'monthly' | 'yearly';
 type InsightTrendRange = 7 | 14 | 30 | 60 | 100;
 type ExpenseChartRange = 'day' | '7days' | '14days' | 'month' | '3months' | '6months' | '1year';
@@ -26,23 +57,45 @@ type AuditStamp = {
 type Product = { id: string; name: string; branchId: string; stock: number; purchasePrice: number; salePrice: number; sku?: string; barcode?: string; category?: string } & AuditStamp;
 type ServiceType = 'direct_cost' | 'shared_cost';
 type Service = { id: string; name: string; branchId: string; salePrice: number; serviceType: ServiceType; directCost: number; monthlySharedCost: number; expenseGroupId?: string } & AuditStamp;
-type PaymentMethod = 'cash' | 'mobile_money' | 'card_terminal' | 'bank_transfer' | 'on_account' | 'other';
-type Sale = { id: string; type: 'product' | 'service'; itemName: string; branchId: string; qty: number; amount: number; cost: number; accountId?: string; transactionId?: string; customerName?: string; customerPhone?: string; paymentMethod?: PaymentMethod; paymentReference?: string } & AuditStamp;
-const PAYMENT_METHOD_LABELS: Record<PaymentMethod, string> = {
-  cash: 'Cash',
-  mobile_money: 'Mobile money',
-  card_terminal: 'Card terminal (record only)',
-  bank_transfer: 'Bank transfer (record only)',
-  on_account: 'On account',
-  other: 'Other (record only)',
-};
+type Sale = {
+  id: string;
+  type: 'product' | 'service';
+  itemName: string;
+  branchId: string;
+  qty: number;
+  amount: number;
+  cost: number;
+  accountId?: string;
+  transactionId?: string;
+  customerName?: string;
+  customerPhone?: string;
+  paymentMethod?: PaymentMethod;
+  paymentReference?: string;
+  taxAmount?: number;
+  discountAmount?: number;
+  receiptNumber?: string;
+  saleKind?: 'sale' | 'return';
+  returnOfTransactionId?: string;
+  tenders?: Tender[];
+  cashSessionId?: string;
+} & AuditStamp;
 type ExpenseGroup = { id: string; name: string } & AuditStamp;
 type Expense = { id: string; title: string; branchId: string; amount: number; expenseGroupId?: string; accountId?: string } & AuditStamp;
 type StaffUser = { id: string; name: string; email: string; role: Role; branchId: string } & AuditStamp;
 type ShopMembership = { ownerUid: string; shopName: string; role: Role };
+type HeldTicket = {
+  id: string;
+  label: string;
+  cart: CartItem[];
+  cartDiscount: CartDiscount;
+  customerName: string;
+  customerPhone: string;
+  createdAt: string;
+  createdByEmail: string;
+};
 type ShopBackupPayload = {
   app: 'AlphaPOS';
-  version: 1;
+  version: 1 | 2;
   exportedAt: string;
   shopName: string;
   sourceOwnerUid: string;
@@ -57,6 +110,11 @@ type ShopBackupPayload = {
     activityLogs: ActivityLog[];
     shopTimeSettings: ShopTimeSettings;
     accounts: Account[];
+    customers?: Customer[];
+    heldTickets?: HeldTicket[];
+    cashSessions?: CashSession[];
+    taxSettings?: TaxSettings;
+    receiptSettings?: ReceiptSettings;
   };
 };
 type StockMovementReason = 'sale' | 'opening_stock' | 'restock' | 'count_correction' | 'damaged' | 'customer_return' | 'branch_transfer' | 'product_removed';
@@ -120,13 +178,36 @@ const removeUndefinedDeep = <T,>(value: T): T => {
   return value;
 };
 
+const emptyCheckout = { customerName: '', customerPhone: '', paymentMethod: 'cash' as PaymentMethod, paymentReference: '' };
+const roleLabels: Record<Role, string> = { shop_owner: 'Owner', admin: 'Admin', manager: 'Manager', cashier: 'Cashier', stock: 'Stock' };
+
+const normalizeHeldTickets = (value: unknown): HeldTicket[] => {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== 'object') return [];
+    const record = item as Partial<HeldTicket>;
+    if (!record.id || !Array.isArray(record.cart)) return [];
+    const discount = record.cartDiscount;
+    return [{
+      id: record.id,
+      label: record.label || 'Held sale',
+      cart: record.cart,
+      cartDiscount: discount && (discount.mode === 'amount' || discount.mode === 'percent') ? discount : { mode: 'none', value: 0 },
+      customerName: record.customerName || '',
+      customerPhone: record.customerPhone || '',
+      createdAt: record.createdAt || new Date().toISOString(),
+      createdByEmail: record.createdByEmail || 'unknown',
+    }];
+  });
+};
+
 export default function Page() {
-  const [authUser, setAuthUser] = useState<User | null>(null);
+  const [authUser, setAuthUser] = useState<SessionUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [role, setRole] = useState<Role>('shop_owner');
   const [activeShopOwnerUid, setActiveShopOwnerUid] = useState('');
   const [availableShops, setAvailableShops] = useState<ShopMembership[]>([]);
-  const [view, setView] = useState<View>('dashboard');
+  const [view, setView] = useState<View>('sales');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [status, setStatus] = useState('Welcome to AlphaPOS Pro.');
   const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
@@ -144,6 +225,15 @@ export default function Page() {
   const [users, setUsers] = useState<StaffUser[]>([]);
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [heldTickets, setHeldTickets] = useState<HeldTicket[]>([]);
+  const [cashSessions, setCashSessions] = useState<CashSession[]>([]);
+  const [taxSettings, setTaxSettings] = useState<TaxSettings>(defaultTaxSettings);
+  const [receiptSettings, setReceiptSettings] = useState<ReceiptSettings>(defaultReceiptSettings);
+  const [cartDiscount, setCartDiscount] = useState<CartDiscount>({ mode: 'none', value: 0 });
+  const [activeReceipt, setActiveReceipt] = useState<ReceiptModel | null>(null);
+  const [returnTransactionId, setReturnTransactionId] = useState('');
+  const [customerQuery, setCustomerQuery] = useState('');
 
   // Modals
   const [showProductModal, setShowProductModal] = useState(false);
@@ -172,7 +262,6 @@ export default function Page() {
   const [dashboardPeriod, setDashboardPeriod] = useState<DashboardPeriod>('weekly');
   const [insightTrendRange, setInsightTrendRange] = useState<InsightTrendRange>(30);
   const [productSearchQuery, setProductSearchQuery] = useState('');
-  const [quickSaleSearchQuery, setQuickSaleSearchQuery] = useState('');
   const [productBranchFilter, setProductBranchFilter] = useState('');
   const [productStockFilter, setProductStockFilter] = useState<'all' | 'low' | 'out'>('all');
   const [isRefreshingDashboard, setIsRefreshingDashboard] = useState(false);
@@ -197,39 +286,10 @@ export default function Page() {
   const [showExpenseGroupsDetails, setShowExpenseGroupsDetails] = useState(false);
   const [userForm, setUserForm] = useState({ id: '', name: '', email: '', role: 'cashier' as Role, branchId: '' });
   const [shopNameForm, setShopNameForm] = useState('');
-  const [settingsTab, setSettingsTab] = useState<'shop' | 'branches' | 'time' | 'accounts' | 'backup'>('shop');
+  const [settingsTab, setSettingsTab] = useState<'shop' | 'branches' | 'time' | 'accounts' | 'backup' | 'tax' | 'receipt'>('shop');
   const [shopTimeSettings, setShopTimeSettings] = useState<ShopTimeSettings>({ timezoneOffsetMinutes: 0, dayStartTime: '00:00' });
 
   const branchMap = useMemo(() => Object.fromEntries(branches.map((b) => [b.id, b.name])), [branches]);
-  const topSellingProducts = useMemo(() => {
-    const productAccessCount = new Map<string, number>();
-    sales
-      .filter((sale) => sale.type === 'product')
-      .forEach((sale) => {
-        productAccessCount.set(sale.itemName, (productAccessCount.get(sale.itemName) || 0) + sale.qty);
-      });
-
-    const rankedProducts = products
-      .filter((product) => product.stock > 0)
-      .sort((a, b) => (productAccessCount.get(b.name) || 0) - (productAccessCount.get(a.name) || 0));
-
-    return rankedProducts.slice(0, 12);
-  }, [products, sales]);
-  const filteredQuickSaleProducts = useMemo(() => {
-    const query = quickSaleSearchQuery.trim().toLowerCase();
-    if (!query) return topSellingProducts;
-
-    return products
-      .filter((product) => product.stock > 0 && [product.name, product.sku, product.barcode, product.category].some((value) => value?.toLowerCase().includes(query)))
-      .sort((a, b) => a.name.localeCompare(b.name));
-  }, [products, quickSaleSearchQuery, topSellingProducts]);
-  const filteredQuickSaleServices = useMemo(() => {
-    const query = quickSaleSearchQuery.trim().toLowerCase();
-    const branchIdsWithStockProducts = new Set(products.filter((product) => product.stock > 0).map((product) => product.branchId));
-    return services
-      .filter((service) => branchIdsWithStockProducts.has(service.branchId) && (!query || service.name.toLowerCase().includes(query)))
-      .sort((a, b) => a.name.localeCompare(b.name));
-  }, [products, quickSaleSearchQuery, services]);
   const getEffectiveUnitPrice = useCallback((item: CartItem) => {
     if (item.discountMode === 'price' && typeof item.discountedUnitPrice === 'number' && Number.isFinite(item.discountedUnitPrice)) {
       return Math.max(0, Math.min(item.unitPrice, item.discountedUnitPrice));
@@ -240,9 +300,6 @@ export default function Page() {
     }
     return item.unitPrice;
   }, []);
-  const cartTotal = useMemo(() => cart.reduce((sum, item) => sum + (getEffectiveUnitPrice(item) * item.qty), 0), [cart, getEffectiveUnitPrice]);
-  const cartCost = useMemo(() => cart.reduce((sum, item) => sum + (item.unitCost * item.qty), 0), [cart]);
-  const cartProfit = useMemo(() => cartTotal - cartCost, [cartTotal, cartCost]);
   const db = firebaseApp ? getFirestore(firebaseApp) : null;
   const formatUGX = (value: number) => `UGX ${new Intl.NumberFormat('en-UG', { maximumFractionDigits: 0 }).format(Math.round(value))}`;
   const ensureDefaultCashAccount = useCallback((existingAccounts: Account[]) => {
@@ -281,7 +338,7 @@ export default function Page() {
 
     const auth = getAuth(app);
     return onAuthStateChanged(auth, (user) => {
-      setAuthUser(user);
+      setAuthUser(user ? { uid: user.uid, email: user.email, displayName: user.displayName } : null);
       setLoading(false);
       hasLoadedUserDataRef.current = false;
       if (!user) {
@@ -294,12 +351,70 @@ export default function Page() {
         setExpenses([]);
         setAccounts([]);
         setUsers([]);
+        setCustomers([]);
+        setHeldTickets([]);
+        setCashSessions([]);
+        setTaxSettings(defaultTaxSettings);
+        setReceiptSettings(defaultReceiptSettings);
       }
     });
   }, []);
 
   const loadUserData = useCallback(async () => {
-      if (!authUser || !db) return false;
+      if (!authUser) return false;
+      const applyRetailCollections = (data?: Record<string, unknown>) => {
+        setCustomers(normalizeCustomers(data?.customers));
+        setHeldTickets(normalizeHeldTickets(data?.heldTickets));
+        setCashSessions(normalizeCashSessions(data?.cashSessions));
+        setTaxSettings(normalizeTaxSettings(data?.taxSettings));
+        setReceiptSettings(normalizeReceiptSettings(data?.receiptSettings));
+      };
+      if (authUser.uid === LOCAL_OPERATOR_ID) {
+        try {
+          const data = readLocalShop();
+          const shopName = typeof data?.shopName === 'string' && data.shopName.trim() ? data.shopName.trim() : 'My Shop';
+          setAvailableShops([{ ownerUid: LOCAL_OPERATOR_ID, shopName, role: 'shop_owner' }]);
+          if (!activeShopOwnerUid) setActiveShopOwnerUid(LOCAL_OPERATOR_ID);
+          if (!data) {
+            setBranches([{ id: crypto.randomUUID(), name: 'Main Branch', location: 'Counter', createdAt: new Date().toISOString() }]);
+            setProducts([]);
+            setServices([]);
+            setSales([]);
+            setExpenses([]);
+            setExpenseGroups([]);
+            setUsers([]);
+            setActivityLogs([]);
+            setAccounts(ensureDefaultCashAccount([]));
+            setShopTimeSettings({ timezoneOffsetMinutes: 0, dayStartTime: '00:00' });
+            applyRetailCollections();
+          } else {
+            setBranches(Array.isArray(data.branches) ? data.branches as Branch[] : []);
+            setProducts(Array.isArray(data.products) ? data.products as Product[] : []);
+            setServices(Array.isArray(data.services) ? data.services as Service[] : []);
+            setSales(Array.isArray(data.sales) ? data.sales as Sale[] : []);
+            setExpenses(Array.isArray(data.expenses) ? data.expenses as Expense[] : []);
+            setExpenseGroups(Array.isArray(data.expenseGroups) ? data.expenseGroups as ExpenseGroup[] : []);
+            setUsers(Array.isArray(data.users) ? data.users as StaffUser[] : []);
+            setActivityLogs(Array.isArray(data.activityLogs) ? data.activityLogs as ActivityLog[] : []);
+            setAccounts(ensureDefaultCashAccount(Array.isArray(data.accounts) ? data.accounts as Account[] : []));
+            const time = data.shopTimeSettings as Partial<ShopTimeSettings> | undefined;
+            setShopTimeSettings({
+              timezoneOffsetMinutes: typeof time?.timezoneOffsetMinutes === 'number' ? time.timezoneOffsetMinutes : 0,
+              dayStartTime: typeof time?.dayStartTime === 'string' ? time.dayStartTime : '00:00',
+            });
+            applyRetailCollections(data);
+          }
+          setRole('shop_owner');
+          hasLoadedUserDataRef.current = true;
+          isSwitchingShopRef.current = false;
+          setStatus(`Counter ready at ${shopName}. Records stay on this device.`);
+          return true;
+        } catch (error) {
+          setStatus(`Could not open the on-device counter: ${error instanceof Error ? error.message : 'Unknown error'}`);
+          return false;
+        }
+      }
+      if (!db) return false;
       try {
         const normalizedEmail = authUser.email?.toLowerCase().trim();
         const memberships: ShopMembership[] = [{ ownerUid: authUser.uid, shopName: 'My Shop', role: 'shop_owner' }];
@@ -328,6 +443,10 @@ export default function Page() {
           setBranches([defaultBranch]);
           const defaultCashAccount = ensureDefaultCashAccount([]);
           setAccounts(defaultCashAccount);
+          setExpenseGroups([]);
+          setUsers([]);
+          setActivityLogs([]);
+          applyRetailCollections();
           setRole(selectedShop?.role || 'shop_owner');
           hasLoadedUserDataRef.current = true;
           isSwitchingShopRef.current = false;
@@ -349,6 +468,12 @@ export default function Page() {
           dayStartTime: typeof data?.shopTimeSettings?.dayStartTime === 'string' ? data.shopTimeSettings.dayStartTime : '00:00',
         });
         setActivityLogs(Array.isArray(data.activityLogs) ? data.activityLogs : []);
+        applyRetailCollections(data as Record<string, unknown>);
+        const storedShopName = typeof data.shopName === 'string' ? data.shopName.trim() : '';
+        if (storedShopName && selectedShopOwnerUid === authUser.uid) {
+          memberships[0] = { ...memberships[0], shopName: storedShopName };
+          setAvailableShops([...memberships]);
+        }
         hasLoadedUserDataRef.current = true;
         isSwitchingShopRef.current = false;
         setStatus(`Viewing ${selectedShop?.shopName || 'selected shop'} as ${selectedShop?.role || role}.`);
@@ -452,11 +577,12 @@ export default function Page() {
 
   useEffect(() => {
     const saveUserData = async () => {
-      if (!authUser || !db || !hasLoadedUserDataRef.current || !activeShopOwnerUid || isSwitchingShopRef.current) return;
+      if (!authUser || !hasLoadedUserDataRef.current || !activeShopOwnerUid || isSwitchingShopRef.current) return;
+      if (authUser.uid !== LOCAL_OPERATOR_ID && !db) return;
       try {
-        const userDataRef = doc(db, 'users', activeShopOwnerUid, 'pos', 'data');
-        await setDoc(userDataRef, removeUndefinedDeep({
+        const shopPayload = {
           role,
+          shopName: currentShop?.shopName || 'My Shop',
           branches,
           products,
           services,
@@ -467,6 +593,20 @@ export default function Page() {
           activityLogs,
           shopTimeSettings,
           accounts,
+          customers,
+          heldTickets,
+          cashSessions,
+          taxSettings,
+          receiptSettings,
+        };
+        if (authUser.uid === LOCAL_OPERATOR_ID) {
+          writeLocalShop(removeUndefinedDeep(shopPayload));
+          return;
+        }
+        if (!db) return;
+        const userDataRef = doc(db, 'users', activeShopOwnerUid, 'pos', 'data');
+        await setDoc(userDataRef, removeUndefinedDeep({
+          ...shopPayload,
           updatedAt: serverTimestamp(),
         }), { merge: true });
       } catch (error) {
@@ -474,7 +614,15 @@ export default function Page() {
       }
     };
     void saveUserData();
-  }, [activeShopOwnerUid, authUser, db, role, branches, products, services, sales, expenses, expenseGroups, users, activityLogs, shopTimeSettings, accounts]);
+  }, [activeShopOwnerUid, authUser, db, role, branches, products, services, sales, expenses, expenseGroups, users, activityLogs, shopTimeSettings, accounts, customers, heldTickets, cashSessions, taxSettings, receiptSettings, currentShop?.shopName]);
+
+  const startLocalCounter = () => {
+    hasLoadedUserDataRef.current = false;
+    setAuthUser({ uid: LOCAL_OPERATOR_ID, email: 'counter@this-device', displayName: 'Counter' });
+    setActiveShopOwnerUid(LOCAL_OPERATOR_ID);
+    setRole('shop_owner');
+    setView('sales');
+  };
 
   const handleLogin = async () => {
     if (!firebaseApp) return;
@@ -489,6 +637,13 @@ export default function Page() {
   };
 
   const handleLogout = async () => {
+    if (authUser?.uid === LOCAL_OPERATOR_ID) {
+      hasLoadedUserDataRef.current = false;
+      setAuthUser(null);
+      setActiveShopOwnerUid('');
+      setStatus('Counter closed on this device.');
+      return;
+    }
     if (!firebaseApp) return;
     const auth = getAuth(firebaseApp);
     try {
@@ -509,6 +664,12 @@ export default function Page() {
     setExpenseGroups([]);
     setUsers([]);
     setActivityLogs([]);
+    setCustomers([]);
+    setHeldTickets([]);
+    setCashSessions([]);
+    setTaxSettings(defaultTaxSettings);
+    setReceiptSettings(defaultReceiptSettings);
+    setCartDiscount({ mode: 'none', value: 0 });
     setBranchForm({ name: '', location: '', id: '' });
     setProductForm({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0, sku: '', barcode: '', category: '' });
     setStockAdjustmentForm({ productId: '', direction: 'add', quantity: 1, reason: 'restock', note: '', supplierName: '', reference: '', unitCost: '' });
@@ -607,13 +768,14 @@ export default function Page() {
     });
 
     const revenue = periodSales.reduce((a, s) => a + s.amount, 0);
+    const taxCollected = periodSales.reduce((a, s) => a + (s.taxAmount || 0), 0);
     const cost = periodSales.reduce((a, s) => a + s.cost, 0);
     const expenseTotal = periodExpenses.reduce((a, e) => a + e.amount, 0);
     const sharedServiceCost = getSharedServiceCostForRange(periodSales);
-    const grossProfit = revenue - cost - sharedServiceCost;
+    const grossProfit = revenue - taxCollected - cost - sharedServiceCost;
     const netProfit = grossProfit - expenseTotal;
 
-    return { revenue, cost: cost + sharedServiceCost, expenseTotal, grossProfit, netProfit, salesCount: periodSales.length };
+    return { revenue, taxCollected, cost: cost + sharedServiceCost, expenseTotal, grossProfit, netProfit, salesCount: periodSales.length };
   };
 
   const getMetrics = (period: 'day' | 'week' | 'month', offset: number = 0) => {
@@ -660,6 +822,11 @@ export default function Page() {
       netProfit: {
         value: current.netProfit,
         change: calculateChange(current.netProfit, previous.netProfit),
+        period: dashboardPeriod
+      },
+      tax: {
+        value: current.taxCollected,
+        change: calculateChange(current.taxCollected, previous.taxCollected),
         period: dashboardPeriod
       }
     };
@@ -994,15 +1161,28 @@ export default function Page() {
       showNotification('Please create an account first (CASH is created by default).', 'error');
       return;
     }
+    const serviceQuote = settleCart([{
+      key: service.id,
+      unitPrice: service.salePrice,
+      qty: 1,
+      effectiveUnitPrice: service.salePrice,
+      unitCost: service.serviceType === 'direct_cost' ? service.directCost : 0,
+    }], { mode: 'none', value: 0 }, taxSettings);
+    const serviceLine = serviceQuote.lines[0];
     const newSale: Sale = {
       id: crypto.randomUUID(),
       type: 'service',
       itemName: service.name,
       branchId: service.branchId,
       qty: 1,
-      amount: service.salePrice,
-      cost: service.serviceType === 'direct_cost' ? service.directCost : 0,
+      amount: serviceLine?.amount ?? service.salePrice,
+      cost: serviceLine?.cost ?? (service.serviceType === 'direct_cost' ? service.directCost : 0),
+      taxAmount: serviceLine?.taxAmount,
+      discountAmount: serviceLine?.discountAmount,
       accountId: selectedSaleAccountId,
+      receiptNumber: nextDocumentNumber(sales, receiptPrefix(new Date(), 'sale')),
+      saleKind: 'sale',
+      ...(openCashSession ? { cashSessionId: openCashSession.id } : {}),
       ...createCheckoutMetadata(),
       ...currentAuditStamp(),
     };
@@ -1035,6 +1215,9 @@ export default function Page() {
     });
     return balances;
   }, [accounts, defaultAccount?.id, expenses, sales]);
+  const openCashSession = useMemo(() => cashSessions.find((session) => session.status === 'open') || null, [cashSessions]);
+  const sessionExpectedCash = openCashSession ? openCashSession.openingFloat + sessionCashTaken(sales, openCashSession.id) : 0;
+  const showRegisterMargin = role === 'shop_owner' || role === 'admin' || role === 'manager';
 
   const createExpenseGroup = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1231,7 +1414,7 @@ export default function Page() {
     setShowUserModal(false);
   };
 
-  const addProductToCart = (productId: string) => {
+  const addProductToCart = (productId: string, silent = false) => {
     const product = products.find(p => p.id === productId);
     if (!product) {
       showNotification('Product not found', 'error');
@@ -1262,10 +1445,10 @@ export default function Page() {
         maxQty: product.stock
       }]);
     }
-    showNotification(`${product.name} added to cart`, 'success', 2000);
+    if (!silent) showNotification(`${product.name} added to cart`, 'success', 2000);
   };
 
-  const addServiceToCart = (serviceId: string) => {
+  const addServiceToCart = (serviceId: string, silent = false) => {
     const service = services.find((item) => item.id === serviceId);
     if (!service) {
       showNotification('Service not found', 'error');
@@ -1285,11 +1468,11 @@ export default function Page() {
         branchId: service.branchId,
       }]);
     }
-    showNotification(`${service.name} added to cart`, 'success', 2000);
+    if (!silent) showNotification(`${service.name} added to cart`, 'success', 2000);
   };
 
   const updateCartItemQty = (itemId: string, itemType: 'product' | 'service', qty: number) => {
-    if (qty <= 0) {
+    if (!Number.isFinite(qty) || qty <= 0) {
       removeFromCart(itemId, itemType);
       return;
     }
@@ -1332,9 +1515,153 @@ export default function Page() {
     }));
   };
 
-  const completeCartSale = () => {
+  const registerQuote = useMemo(() => settleCart(cart.map((item) => ({
+    key: `${item.itemType}:${item.itemId}`,
+    unitPrice: item.unitPrice,
+    qty: item.qty,
+    effectiveUnitPrice: getEffectiveUnitPrice(item),
+    unitCost: item.unitCost,
+  })), cartDiscount, taxSettings), [cart, cartDiscount, getEffectiveUnitPrice, taxSettings]);
+
+  const rememberCustomer = (name: string, phone: string) => {
+    const trimmedName = name.trim();
+    const trimmedPhone = phone.trim();
+    if (!trimmedName && !trimmedPhone) return;
+    setCustomers((prev) => {
+      const existing = prev.find((customer) => (trimmedPhone && customer.phone === trimmedPhone) || customer.name.toLowerCase() === trimmedName.toLowerCase());
+      if (existing) {
+        return prev.map((customer) => customer.id === existing.id ? { ...customer, name: trimmedName || customer.name, ...(trimmedPhone ? { phone: trimmedPhone } : {}) } : customer);
+      }
+      return [{ id: crypto.randomUUID(), name: trimmedName || 'Customer', ...(trimmedPhone ? { phone: trimmedPhone } : {}), createdAt: new Date().toISOString() }, ...prev];
+    });
+  };
+
+  const receiptFromSaleLines = (lines: Sale[], kind: 'sale' | 'return' = lines.some((line) => line.saleKind === 'return') ? 'return' : 'sale'): ReceiptModel => {
+    const first = lines[0];
+    const total = lines.reduce((sum, line) => sum + line.amount, 0);
+    const tax = lines.reduce((sum, line) => sum + (line.taxAmount || 0), 0);
+    const discount = lines.reduce((sum, line) => sum + Math.abs(line.discountAmount || 0), 0);
+    const tenders = (first?.tenders && first.tenders.length > 0 ? first.tenders : [{
+      method: first?.paymentMethod || 'cash',
+      amount: total,
+      ...(first?.paymentReference ? { reference: first.paymentReference } : {}),
+    }]).map((tender) => ({
+      label: PAYMENT_METHOD_LABELS[tender.method],
+      amount: tender.amount,
+      ...(tender.reference ? { reference: tender.reference } : {}),
+      ...(typeof tender.tendered === 'number' ? { tendered: tender.tendered } : {}),
+      ...(typeof tender.change === 'number' ? { change: tender.change } : {}),
+    }));
+    return {
+      kind,
+      receiptNumber: first?.receiptNumber || (first?.transactionId ? `#${first.transactionId.slice(0, 8)}` : 'Receipt'),
+      createdAt: first?.createdAt || new Date().toISOString(),
+      shopName: currentShop?.shopName || 'My Shop',
+      ...(receiptSettings.address ? { address: receiptSettings.address } : {}),
+      ...(receiptSettings.phone ? { phone: receiptSettings.phone } : {}),
+      ...(receiptSettings.footer ? { footer: receiptSettings.footer } : {}),
+      cashier: authUser?.email || 'Cashier',
+      ...(first?.customerName ? { customerName: first.customerName } : {}),
+      ...(first?.customerPhone ? { customerPhone: first.customerPhone } : {}),
+      lines: lines.map((line) => ({ name: line.itemName, qty: line.qty, amount: line.amount })),
+      subtotal: kind === 'return' ? total : total - tax + discount,
+      discount,
+      tax,
+      taxName: taxSettings.enabled ? taxSettings.name : 'Tax',
+      total,
+      tenders,
+      showTax: receiptSettings.showTax && (taxSettings.enabled || tax !== 0),
+      note: kind === 'return'
+        ? 'Credit note. The original sale was not changed.'
+        : 'Non-cash tenders are recorded only and were not processed by AlphaPOS.',
+    };
+  };
+
+  const clearRegister = () => {
+    setCart([]);
+    setCartDiscount({ mode: 'none', value: 0 });
+    setCheckoutDetails(emptyCheckout);
+  };
+
+  const openDrawer = (openingFloat: number) => {
+    if (openCashSession) {
+      showNotification('A drawer is already open.', 'info');
+      return;
+    }
+    const session: CashSession = {
+      id: crypto.randomUUID(),
+      openedAt: new Date().toISOString(),
+      openedByEmail: authUser?.email || 'unknown',
+      openingFloat: Math.max(0, roundMoney(openingFloat)),
+      status: 'open',
+    };
+    setCashSessions((prev) => [session, ...prev]);
+    logActivity('open_drawer', `Opened the drawer with ${formatUGX(session.openingFloat)}.`);
+    showNotification('Drawer opened.', 'success');
+  };
+
+  const closeDrawer = (countedCash: number, note: string) => {
+    if (!openCashSession) return;
+    const expected = sessionExpectedCash;
+    const counted = Math.max(0, roundMoney(countedCash));
+    const variance = counted - expected;
+    setCashSessions((prev) => prev.map((session) => session.id === openCashSession.id ? {
+      ...session,
+      status: 'closed',
+      closedAt: new Date().toISOString(),
+      closedByEmail: authUser?.email || 'unknown',
+      cashTaken: sessionCashTaken(sales, session.id),
+      expectedCash: expected,
+      countedCash: counted,
+      variance,
+      ...(note.trim() ? { note: note.trim() } : {}),
+    } : session));
+    logActivity('close_drawer', `Closed the drawer. Expected ${formatUGX(expected)}, counted ${formatUGX(counted)}, variance ${formatUGX(variance)}.`);
+    showNotification(variance === 0 ? 'Drawer closed. Cash matched.' : `Drawer closed. Variance ${formatUGX(variance)}.`, variance === 0 ? 'success' : 'info', 5000);
+  };
+
+  const holdRegisterSale = () => {
+    if (cart.length === 0) return;
+    if (heldTickets.length >= 20) {
+      showNotification('Hold list is full. Recall a ticket first.', 'error');
+      return;
+    }
+    const label = checkoutDetails.customerName.trim() || `Ticket ${heldTickets.length + 1}`;
+    setHeldTickets((prev) => [{
+      id: crypto.randomUUID(),
+      label,
+      cart,
+      cartDiscount,
+      customerName: checkoutDetails.customerName,
+      customerPhone: checkoutDetails.customerPhone,
+      createdAt: new Date().toISOString(),
+      createdByEmail: authUser?.email || 'unknown',
+    }, ...prev]);
+    clearRegister();
+    showNotification(`${label} held.`, 'success');
+  };
+
+  const recallHeldSale = (ticketId: string) => {
+    const ticket = heldTickets.find((item) => item.id === ticketId);
+    if (!ticket) return;
+    if (cart.length > 0 && !window.confirm('Replace the current sale with this held ticket?')) return;
+    setCart(ticket.cart.map((item) => {
+      if (item.itemType !== 'product') return item;
+      const product = products.find((record) => record.id === item.itemId);
+      return product ? { ...item, maxQty: product.stock, unitPrice: item.unitPrice } : item;
+    }));
+    setCartDiscount(ticket.cartDiscount);
+    setCheckoutDetails({ ...emptyCheckout, customerName: ticket.customerName, customerPhone: ticket.customerPhone });
+    setHeldTickets((prev) => prev.filter((item) => item.id !== ticketId));
+  };
+
+  const completeRegisterSale = (tenders: Tender[]) => {
     if (cart.length === 0) {
       showNotification('Cart is empty', 'error');
+      return;
+    }
+    if (!openCashSession) {
+      showNotification('Open the drawer before taking payment.', 'error');
       return;
     }
     if (cart.some((item) => !Number.isFinite(item.qty) || item.qty <= 0)) {
@@ -1345,40 +1672,129 @@ export default function Page() {
       showNotification('Please create an account first (CASH is created by default).', 'error');
       return;
     }
-    const insufficientItem = cart.find((item) => item.itemType === 'product' && (products.find((product) => product.id === item.itemId)?.stock ?? 0) < item.qty);
-    if (insufficientItem) {
-      showNotification(`Not enough stock for "${insufficientItem.itemName}". Check the inventory and try again.`, 'error');
+    if (!tendersCoverTotal(tenders, registerQuote.total)) {
+      showNotification('The payment does not match the amount due.', 'error');
       return;
     }
-    const transactionMetadata = createCheckoutMetadata();
-    const newSales = cart.map(item => ({
-      id: crypto.randomUUID(),
-      type: item.itemType,
-      itemName: item.itemName,
-      branchId: item.branchId,
-      qty: item.qty,
-      amount: getEffectiveUnitPrice(item) * item.qty,
-      cost: item.unitCost * item.qty,
-      accountId: selectedSaleAccountId,
-      ...transactionMetadata,
-      ...currentAuditStamp(),
-    }));
-    setSales(prev => [...newSales, ...prev]);
-    const updatedProducts = products.map(p => {
-      const cartItem = cart.find(ci => ci.itemType === 'product' && ci.itemId === p.id);
-      return cartItem ? { ...p, stock: p.stock - cartItem.qty } : p;
+    if (tenders.some((tender) => tender.method === 'on_account') && !checkoutDetails.customerName.trim()) {
+      showNotification('Enter a customer name for an on-account sale.', 'error');
+      return;
+    }
+    const insufficientItem = cart.find((item) => item.itemType === 'product' && (products.find((product) => product.id === item.itemId)?.stock ?? 0) < item.qty);
+    if (insufficientItem) {
+      showNotification(`Not enough stock for "${insufficientItem.itemName}".`, 'error');
+      return;
+    }
+    const soldAt = new Date();
+    const receiptNumber = nextDocumentNumber(sales, receiptPrefix(soldAt, 'sale'));
+    const transactionId = crypto.randomUUID();
+    const primaryTender = [...tenders].sort((a, b) => b.amount - a.amount)[0];
+    const customerName = checkoutDetails.customerName.trim();
+    const customerPhone = checkoutDetails.customerPhone.trim();
+    const newSales: Sale[] = registerQuote.lines.flatMap((line) => {
+      const item = cart.find((cartItem) => `${cartItem.itemType}:${cartItem.itemId}` === line.key);
+      if (!item) return [];
+      return [{
+        id: crypto.randomUUID(),
+        type: item.itemType,
+        itemName: item.itemName,
+        branchId: item.branchId,
+        qty: line.qty,
+        amount: line.amount,
+        cost: line.cost,
+        taxAmount: line.taxAmount,
+        discountAmount: line.discountAmount,
+        accountId: selectedSaleAccountId,
+        transactionId,
+        receiptNumber,
+        saleKind: 'sale' as const,
+        paymentMethod: primaryTender.method,
+        ...(primaryTender.reference ? { paymentReference: primaryTender.reference } : {}),
+        tenders,
+        cashSessionId: openCashSession.id,
+        ...(customerName ? { customerName } : {}),
+        ...(customerPhone ? { customerPhone } : {}),
+        ...currentAuditStamp(),
+      }];
     });
-    setProducts(updatedProducts);
-    cart.forEach((item, index) => {
+    setSales((prev) => [...newSales, ...prev]);
+    setProducts((prev) => prev.map((product) => {
+      const cartItem = cart.find((item) => item.itemType === 'product' && item.itemId === product.id);
+      return cartItem ? { ...product, stock: product.stock - cartItem.qty } : product;
+    }));
+    cart.forEach((item) => {
       if (item.itemType !== 'product') return;
       const product = products.find((record) => record.id === item.itemId);
-      if (product) logStockMovement(product, -item.qty, 'sale', `Sale ${newSales[index].id.slice(0, 8)}`);
+      if (product) logStockMovement(product, -item.qty, 'sale', `Receipt ${receiptNumber}`);
     });
-    logActivity('sale', `Completed cart sale with ${cart.length} item(s)`);
-    showNotification(`Sale completed! ${cart.length} item(s) sold.`, 'success');
-    setCart([]);
-    setCheckoutDetails({ customerName: '', customerPhone: '', paymentMethod: 'cash', paymentReference: '' });
-    setShowSaleModal(false);
+    rememberCustomer(customerName, customerPhone);
+    logActivity('sale', `Completed ${receiptNumber} for ${formatUGX(registerQuote.total)} (${cart.length} item(s)).`);
+    setActiveReceipt(receiptFromSaleLines(newSales, 'sale'));
+    clearRegister();
+    showNotification(`${receiptNumber} completed.`, 'success');
+  };
+
+  const issueReturn = (quantities: Record<string, number>, method: PaymentMethod, reference: string) => {
+    if (!openCashSession) {
+      showNotification('Open the drawer before refunding.', 'error');
+      return;
+    }
+    const originalLines = sales.filter((sale) => transactionKey(sale) === returnTransactionId && sale.saleKind !== 'return' && sale.qty > 0);
+    const selected = originalLines.filter((sale) => (quantities[sale.id] || 0) > 0);
+    if (selected.length === 0) return;
+    const tooMany = selected.find((sale) => (quantities[sale.id] || 0) > returnableQuantity(sales, returnTransactionId, sale.itemName, sale.type));
+    if (tooMany) {
+      showNotification(`Only the unsold remainder of ${tooMany.itemName} can be returned.`, 'error');
+      return;
+    }
+    const returnedAt = new Date();
+    const receiptNumber = nextDocumentNumber(sales, receiptPrefix(returnedAt, 'return'));
+    const transactionId = crypto.randomUUID();
+    const stockChanges: { product: Product; qty: number }[] = [];
+    const creditLines: Sale[] = selected.map((sale) => {
+      const qty = quantities[sale.id] || 0;
+      const ratio = qty / sale.qty;
+      const amount = -roundMoney(sale.amount * ratio);
+      if (sale.type === 'product') {
+        const product = products.find((item) => item.branchId === sale.branchId && item.name === sale.itemName);
+        if (product) stockChanges.push({ product, qty });
+      }
+      return {
+        id: crypto.randomUUID(),
+        type: sale.type,
+        itemName: sale.itemName,
+        branchId: sale.branchId,
+        qty: -qty,
+        amount,
+        cost: -roundMoney(sale.cost * ratio),
+        taxAmount: -roundMoney((sale.taxAmount || 0) * ratio),
+        accountId: sale.accountId || selectedSaleAccountId,
+        transactionId,
+        receiptNumber,
+        saleKind: 'return',
+        returnOfTransactionId: returnTransactionId,
+        paymentMethod: method,
+        ...(reference.trim() ? { paymentReference: reference.trim() } : {}),
+        tenders: [{ method, amount, ...(reference.trim() ? { reference: reference.trim() } : {}) }],
+        cashSessionId: openCashSession.id,
+        ...(sale.customerName ? { customerName: sale.customerName } : {}),
+        ...(sale.customerPhone ? { customerPhone: sale.customerPhone } : {}),
+        ...currentAuditStamp(),
+      };
+    });
+    if (stockChanges.length !== selected.filter((sale) => sale.type === 'product').length) {
+      showNotification('A returned product is no longer in inventory, so its stock was not added back.', 'info', 5000);
+    }
+    setProducts((prev) => prev.map((product) => {
+      const change = stockChanges.find((item) => item.product.id === product.id);
+      return change ? { ...product, stock: product.stock + change.qty } : product;
+    }));
+    stockChanges.forEach((change) => logStockMovement(change.product, change.qty, 'customer_return', `Credit ${receiptNumber}`));
+    setSales((prev) => [...creditLines, ...prev]);
+    logActivity('return', `Issued ${receiptNumber} for ${formatUGX(creditLines.reduce((sum, line) => sum + line.amount, 0))}.`);
+    setReturnTransactionId('');
+    setActiveReceipt(receiptFromSaleLines(creditLines, 'return'));
+    showNotification(`${receiptNumber} issued.`, 'success');
   };
 
   const makeProductSale = (e: React.FormEvent) => {
@@ -1392,15 +1808,27 @@ export default function Page() {
       showNotification('Invalid sale or insufficient stock.', 'error');
       return false;
     }
+    const quickQuote = settleCart([{
+      key: p.id,
+      unitPrice: p.salePrice,
+      qty: saleForm.qty,
+      effectiveUnitPrice: p.salePrice,
+      unitCost: p.purchasePrice,
+    }], { mode: 'none', value: 0 }, taxSettings);
+    const quickLine = quickQuote.lines[0];
     const newSale: Sale = {
       id: crypto.randomUUID(),
       type: 'product',
       itemName: p.name,
       branchId: p.branchId,
       qty: saleForm.qty,
-      amount: p.salePrice * saleForm.qty,
-      cost: p.purchasePrice * saleForm.qty,
+      amount: quickLine?.amount ?? p.salePrice * saleForm.qty,
+      cost: quickLine?.cost ?? p.purchasePrice * saleForm.qty,
+      taxAmount: quickLine?.taxAmount,
       accountId: selectedSaleAccountId,
+      receiptNumber: nextDocumentNumber(sales, receiptPrefix(new Date(), 'sale')),
+      saleKind: 'sale',
+      ...(openCashSession ? { cashSessionId: openCashSession.id } : {}),
       ...createCheckoutMetadata(),
       ...currentAuditStamp(),
     };
@@ -1518,14 +1946,32 @@ export default function Page() {
     });
   }, [sales, salesDateFilter, salesHistoryViewMode, salesRangeEnd, salesRangeStart]);
 
-  const salesHistoryPageSize = 10;
+  const salesHistoryPageSize = 8;
   const sharedTablePageSize = 10;
-  const salesHistoryTotalPages = Math.max(1, Math.ceil(filteredSales.length / salesHistoryPageSize));
+  const groupedSales = useMemo(() => {
+    const groups = new Map<string, Sale[]>();
+    filteredSales.forEach((sale) => {
+      const key = transactionKey(sale);
+      groups.set(key, [...(groups.get(key) || []), sale]);
+    });
+    return Array.from(groups.entries()).map(([id, lines]) => ({
+      id,
+      lines: [...lines].sort((a, b) => a.itemName.localeCompare(b.itemName)),
+      createdAt: lines.reduce((latest, line) => line.createdAt > latest ? line.createdAt : latest, lines[0].createdAt),
+      total: lines.reduce((sum, line) => sum + line.amount, 0),
+      profit: lines.reduce((sum, line) => sum + line.amount - (line.taxAmount || 0) - line.cost, 0),
+      receiptNumber: lines.find((line) => line.receiptNumber)?.receiptNumber,
+      customerName: lines.find((line) => line.customerName)?.customerName,
+      paymentMethod: lines[0].paymentMethod,
+      saleKind: lines.some((line) => line.saleKind === 'return') ? 'return' as const : 'sale' as const,
+    })).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }, [filteredSales]);
+  const salesHistoryTotalPages = Math.max(1, Math.ceil(groupedSales.length / salesHistoryPageSize));
   const paginatedSales = useMemo(() => {
     const safePage = Math.min(salesHistoryPage, salesHistoryTotalPages);
     const start = (safePage - 1) * salesHistoryPageSize;
-    return filteredSales.slice(start, start + salesHistoryPageSize);
-  }, [filteredSales, salesHistoryPage, salesHistoryTotalPages]);
+    return groupedSales.slice(start, start + salesHistoryPageSize);
+  }, [groupedSales, salesHistoryPage, salesHistoryTotalPages]);
 
   useEffect(() => {
     setSalesHistoryPage(1);
@@ -1588,14 +2034,14 @@ export default function Page() {
   const canManageUsers = (role === 'shop_owner' || role === 'admin') && activeShopOwnerUid === authUser?.uid;
   const canManageSalesAndExpenses = role === 'shop_owner' || role === 'admin' || role === 'manager';
 
-  const deleteSale = (id: string) => {
+  const deleteTransaction = (ids: string[]) => {
     if (!canManageSalesAndExpenses) {
       setStatus('Only the shop owner or admin can delete sales.');
       return;
     }
-    setSales((prev) => prev.filter((sale) => sale.id !== id));
-    logActivity('delete_sale', `Deleted sale id "${id}"`);
-    showNotification('Sale deleted successfully!', 'success');
+    setSales((prev) => prev.filter((sale) => !ids.includes(sale.id)));
+    logActivity('delete_sale', `Deleted ${ids.length} line(s) from a receipt. Stock was not changed.`);
+    showNotification('Receipt deleted. Stock was not changed.', 'success');
   };
 
   const editExpense = (expense: Expense) => {
@@ -1620,8 +2066,14 @@ export default function Page() {
 
   const saveShopName = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!shopNameForm.trim() || !db || !activeShopOwnerUid) {
+    if (!shopNameForm.trim() || !activeShopOwnerUid) {
       setStatus('Please enter a valid shop name.');
+      return;
+    }
+    if (!db || authUser?.uid === LOCAL_OPERATOR_ID) {
+      setAvailableShops((prev) => prev.map((shop) => shop.ownerUid === activeShopOwnerUid ? { ...shop, shopName: shopNameForm.trim() } : shop));
+      setShowSettingsModal(false);
+      showNotification(`Shop name updated to "${shopNameForm.trim()}"!`, 'success');
       return;
     }
 
@@ -1679,7 +2131,7 @@ export default function Page() {
 
   const buildShopBackupPayload = (): ShopBackupPayload => ({
     app: 'AlphaPOS',
-    version: 1,
+    version: 2,
     exportedAt: new Date().toISOString(),
     shopName: currentShop?.shopName || 'My Shop',
     sourceOwnerUid: activeShopOwnerUid,
@@ -1694,6 +2146,11 @@ export default function Page() {
       activityLogs,
       shopTimeSettings,
       accounts,
+      customers,
+      heldTickets,
+      cashSessions,
+      taxSettings,
+      receiptSettings,
     },
   });
 
@@ -1730,7 +2187,7 @@ export default function Page() {
 
     try {
       const parsed = JSON.parse(await file.text()) as Partial<ShopBackupPayload>;
-      if (parsed.app !== 'AlphaPOS' || parsed.version !== 1 || !parsed.data) {
+      if (parsed.app !== 'AlphaPOS' || (parsed.version !== 1 && parsed.version !== 2) || !parsed.data) {
         throw new Error('This is not a valid AlphaPOS backup file.');
       }
 
@@ -1746,6 +2203,11 @@ export default function Page() {
         ? parsed.data.shopTimeSettings
         : { timezoneOffsetMinutes: 0, dayStartTime: '00:00' };
       const restoredAccounts = ensureDefaultCashAccount(Array.isArray(parsed.data.accounts) ? parsed.data.accounts : []);
+      const restoredCustomers = normalizeCustomers(parsed.data.customers);
+      const restoredHeldTickets = normalizeHeldTickets(parsed.data.heldTickets);
+      const restoredCashSessions = normalizeCashSessions(parsed.data.cashSessions);
+      const restoredTaxSettings = normalizeTaxSettings(parsed.data.taxSettings);
+      const restoredReceiptSettings = normalizeReceiptSettings(parsed.data.receiptSettings);
       const restoredShopName = parsed.shopName?.trim() || currentShop?.shopName || 'Restored Shop';
 
       const restoredLog: ActivityLog = {
@@ -1772,6 +2234,11 @@ export default function Page() {
         activityLogs: nextActivityLogs,
         shopTimeSettings: restoredShopTimeSettings,
         accounts: restoredAccounts,
+        customers: restoredCustomers,
+        heldTickets: restoredHeldTickets,
+        cashSessions: restoredCashSessions,
+        taxSettings: restoredTaxSettings,
+        receiptSettings: restoredReceiptSettings,
         restoredFromBackupAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       }), { merge: true });
@@ -1799,6 +2266,11 @@ export default function Page() {
       setActivityLogs(nextActivityLogs);
       setShopTimeSettings(restoredShopTimeSettings);
       setAccounts(restoredAccounts);
+      setCustomers(restoredCustomers);
+      setHeldTickets(restoredHeldTickets);
+      setCashSessions(restoredCashSessions);
+      setTaxSettings(restoredTaxSettings);
+      setReceiptSettings(restoredReceiptSettings);
       setRole('shop_owner');
       setAvailableShops((prev) => prev.map((shop) => shop.ownerUid === activeShopOwnerUid ? { ...shop, shopName: restoredShopName, role: 'shop_owner' } : shop));
       showNotification('Backup restored successfully. Your POS data has been reuploaded.', 'success');
@@ -1821,18 +2293,23 @@ export default function Page() {
     return (
       <div className="auth-container">
         <div className="auth-card">
-          <span className="auth-badge">v2.0 Beta</span>
+          <span className="auth-badge">Retail counter</span>
           <h1>AlphaPOS</h1>
-          <p>The ultimate point of sale for modern businesses.</p>
+          <p>Sell, take payment, print a receipt, and keep stock in one counter.</p>
           <ul className="auth-highlights">
-            <li>Multi-branch inventory management</li>
-            <li>Real-time sales tracking & analytics</li>
-            <li>Expense & profit monitoring</li>
-            <li>Staff role-based access control</li>
+            <li>Barcode register with hold, split payment, and change</li>
+            <li>Tax, cash drawer, returns, and customer accounts</li>
+            <li>Inventory, expenses, staff, and branch reporting</li>
+            <li>Google sign-in for shared shops, or this device when Firebase is not configured</li>
           </ul>
-          <button className="primary" style={{ width: '100%', padding: '1rem' }} onClick={handleLogin}>
-            Sign in with Google
-          </button>
+          {firebaseApp ? (
+            <button className="primary" style={{ width: '100%', padding: '1rem' }} onClick={handleLogin}>Sign in with Google</button>
+          ) : (
+            <>
+              <p className="auth-local-note">No Firebase project is configured. The counter will keep this shop in this browser only.</p>
+              <button className="primary" style={{ width: '100%', padding: '1rem' }} onClick={startLocalCounter}>Open the counter</button>
+            </>
+          )}
         </div>
       </div>
     );
@@ -1852,7 +2329,7 @@ export default function Page() {
           <select className="role-select" value={activeShopOwnerUid} onChange={(e) => handleShopSwitch(e.target.value)}>
             {availableShops.map((s) => (
               <option key={s.ownerUid} value={s.ownerUid}>
-                {truncateShopName(s.shopName)} ({s.role})
+                {truncateShopName(s.shopName, 22)} · {roleLabels[s.role]}
               </option>
             ))}
           </select>
@@ -1862,9 +2339,11 @@ export default function Page() {
           <div className="nav-group-label">Overview</div>
           <button className={`nav-button ${view === 'dashboard' ? 'active' : ''}`} onClick={() => { setView('dashboard'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">◫</span><span>Dashboard</span></button>
 
-          <div className="nav-group-label">Operations</div>
-          <button className={`nav-button ${view === 'sales' ? 'active' : ''}`} onClick={() => { setView('sales'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">▣</span><span>Sales Desk</span></button>
+          <div className="nav-group-label">Sell</div>
+          <button className={`nav-button ${view === 'sales' ? 'active' : ''}`} onClick={() => { setView('sales'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">▣</span><span>Register</span></button>
           <button className={`nav-button ${view === 'sales_history' ? 'active' : ''}`} onClick={() => { setView('sales_history'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">≡</span><span>Sales History</span></button>
+          <button className={`nav-button ${view === 'customers' ? 'active' : ''}`} onClick={() => { setView('customers'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">☺</span><span>Customers</span></button>
+          <div className="nav-group-label">Stock</div>
           <button className={`nav-button ${view === 'products' ? 'active' : ''}`} onClick={() => { setView('products'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">□</span><span>Inventory</span></button>
           <button className={`nav-button ${view === 'services' ? 'active' : ''}`} onClick={() => { setView('services'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">✦</span><span>Services</span></button>
 
@@ -1900,14 +2379,15 @@ export default function Page() {
         )}
       </aside>
 
-      <main className="main" style={{ display: 'flex', flexDirection: 'column' }}>
+      <main className={`main${view === 'sales' ? ' main-register' : ''}`} style={{ display: 'flex', flexDirection: 'column' }}>
         <header className="main-header" style={{ padding: 'var(--space-lg) var(--space-xl)', margin: '0 0 var(--space-xl) 0', borderBottom: '1px solid var(--border)', background: 'var(--bg)', position: 'sticky', top: 0, zIndex: 40 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-md)' }}>
             <button className="mobile-menu-toggle" onClick={() => setIsSidebarOpen(true)}>☰</button>
             <h1 style={{ margin: 0, fontSize: '1.5rem', fontWeight: 700, letterSpacing: '-0.02em' }}>
               {view === 'dashboard' ? 'Dashboard overview' :
-               view === 'sales' ? 'Sales desk' :
+               view === 'sales' ? 'Register' :
                view === 'sales_history' ? 'Sales history' :
+               view === 'customers' ? 'Customers' :
                view === 'products' ? 'Inventory management' :
                view === 'services' ? 'Service catalog' :
                view === 'expenses' ? 'Expense tracking' :
@@ -1966,6 +2446,12 @@ export default function Page() {
                 <h4>Net Profit ({dashboardPeriod})</h4>
                 <div className="card-value" style={{ color: 'var(--success)' }}>{formatUGX(dashboardMetrics.netProfit.value)}</div>
                 <Badge value={dashboardMetrics.netProfit.change} />
+              </div>
+              <div className="card dashboard-card">
+                <span className="dashboard-card-icon" aria-hidden="true">％</span>
+                <h4>Tax ({dashboardPeriod})</h4>
+                <div className="card-value">{formatUGX(dashboardMetrics.tax.value)}</div>
+                <span className="badge badge-info">{taxSettings.enabled ? taxSettings.name : 'Not configured'}</span>
               </div>
               <div className="card dashboard-card">
                 <span className="dashboard-card-icon" aria-hidden="true">📦</span>
@@ -2298,147 +2784,51 @@ export default function Page() {
         )}
 
         {view === 'sales' && (
-          <section>
-            <div className="page-header">
-              <h2>Sales Desk</h2>
-            </div>
-
-            <div className="sales-desk-layout" style={{ marginTop: '0.2rem', marginBottom: '2rem' }}>
-              {/* Products Selection */}
-              <div>
-                <h3 style={{ margin: '0 0 0.45rem 0', fontSize: '1.02rem', fontWeight: 700 }}>Available Products</h3>
-                <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'end', marginBottom: '0.6rem', flexWrap: 'wrap' }}>
-                  <div className="filter-group" style={{ marginBottom: 0, flex: '1 1 240px' }}>
-                    <label>Quick Search Item</label>
-                    <input
-                      type="text"
-                      placeholder="Scan barcode or search by name, SKU, or category..."
-                      value={quickSaleSearchQuery}
-                      onChange={(e) => setQuickSaleSearchQuery(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key !== 'Enter') return;
-                        const scannedCode = quickSaleSearchQuery.trim().toLowerCase();
-                        if (!scannedCode) return;
-                        const matches = products.filter((product) => product.stock > 0 && [product.sku, product.barcode].some((identifier) => identifier?.trim().toLowerCase() === scannedCode));
-                        if (matches.length === 1) {
-                          e.preventDefault();
-                          addProductToCart(matches[0].id);
-                          setQuickSaleSearchQuery('');
-                        } else if (matches.length > 1) {
-                          e.preventDefault();
-                          showNotification('More than one product matches this code. Check product identifiers.', 'error');
-                        }
-                      }}
-                    />
-                  </div>
-                  <div className="filter-group" style={{ marginBottom: 0, minWidth: '220px' }}>
-                    <label>Credit sales to account</label>
-                    <select value={selectedSaleAccountId || ''} onChange={(e) => setSaleAccountId(e.target.value)}>
-                      {accounts.map((account) => <option key={account.id} value={account.id}>{account.name}{account.isDefault ? ' (Default)' : ''}</option>)}
-                    </select>
-                  </div>
-                  <button className="primary" onClick={() => { setCart([]); setShowSaleModal(true); }}>+ New Sale</button>
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(145px, 1fr))', gap: '0.55rem', marginBottom: '1rem' }}>
-                  {filteredQuickSaleProducts.map(p => (
-                    <div key={p.id} className="card" style={{ cursor: 'pointer', transition: 'all 0.2s ease', padding: '0.55rem' }} onClick={() => addProductToCart(p.id)}>
-                      <div style={{ fontSize: '0.84rem', fontWeight: 600, color: 'var(--text)', marginBottom: '0.3rem' }}>{p.name}</div>
-                      {(p.sku || p.barcode) && <div style={{ color: 'var(--text-muted)', fontSize: '0.68rem', marginBottom: '0.3rem' }}>{p.sku || p.barcode}</div>}
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
-                        <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--success)' }}>{formatUGX(p.salePrice)}</span>
-                        <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>x{p.stock}</span>
-                      </div>
-                      <button className="primary" style={{ width: '100%', fontSize: '0.68rem', padding: '0.35rem 0.45rem' }}>Add</button>
-                    </div>
-                  ))}
-                  {filteredQuickSaleServices.map((service) => (
-                    <div key={service.id} className="card" style={{ cursor: 'pointer', transition: 'all 0.2s ease', padding: '0.55rem', border: '1px dashed var(--border)' }} onClick={() => addServiceToCart(service.id)}>
-                      <div style={{ fontSize: '0.84rem', fontWeight: 600, color: 'var(--text)', marginBottom: '0.3rem' }}>{service.name}</div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
-                        <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--info)' }}>{formatUGX(service.salePrice)}</span>
-                        <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Service</span>
-                      </div>
-                      <button className="primary" style={{ width: '100%', fontSize: '0.68rem', padding: '0.35rem 0.45rem' }}>Add Service</button>
-                    </div>
-                  ))}
-                </div>
-                <div className="card" style={{ position: 'sticky', top: '2rem' }}>
-                  <h3 style={{ margin: '0 0 1rem 0', fontSize: '1.1rem', fontWeight: 700 }}>Cart</h3>
-                  {cart.length === 0 ? (
-                    <div style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem 0' }}>Cart is empty</div>
-                  ) : (
-                    <>
-                      <div style={{ maxHeight: '400px', overflowY: 'auto', marginBottom: '1rem' }}>
-                        {cart.map(item => (
-                          <div key={`${item.itemType}-${item.itemId}`} style={{ padding: '0.75rem', borderBottom: '1px solid var(--border)', marginBottom: '0.5rem' }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-                              <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>{item.itemName} <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>({item.itemType})</span></div>
-                              <button className="delete-btn" onClick={() => removeFromCart(item.itemId, item.itemType)}>Remove</button>
-                            </div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
-                              <button className="edit-btn" onClick={() => updateCartItemQty(item.itemId, item.itemType, item.qty - 1)}>−</button>
-                              <input type="number" value={item.qty} onChange={(e) => updateCartItemQty(item.itemId, item.itemType, Number(e.target.value))} style={{ width: '50px', textAlign: 'center', padding: '0.25rem' }} />
-                              <button className="edit-btn" onClick={() => updateCartItemQty(item.itemId, item.itemType, item.qty + 1)}>+</button>
-                              <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>{formatUGX(getEffectiveUnitPrice(item) * item.qty)}</span>
-                            </div>
-                            <div style={{ display: 'grid', gap: '0.4rem', gridTemplateColumns: '130px 1fr', alignItems: 'center' }}>
-                              <select
-                                value={item.discountMode || 'none'}
-                                onChange={(e) => updateCartItemDiscountMode(item.itemId, item.itemType, e.target.value as CartDiscountMode)}
-                              >
-                                <option value="none">No discount</option>
-                                <option value="price">Discounted price</option>
-                                <option value="percent">Discount %</option>
-                              </select>
-                              {item.discountMode === 'price' && (
-                                <input
-                                  type="number"
-                                  min={0}
-                                  max={item.unitPrice}
-                                  step="0.01"
-                                  value={item.discountedUnitPrice ?? item.unitPrice}
-                                  onChange={(e) => updateCartItemDiscountValue(item.itemId, item.itemType, Number(e.target.value))}
-                                  placeholder="Enter discounted unit price"
-                                />
-                              )}
-                              {item.discountMode === 'percent' && (
-                                <input
-                                  type="number"
-                                  min={0}
-                                  max={100}
-                                  step="0.01"
-                                  value={item.discountPercent ?? 0}
-                                  onChange={(e) => updateCartItemDiscountValue(item.itemId, item.itemType, Number(e.target.value))}
-                                  placeholder="Enter discount percent"
-                                />
-                              )}
-                              {(item.discountMode === 'none' || !item.discountMode) && (
-                                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                                  Base unit price: {formatUGX(item.unitPrice)}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                      {renderCheckoutDetailsFields()}
-                      <div style={{ borderTop: '2px solid var(--border)', paddingTop: '1rem', marginTop: '1rem' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem', fontSize: '0.9rem' }}>
-                          <span>Subtotal:</span>
-                          <span style={{ fontWeight: 600 }}>{formatUGX(cartTotal)}</span>
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem', fontSize: '0.9rem', color: 'var(--success)' }}>
-                          <span>Profit:</span>
-                          <span style={{ fontWeight: 600 }}>{formatUGX(cartProfit)}</span>
-                        </div>
-                        <button className="primary" style={{ width: '100%', fontWeight: 700 }} onClick={completeCartSale}>Complete Sale</button>
-                      </div>
-                    </>
-                  )}
-                </div>
-              </div>
-            </div>
-          </section>
+          <RegisterDesk
+            products={products}
+            services={services}
+            cart={cart}
+            customers={customers}
+            heldTickets={heldTickets.map((ticket) => ({
+              id: ticket.id,
+              label: ticket.label,
+              createdAt: ticket.createdAt,
+              itemCount: ticket.cart.reduce((sum, item) => sum + item.qty, 0),
+              totalLabel: formatUGX(settleCart(ticket.cart.map((item) => ({
+                key: `${item.itemType}:${item.itemId}`,
+                unitPrice: item.unitPrice,
+                qty: item.qty,
+                effectiveUnitPrice: getEffectiveUnitPrice(item),
+                unitCost: item.unitCost,
+              })), ticket.cartDiscount, taxSettings).total),
+            }))}
+            branchNames={branchMap}
+            settlement={registerQuote}
+            cartDiscount={cartDiscount}
+            taxLabel={taxSettings.enabled ? `${taxSettings.name} ${taxSettings.ratePercent}%${taxSettings.pricesIncludeTax ? ' included' : ''}` : 'Tax'}
+            customerName={checkoutDetails.customerName}
+            customerPhone={checkoutDetails.customerPhone}
+            cashSession={openCashSession}
+            sessionExpected={sessionExpectedCash}
+            showMargin={showRegisterMargin}
+            formatMoney={formatUGX}
+            onAddProduct={(productId) => addProductToCart(productId, true)}
+            onAddService={(serviceId) => addServiceToCart(serviceId, true)}
+            onChangeQty={updateCartItemQty}
+            onDiscountMode={updateCartItemDiscountMode}
+            onDiscountValue={updateCartItemDiscountValue}
+            onRemove={removeFromCart}
+            onCartDiscount={setCartDiscount}
+            onCustomer={(patch) => setCheckoutDetails((prev) => ({ ...prev, ...patch }))}
+            onSelectCustomer={(customer) => setCheckoutDetails((prev) => ({ ...prev, customerName: customer.name, customerPhone: customer.phone || '' }))}
+            onHold={holdRegisterSale}
+            onRecall={recallHeldSale}
+            onOpenDrawer={openDrawer}
+            onCloseDrawer={closeDrawer}
+            onClear={() => { if (cart.length === 0 || window.confirm('Clear this sale?')) clearRegister(); }}
+            onPay={completeRegisterSale}
+            onCreateProduct={() => { setProductForm({ id: '', name: '', branchId: branches[0]?.id || '', stock: 0, purchasePrice: 0, salePrice: 0, sku: '', barcode: '', category: '' }); setShowProductModal(true); }}
+          />
         )}
 
         {view === 'services' && (
@@ -2611,37 +3001,40 @@ export default function Page() {
                   <thead>
                     <tr>
                       <th>Date & Time</th>
-                      <th>Item</th>
-                      <th>Transaction / customer / tender</th>
-                      <th>Qty</th>
+                      <th>Receipt</th>
+                      <th>Items</th>
+                      <th>Customer / tender</th>
                       <th>Total</th>
-                      <th>Profit</th>
+                      <th>Margin</th>
                       <th>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredSales.length > 0 ? (
-                      paginatedSales.map((s) => (
-                        <tr key={s.id}>
-                          <td>{new Date(s.createdAt).toLocaleString()}</td>
-                          <td style={{ fontWeight: 600 }}>{s.itemName}</td>
+                    {groupedSales.length > 0 ? (
+                      paginatedSales.map((saleGroup) => (
+                        <tr key={saleGroup.id}>
+                          <td>{new Date(saleGroup.createdAt).toLocaleString()}</td>
+                          <td style={{ fontWeight: 700 }}>{saleGroup.receiptNumber || `#${saleGroup.id.slice(0, 8)}`}</td>
                           <td>
-                            <div style={{ fontWeight: 600 }}>{s.transactionId ? `#${s.transactionId.slice(0, 8)}` : 'Legacy sale'}</div>
-                            <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>{s.customerName || 'Walk-in'}{s.customerPhone ? ` · ${s.customerPhone}` : ''}</div>
+                            {saleGroup.lines.map((line) => (
+                              <div key={line.id}>{line.itemName} × {line.qty}</div>
+                            ))}
+                          </td>
+                          <td>
+                            <div>{saleGroup.customerName || 'Walk-in'}</div>
                             <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>
-                              {s.paymentMethod ? PAYMENT_METHOD_LABELS[s.paymentMethod] || s.paymentMethod : 'Tender not recorded'}
-                              {s.paymentReference ? ` · Ref ${s.paymentReference}` : ''}
+                              {saleGroup.saleKind === 'return' ? 'Credit note · ' : ''}
+                              {saleGroup.paymentMethod ? PAYMENT_METHOD_LABELS[saleGroup.paymentMethod] : 'Tender not recorded'}
                             </div>
                           </td>
-                          <td>{s.qty}</td>
-                          <td>{formatUGX(s.amount)}</td>
-                          <td style={{ color: 'var(--success)', fontWeight: 600 }}>{formatUGX(s.amount - s.cost)}</td>
+                          <td style={{ fontWeight: 700 }}>{formatUGX(saleGroup.total)}</td>
+                          <td style={{ color: saleGroup.profit >= 0 ? 'var(--success)' : 'var(--danger)', fontWeight: 600 }}>{showRegisterMargin ? formatUGX(saleGroup.profit) : '—'}</td>
                           <td>
+                            <button className="edit-btn" onClick={() => setActiveReceipt(receiptFromSaleLines(saleGroup.lines))}>Receipt</button>
+                            {saleGroup.saleKind !== 'return' && <button className="edit-btn" onClick={() => setReturnTransactionId(saleGroup.id)}>Return</button>}
                             {canManageSalesAndExpenses ? (
-                              <button className="delete-btn" onClick={() => deleteSale(s.id)}>Delete</button>
-                            ) : (
-                              <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>Owner/Admin only</span>
-                            )}
+                              <button className="delete-btn" onClick={() => deleteTransaction(saleGroup.lines.map((line) => line.id))}>Delete</button>
+                            ) : null}
                           </td>
                         </tr>
                       ))
@@ -2656,7 +3049,7 @@ export default function Page() {
 
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.75rem', gap: '0.75rem', flexWrap: 'wrap' }}>
                 <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                  Showing {filteredSales.length === 0 ? 0 : (salesHistoryPage - 1) * salesHistoryPageSize + 1}–{Math.min(salesHistoryPage * salesHistoryPageSize, filteredSales.length)} of {filteredSales.length}
+                  Showing {groupedSales.length === 0 ? 0 : (salesHistoryPage - 1) * salesHistoryPageSize + 1}–{Math.min(salesHistoryPage * salesHistoryPageSize, groupedSales.length)} of {groupedSales.length}
                 </span>
                 <div style={{ display: 'flex', gap: '0.5rem' }}>
                   <button className="edit-btn" disabled={salesHistoryPage <= 1} onClick={() => setSalesHistoryPage((prev) => Math.max(1, prev - 1))}>Previous</button>
@@ -3099,6 +3492,48 @@ export default function Page() {
           </section>
         )}
 
+        {view === 'customers' && (
+          <section>
+            <div className="page-header">
+              <h2>Customers</h2>
+            </div>
+            <div className="filter-bar">
+              <div className="filter-group" style={{ flex: 1 }}>
+                <label>Search</label>
+                <input value={customerQuery} placeholder="Name or phone" onChange={(event) => setCustomerQuery(event.target.value)} />
+              </div>
+            </div>
+            <div className="table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Customer</th>
+                    <th>Phone</th>
+                    <th>On account</th>
+                    <th>Notes</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {customers.filter((customer) => {
+                    const needle = customerQuery.trim().toLowerCase();
+                    return !needle || customer.name.toLowerCase().includes(needle) || customer.phone?.toLowerCase().includes(needle);
+                  }).map((customer) => (
+                    <tr key={customer.id}>
+                      <td style={{ fontWeight: 700 }}>{customer.name}</td>
+                      <td>{customer.phone || '—'}</td>
+                      <td>{formatUGX(customerAccountBalance(sales, customer.name, customer.phone))}</td>
+                      <td>{customer.notes || '—'}</td>
+                    </tr>
+                  ))}
+                  {customers.length === 0 && (
+                    <tr><td colSpan={4} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>Customers appear here after a named sale.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
+
         {view === 'settings' && (
           <section>
             <div className="page-header">
@@ -3109,6 +3544,8 @@ export default function Page() {
               <button onClick={() => setSettingsTab('branches')} style={{ padding: '0.75rem 1.5rem', borderBottom: settingsTab === 'branches' ? '3px solid var(--primary)' : 'none', background: 'none', cursor: 'pointer', fontWeight: settingsTab === 'branches' ? 600 : 400 }}>Manage Branches</button>
               <button onClick={() => setSettingsTab('time')} style={{ padding: '0.75rem 1.5rem', borderBottom: settingsTab === 'time' ? '3px solid var(--primary)' : 'none', background: 'none', cursor: 'pointer', fontWeight: settingsTab === 'time' ? 600 : 400 }}>Time & Timezone</button>
               <button onClick={() => setSettingsTab('accounts')} style={{ padding: '0.75rem 1.5rem', borderBottom: settingsTab === 'accounts' ? '3px solid var(--primary)' : 'none', background: 'none', cursor: 'pointer', fontWeight: settingsTab === 'accounts' ? 600 : 400 }}>Accounts</button>
+              <button onClick={() => setSettingsTab('tax')} style={{ padding: '0.75rem 1.5rem', borderBottom: settingsTab === 'tax' ? '3px solid var(--primary)' : 'none', background: 'none', cursor: 'pointer', fontWeight: settingsTab === 'tax' ? 600 : 400 }}>Tax</button>
+              <button onClick={() => setSettingsTab('receipt')} style={{ padding: '0.75rem 1.5rem', borderBottom: settingsTab === 'receipt' ? '3px solid var(--primary)' : 'none', background: 'none', cursor: 'pointer', fontWeight: settingsTab === 'receipt' ? 600 : 400 }}>Receipt</button>
               <button onClick={() => setSettingsTab('backup')} style={{ padding: '0.75rem 1.5rem', borderBottom: settingsTab === 'backup' ? '3px solid var(--primary)' : 'none', background: 'none', cursor: 'pointer', fontWeight: settingsTab === 'backup' ? 600 : 400 }}>Backup & Restore</button>
             </div>
 
@@ -3184,6 +3621,66 @@ export default function Page() {
                 </div>
               </div>
             )}
+            {settingsTab === 'tax' && (
+              <div className="card">
+                <h3>Sales tax</h3>
+                <p style={{ color: 'var(--text-muted)', maxWidth: '720px' }}>Turn tax on when the shop needs it. Inclusive prices keep the shelf price as the amount the customer pays. Exclusive prices add tax at the register. This is a shop calculation, not a filing connection to a tax authority.</p>
+                <div className="form" style={{ marginTop: '1rem' }}>
+                  <label className="field">
+                    <span>Charge tax</span>
+                    <select value={taxSettings.enabled ? 'yes' : 'no'} onChange={(event) => setTaxSettings((prev) => ({ ...prev, enabled: event.target.value === 'yes' }))}>
+                      <option value="no">Off</option>
+                      <option value="yes">On</option>
+                    </select>
+                  </label>
+                  <label className="field">
+                    <span>Tax name</span>
+                    <input value={taxSettings.name} maxLength={40} onChange={(event) => setTaxSettings((prev) => ({ ...prev, name: event.target.value }))} />
+                  </label>
+                  <label className="field">
+                    <span>Rate %</span>
+                    <input type="number" min={0} max={100} step="0.01" value={taxSettings.ratePercent} onChange={(event) => setTaxSettings((prev) => ({ ...prev, ratePercent: Number(event.target.value) }))} />
+                  </label>
+                  <label className="field">
+                    <span>Prices</span>
+                    <select value={taxSettings.pricesIncludeTax ? 'included' : 'added'} onChange={(event) => setTaxSettings((prev) => ({ ...prev, pricesIncludeTax: event.target.value === 'included' }))}>
+                      <option value="included">Tax included in shelf price</option>
+                      <option value="added">Add tax at checkout</option>
+                    </select>
+                  </label>
+                </div>
+                <button type="button" className="edit-btn" onClick={() => setTaxSettings({ enabled: true, name: 'VAT', ratePercent: 18, pricesIncludeTax: true })}>Use Uganda VAT, 18% included</button>
+              </div>
+            )}
+
+            {settingsTab === 'receipt' && (
+              <div className="card">
+                <h3>Receipt</h3>
+                <p style={{ color: 'var(--text-muted)' }}>These details print on every receipt and credit note.</p>
+                <div className="form" style={{ marginTop: '1rem' }}>
+                  <label className="field">
+                    <span>Address</span>
+                    <input value={receiptSettings.address} maxLength={180} onChange={(event) => setReceiptSettings((prev) => ({ ...prev, address: event.target.value }))} />
+                  </label>
+                  <label className="field">
+                    <span>Phone</span>
+                    <input value={receiptSettings.phone} maxLength={40} onChange={(event) => setReceiptSettings((prev) => ({ ...prev, phone: event.target.value }))} />
+                  </label>
+                  <label className="field">
+                    <span>Footer</span>
+                    <input value={receiptSettings.footer} maxLength={180} onChange={(event) => setReceiptSettings((prev) => ({ ...prev, footer: event.target.value }))} />
+                  </label>
+                  <label className="field">
+                    <span>Show tax line</span>
+                    <select value={receiptSettings.showTax ? 'yes' : 'no'} onChange={(event) => setReceiptSettings((prev) => ({ ...prev, showTax: event.target.value === 'yes' }))}>
+                      <option value="yes">Yes</option>
+                      <option value="no">No</option>
+                    </select>
+                  </label>
+                </div>
+              </div>
+            )}
+
             {settingsTab === 'backup' && (
               <div className="card">
                 <h3>Backup & Restore Shop Data</h3>
@@ -3354,11 +3851,29 @@ export default function Page() {
                 </div>
                 <div>
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Current Role</div>
-                  <div style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--text)' }}>{role}</div>
+                  <div style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--text)' }}>{roleLabels[role]}</div>
                 </div>
               </div>
             </div>
           </section>
+        )}
+
+        {activeReceipt && <ReceiptDialog receipt={activeReceipt} formatMoney={formatUGX} onClose={() => setActiveReceipt(null)} />}
+        {returnTransactionId && (
+          <ReturnDialog
+            receiptNumber={sales.find((sale) => transactionKey(sale) === returnTransactionId)?.receiptNumber || `#${returnTransactionId.slice(0, 8)}`}
+            lines={sales.filter((sale) => transactionKey(sale) === returnTransactionId && sale.saleKind !== 'return' && sale.qty > 0).map((sale): ReturnableLine => ({
+              id: sale.id,
+              name: sale.itemName,
+              type: sale.type,
+              soldQty: sale.qty,
+              returnableQty: returnableQuantity(sales, returnTransactionId, sale.itemName, sale.type),
+              unitAmount: roundMoney(sale.amount / sale.qty),
+            }))}
+            formatMoney={formatUGX}
+            onClose={() => setReturnTransactionId('')}
+            onSubmit={issueReturn}
+          />
         )}
 
         {/* Sale Modal */}
