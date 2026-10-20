@@ -8,7 +8,7 @@ import RegisterDesk from '../components/pos/RegisterDesk';
 import ReceiptDialog from '../components/pos/ReceiptDialog';
 import ReturnDialog, { type ReturnableLine } from '../components/pos/ReturnDialog';
 import { LOCAL_OPERATOR_ID, readLocalShop, writeLocalShop } from '../lib/pos/localShop';
-import { buildSalesDigest, claimSalesEmailSend, defaultSalesEmailSettings, finishSalesEmailSend, normalizeSalesEmailSettings, previousSalesPeriod, type SalesDigest, type SalesEmailSettings } from '../lib/pos/salesEmail';
+import { beginSalesEmailSend, buildSalesDigest, defaultSalesEmailSettings, finishSalesEmailSend, normalizeSalesEmailSettings, previousSalesPeriod, type SalesDigest, type SalesEmailSettings } from '../lib/pos/salesEmail';
 import { completeEmailLinkSignIn, rememberInviteFromUrl, sendStaffSignInLink, staffSignInError, takeInvitedShopId } from '../lib/pos/staffInvite';
 import {
   customerAccountBalance,
@@ -344,6 +344,8 @@ export default function Page() {
       setNotification(null);
     }, duration);
   };
+  const showNotificationRef = useRef(showNotification);
+  showNotificationRef.current = showNotification;
 
   // Firebase Auth Setup
   useEffect(() => {
@@ -1532,20 +1534,25 @@ export default function Page() {
   };
 
   const deliverSalesReport = useCallback(async (manual: boolean) => {
+    const notify = (message: string, type: 'success' | 'error' | 'info' = 'info', duration = 3000) => {
+      showNotificationRef.current(message, type, duration);
+    };
     if (salesEmailSettings.cadence === 'off') {
-      if (manual) showNotification('Choose daily, weekly, or monthly first.', 'info');
+      if (manual) notify('Choose daily, weekly, or monthly first.', 'info');
       return;
     }
+    if (!manual && !hasLoadedUserDataRef.current) return;
     if (!firebaseApp || !authUser || authUser.uid === LOCAL_OPERATOR_ID) {
-      if (manual) showNotification('Sign in with Firebase before emailing a sales report. This browser-only counter cannot send email.', 'error', 6000);
+      if (manual) notify('Sign in with Firebase before emailing a sales report. This browser-only counter cannot send email.', 'error', 6000);
       return;
     }
     if (!(isShopOwner || role === 'admin')) return;
     const period = previousSalesPeriod(salesEmailSettings.cadence, new Date(), shopTimeSettings.timezoneOffsetMinutes);
     if (!manual && salesEmailSettings.lastSentKey === period.key) return;
     const claimKey = `${activeShopOwnerUid}:${period.key}`;
-    if (!manual && !claimSalesEmailSend(claimKey)) return;
+    if (!beginSalesEmailSend(claimKey, manual)) return;
     setSendingSalesEmail(true);
+    const stop = (result: 'sent' | 'blocked' | 'failed') => finishSalesEmailSend(claimKey, result);
     try {
       const digest: SalesDigest = buildSalesDigest(currentShop?.shopName || 'My Shop', salesEmailSettings.cadence, period, sales, expenses);
       const idToken = await getAuth(firebaseApp).currentUser?.getIdToken();
@@ -1555,29 +1562,38 @@ export default function Page() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ idToken, recipients: salesEmailSettings.recipients, digest }),
       });
-      const payload = await response.json() as { ok?: boolean; reason?: string; error?: string };
+      const raw = await response.text();
+      let payload: { ok?: boolean; reason?: string; error?: string } = {};
+      try {
+        payload = raw ? JSON.parse(raw) as { ok?: boolean; reason?: string; error?: string } : {};
+      } catch {
+        payload = { error: 'The sales email server failed before it could answer. Try again in a moment.' };
+      }
       if (payload.ok) {
         setSalesEmailSettings((prev) => ({ ...prev, lastSentKey: period.key }));
-        finishSalesEmailSend(claimKey, 'sent');
+        stop('sent');
         const message = `Sales email sent for ${period.label}.`;
         setStatus(message);
-        if (manual) showNotification(message, 'success', 5000);
+        if (manual) notify(message, 'success', 5000);
         return;
       }
+      stop(manual ? 'failed' : 'blocked');
+      if (!manual) return;
       if (payload.reason === 'not_configured') {
-        finishSalesEmailSend(claimKey, manual ? 'failed' : 'blocked');
-        if (manual) showNotification('Sales email is not set up on the server yet. Add RESEND_API_KEY and EMAIL_FROM, then try again.', 'error', 7000);
+        notify('Sales email is not set up on the server yet. Add RESEND_API_KEY and EMAIL_FROM, then try again.', 'error', 7000);
         return;
       }
-      finishSalesEmailSend(claimKey, 'failed');
-      if (manual) showNotification(payload.error || 'The sales email could not be sent.', 'error', 6000);
+      notify(payload.error || 'The sales email could not be sent.', 'error', 8000);
     } catch (error) {
-      finishSalesEmailSend(claimKey, 'failed');
-      if (manual) showNotification(error instanceof Error ? error.message : 'The sales email could not be sent.', 'error', 6000);
+      stop(manual ? 'failed' : 'blocked');
+      if (manual) notify(error instanceof Error ? error.message : 'The sales email could not be sent.', 'error', 6000);
     } finally {
       setSendingSalesEmail(false);
     }
-  }, [activeShopOwnerUid, authUser, currentShop?.shopName, expenses, isShopOwner, role, sales, salesEmailSettings, shopTimeSettings.timezoneOffsetMinutes, showNotification]);
+  }, [activeShopOwnerUid, authUser, currentShop?.shopName, expenses, isShopOwner, role, sales, salesEmailSettings, shopTimeSettings.timezoneOffsetMinutes]);
+
+  const deliverSalesReportRef = useRef(deliverSalesReport);
+  deliverSalesReportRef.current = deliverSalesReport;
 
   useEffect(() => {
     if (document.activeElement === recipientInputRef.current) return;
@@ -1585,9 +1601,9 @@ export default function Page() {
   }, [salesEmailSettings.recipients]);
 
   useEffect(() => {
-    if (!hasLoadedUserDataRef.current || salesEmailSettings.cadence === 'off') return;
-    void deliverSalesReport(false);
-  }, [deliverSalesReport, salesEmailSettings.cadence]);
+    if (salesEmailSettings.cadence === 'off') return;
+    void deliverSalesReportRef.current(false);
+  }, [salesEmailSettings.cadence, salesEmailSettings.lastSentKey, authUser, activeShopOwnerUid, role, isShopOwner, shopTimeSettings.timezoneOffsetMinutes]);
 
   const addProductToCart = (productId: string, silent = false) => {
     const product = products.find(p => p.id === productId);
@@ -3907,7 +3923,7 @@ export default function Page() {
                     />
                   </label>
                 </div>
-                <p className="muted-copy">Your sign-in email is always included. Add up to five more addresses, separated by commas. Reports need RESEND_API_KEY and EMAIL_FROM on the server.</p>
+                <p className="muted-copy">Your sign-in email is always included. Add up to five more addresses, separated by commas. Reports need RESEND_API_KEY and EMAIL_FROM on the server. EMAIL_FROM has to be an address on a domain that shows Verified in Resend, such as AlphaPOS &lt;reports@yourshop.com&gt;.</p>
                 {salesEmailSettings.lastSentKey && <p className="muted-copy">Last report marked sent: {salesEmailSettings.lastSentKey}</p>}
                 <button type="button" className="primary" disabled={sendingSalesEmail || salesEmailSettings.cadence === 'off'} onClick={() => { void deliverSalesReport(true); }}>
                   {sendingSalesEmail ? 'Sending…' : 'Send the latest report'}

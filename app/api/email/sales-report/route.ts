@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { cleanEmailFrom, explainResendFailure, resendFailureStatus } from '../../../../lib/email/resendError';
 import { salesReportHtml, salesReportSubject, salesReportText } from '../../../../lib/email/salesReportMessage';
 import type { SalesDigest } from '../../../../lib/pos/salesEmail';
 
@@ -69,30 +70,35 @@ export async function POST(request: Request) {
     .filter((email) => emailPattern.test(email)))].slice(0, 5);
   if (recipients.length === 0) return NextResponse.json({ ok: false, error: 'Add at least one email address.' }, { status: 400 });
 
-  const apiKey = process.env.RESEND_API_KEY;
-  const from = process.env.EMAIL_FROM;
+  const apiKey = process.env.RESEND_API_KEY?.trim();
+  const from = cleanEmailFrom(process.env.EMAIL_FROM);
   if (!apiKey || !from) {
     return NextResponse.json({ ok: false, reason: 'not_configured' }, { status: 503 });
   }
 
-  const response = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      from,
-      to: recipients,
-      subject: salesReportSubject(digest),
-      html: salesReportHtml(digest),
-      text: salesReportText(digest),
-    }),
-  });
+  let response: Response;
+  try {
+    response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        from,
+        to: recipients,
+        subject: salesReportSubject(digest),
+        html: salesReportHtml(digest),
+        text: salesReportText(digest),
+      }),
+    });
+  } catch {
+    return NextResponse.json({ ok: false, error: 'The email service could not be reached. Try again in a moment.' }, { status: 502 });
+  }
 
   if (!response.ok) {
     const detail = await response.text();
-    return NextResponse.json({ ok: false, error: detail.slice(0, 180) || 'The email service rejected the report.' }, { status: 502 });
+    return NextResponse.json({ ok: false, error: explainResendFailure(response.status, detail) }, { status: resendFailureStatus(response.status) });
   }
 
   return NextResponse.json({ ok: true, recipients });
