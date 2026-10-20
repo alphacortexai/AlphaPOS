@@ -499,7 +499,12 @@ export default function Page() {
           setRole('shop_owner');
           hasLoadedUserDataRef.current = true;
           isSwitchingShopRef.current = false;
-          setStatus(`Counter ready at ${shopName}. Records stay on this device.`);
+          const localProducts = Array.isArray(data?.products) ? data.products.length : 0;
+          const localServices = Array.isArray(data?.services) ? data.services.length : 0;
+          const localSales = Array.isArray(data?.sales) ? (data.sales as Sale[]).filter((sale) => !sale.practice).length : 0;
+          if (!noteEntryIntent(localProducts, localServices, localSales)) {
+            setStatus(`Counter ready at ${shopName}. Records stay on this device.`);
+          }
           return true;
         } catch (error) {
           setStatus(`Could not open the on-device counter: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -546,7 +551,9 @@ export default function Page() {
           setRole(freshRole);
           hasLoadedUserDataRef.current = true;
           isSwitchingShopRef.current = false;
-          setStatus(`Viewing ${selectedShop?.shopName || 'selected shop'} as ${roleLabels[freshRole]}.`);
+          if (!noteEntryIntent(0, 0, 0)) {
+            setStatus(`Viewing ${selectedShop?.shopName || 'selected shop'} as ${roleLabels[freshRole]}.`);
+          }
           return true;
         }
         const data = snap.data();
@@ -573,7 +580,12 @@ export default function Page() {
         }
         hasLoadedUserDataRef.current = true;
         isSwitchingShopRef.current = false;
-        setStatus(`Viewing ${selectedShop?.shopName || 'selected shop'} as ${roleLabels[selectedShop?.role || role]}.`);
+        const loadedProducts = Array.isArray(data.products) ? data.products.length : 0;
+        const loadedServices = Array.isArray(data.services) ? data.services.length : 0;
+        const loadedSales = Array.isArray(data.sales) ? (data.sales as Sale[]).filter((sale) => !sale.practice).length : 0;
+        if (!noteEntryIntent(loadedProducts, loadedServices, loadedSales)) {
+          setStatus(`Viewing ${selectedShop?.shopName || 'selected shop'} as ${roleLabels[selectedShop?.role || role]}.`);
+        }
         return true;
       } catch (error) {
         setStatus(`Failed to load your data: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -718,23 +730,80 @@ export default function Page() {
     void saveUserData();
   }, [activeShopOwnerUid, authUser, db, role, branches, products, services, categories, sales, expenses, expenseGroups, users, activityLogs, shopTimeSettings, accounts, customers, heldTickets, cashSessions, taxSettings, receiptSettings, salesEmailSettings, businessProfile, businessSetup, onboarding, currentShop?.shopName]);
 
+  const entryIntentRef = useRef<'signin' | 'signup' | null>(null);
+  const [replaceShopName, setReplaceShopName] = useState('');
+
+  const savedLocalShopName = () => {
+    const data = readLocalShop();
+    if (!data) return '';
+    const products = Array.isArray(data.products) ? data.products.length : 0;
+    const services = Array.isArray(data.services) ? data.services.length : 0;
+    const sales = Array.isArray(data.sales) ? data.sales.length : 0;
+    const name = typeof data.shopName === 'string' ? data.shopName.trim() : '';
+    const named = name && name !== 'My Shop';
+    const started = Boolean(data.onboarding && typeof data.onboarding === 'object' && 'startedAt' in data.onboarding);
+    if (products + services + sales === 0 && !named && !started) return '';
+    return name || 'My Shop';
+  };
+
   const startLocalCounter = () => {
     hasLoadedUserDataRef.current = false;
+    setReplaceShopName('');
     setAuthUser({ uid: LOCAL_OPERATOR_ID, email: 'counter@this-device', displayName: 'Counter' });
     setActiveShopOwnerUid(LOCAL_OPERATOR_ID);
     setRole('shop_owner');
     setView('sales');
   };
 
-  const handleLogin = async () => {
+  const noteEntryIntent = (productCount: number, serviceCount: number, saleCount: number) => {
+    const intent = entryIntentRef.current;
+    entryIntentRef.current = null;
+    const hasShop = productCount + serviceCount + saleCount > 0;
+    if (intent === 'signup' && hasShop) {
+      setStatus('This account already has a shop. Shop setup is in the side menu.');
+      return true;
+    }
+    if (intent === 'signin' && !hasShop) {
+      setStatus('No shop on this account yet. Create the business to start.');
+      return true;
+    }
+    return false;
+  };
+
+  const beginLocalShop = (intent: 'signin' | 'signup') => {
+    const existing = savedLocalShopName();
+    if (intent === 'signin' && !existing) {
+      setSignInNotice('No shop is saved on this browser yet. Create a shop to start.');
+      return;
+    }
+    if (intent === 'signup' && existing) {
+      setReplaceShopName(existing);
+      setSignInNotice('');
+      return;
+    }
+    entryIntentRef.current = intent;
+    setSignInNotice('');
+    startLocalCounter();
+  };
+
+  const replaceLocalShop = () => {
+    window.localStorage.removeItem('alphapos.local.v1');
+    entryIntentRef.current = 'signup';
+    setSignInNotice('');
+    startLocalCounter();
+  };
+
+  const beginGoogleShop = async (intent: 'signin' | 'signup') => {
     if (!firebaseApp) return;
+    entryIntentRef.current = intent;
     const auth = getAuth(firebaseApp);
     const provider = new GoogleAuthProvider();
     if (invitedEmail) provider.setCustomParameters({ login_hint: invitedEmail });
     try {
       await signInWithPopup(auth, provider);
-      setStatus('Logged in successfully!');
+      setStatus(intent === 'signup' ? 'Google account ready. Opening your shop.' : 'Signed in.');
     } catch (error) {
+      entryIntentRef.current = null;
       setStatus(`Login failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   };
@@ -2976,6 +3045,7 @@ export default function Page() {
   });
   const setupGaps = goLiveIssues(setupItems);
   const alreadySelling = sales.some((sale) => !sale.practice);
+  const canOpenSetup = isShopOwner || role === 'shop_owner' || role === 'admin';
   const practiceSale = sales.find((sale) => sale.practice);
 
   const Badge = ({ value }: { value: number }) => (
@@ -2992,24 +3062,44 @@ export default function Page() {
         <div className="auth-card">
           <span className="auth-badge">Retail counter</span>
           <h1>AlphaPOS</h1>
-          <p>Sell, take payment, print a receipt, and keep stock in one counter.</p>
+          <p>Create a shop, or sign in to the one you already run.</p>
           <ul className="auth-highlights">
             <li>Barcode register with hold, split payment, and change</li>
             <li>Tax, cash drawer, returns, and customer accounts</li>
             <li>Inventory, expenses, staff, and branch reporting</li>
-            <li>Google sign-in for shared shops, or this device when Firebase is not configured</li>
+            <li>Shop setup stays in the menu after the shop is created</li>
           </ul>
           {signInNotice && <p className="auth-local-note">{signInNotice}</p>}
           {invitedEmail && <p className="auth-local-note">This invite is for {invitedEmail}. Sign in with Google using that address.</p>}
-          {firebaseApp ? (
+          {replaceShopName ? (
             <>
-              <button className="primary" style={{ width: '100%', padding: '1rem' }} onClick={handleLogin}>Sign in with Google</button>
-              <p className="auth-local-note">Invited staff open the link in their email, then sign in with Google using that same address.</p>
+              <p className="auth-local-note">{replaceShopName} is already saved on this browser. Sign in to open it, or create a new shop and replace it.</p>
+              <div className="auth-actions">
+                <button className="primary" type="button" onClick={startLocalCounter}>Sign in</button>
+                <button className="edit-btn" type="button" onClick={replaceLocalShop}>Create a new shop</button>
+              </div>
+            </>
+          ) : firebaseApp ? (
+            <>
+              <div className="auth-actions">
+                {invitedEmail ? (
+                  <button className="primary" type="button" onClick={() => void beginGoogleShop('signin')}>Sign in</button>
+                ) : (
+                  <>
+                    <button className="primary" type="button" onClick={() => void beginGoogleShop('signup')}>Create a shop</button>
+                    <button className="edit-btn" type="button" onClick={() => void beginGoogleShop('signin')}>Sign in</button>
+                  </>
+                )}
+              </div>
+              <p className="auth-local-note">{invitedEmail ? 'Invited staff use Sign in with the Google account on the invite.' : 'Create a shop and Sign in both use Google. A new account starts setup. An account that already has a shop opens that shop. Shop setup stays in the menu.'}</p>
             </>
           ) : (
             <>
-              <p className="auth-local-note">No Firebase project is configured. The counter will keep this shop in this browser only.</p>
-              <button className="primary" style={{ width: '100%', padding: '1rem' }} onClick={startLocalCounter}>Open the counter</button>
+              <p className="auth-local-note">This browser keeps the shop on this device.</p>
+              <div className="auth-actions">
+                <button className="primary" type="button" onClick={() => beginLocalShop('signup')}>Create a shop</button>
+                <button className="edit-btn" type="button" onClick={() => beginLocalShop('signin')}>Sign in</button>
+              </div>
             </>
           )}
         </div>
@@ -3044,6 +3134,11 @@ export default function Page() {
 
         <nav className="sidebar-nav">
           <div className="nav-group-label">Counter</div>
+          {canOpenSetup && (
+            <button className="nav-button" type="button" onClick={() => { openSetup(); setIsSidebarOpen(false); }}>
+              <span className="nav-icon" aria-hidden="true">⚑</span><span>Shop setup</span>
+            </button>
+          )}
           <button className={`nav-button ${view === 'dashboard' ? 'active' : ''}`} onClick={() => { setView('dashboard'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">◫</span><span>Today</span></button>
           <button className={`nav-button ${view === 'sales_history' ? 'active' : ''}`} onClick={() => { setView('sales_history'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">≡</span><span>Sales</span></button>
           <button className={`nav-button ${view === 'customers' ? 'active' : ''}`} onClick={() => { setView('customers'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">☺</span><span>Customers</span></button>
@@ -3164,7 +3259,7 @@ export default function Page() {
                     </div>
                   </div>
 
-                  {(role === 'shop_owner' || role === 'admin') && (
+                  {canOpenSetup && (
                     <SetupChecklist items={setupItems} onOpen={openSetup} alreadySelling={alreadySelling} />
                   )}
 
@@ -3568,10 +3663,10 @@ export default function Page() {
           </section>
         )}
 
-        {view === 'sales' && (role === 'shop_owner' || role === 'admin') && setupGaps.length > 0 && (
+        {view === 'sales' && canOpenSetup && setupGaps.length > 0 && (
           <div className="setup-banner" role="status">
             <span>{setupGaps.join(', ')} still need a look. The register stays open.</span>
-            <button type="button" className="edit-btn" onClick={() => openSetup(setupItems.find((item) => item.required && item.status !== 'complete')?.id)}>Review</button>
+            <button type="button" className="edit-btn" onClick={() => openSetup(setupItems.find((item) => item.required && item.status !== 'complete')?.id)}>Shop setup</button>
           </div>
         )}
 
