@@ -23,6 +23,7 @@ export default function ReceiptDialog({
           <button type="button" className="modal-close" onClick={onClose} aria-label="Close receipt">×</button>
         </header>
         <article className="pos-receipt-paper">
+          {receipt.practice && <p className="setup-banner">Practice sale. No money was collected.</p>}
           <div className="pos-receipt-shop">
             <strong>{receipt.shopName}</strong>
             {receipt.address && <span>{receipt.address}</span>}

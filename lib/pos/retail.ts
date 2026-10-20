@@ -341,6 +341,7 @@ export type ReceiptModel = {
   tenders: { label: string; amount: number; reference?: string; tendered?: number; change?: number }[];
   showTax: boolean;
   note: string;
+  practice?: boolean;
 };
 
 export const receiptHtml = (receipt: ReceiptModel, formatMoney: (value: number) => string) => {
@@ -378,6 +379,7 @@ export const receiptHtml = (receipt: ReceiptModel, formatMoney: (value: number) 
 <body>
   <div class="paper">
     <div class="center">
+      ${receipt.practice ? '<p><strong>PRACTICE SALE — NOT A CUSTOMER SALE</strong></p>' : ''}
       <h1>${escapeHtml(receipt.shopName)}</h1>
       ${receipt.address ? `<p class="muted">${escapeHtml(receipt.address)}</p>` : ''}
       ${receipt.phone ? `<p class="muted">${escapeHtml(receipt.phone)}</p>` : ''}
