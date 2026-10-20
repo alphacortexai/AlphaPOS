@@ -6,6 +6,7 @@ import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signO
 import { collection, deleteDoc, doc, getDoc, getDocs, getFirestore, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
 import CategorySelect from '../components/pos/CategorySelect';
 import OnboardingWizard, { SetupChecklist, type OnboardingSave } from '../components/pos/OnboardingWizard';
+import NavGlyph from '../components/pos/NavGlyph';
 import RegisterDesk from '../components/pos/RegisterDesk';
 import ReceiptDialog from '../components/pos/ReceiptDialog';
 import ReturnDialog, { type ReturnableLine } from '../components/pos/ReturnDialog';
@@ -3058,17 +3059,19 @@ export default function Page() {
   if (loading) return <div className="auth-container"><div className="status">Loading AlphaPOS...</div></div>;
   if (!authUser) {
     return (
-      <div className="auth-container">
+      <div className="auth-container auth-split">
+        <section className="auth-stage" aria-label="A shop counter">
+          <img src="/pos-counter.jpg" alt="A shop counter with a point-of-sale screen, a receipt printer, and a barcode scanner" />
+          <div className="auth-stage-copy">
+            <strong>The counter for the whole sale</strong>
+            <span>Scan the item, take the payment, and hand over the receipt.</span>
+          </div>
+        </section>
+        <div className="auth-panel">
         <div className="auth-card">
           <span className="auth-badge">Retail counter</span>
           <h1>AlphaPOS</h1>
           <p>Create a shop, or sign in to the one you already run.</p>
-          <ul className="auth-highlights">
-            <li>Barcode register with hold, split payment, and change</li>
-            <li>Tax, cash drawer, returns, and customer accounts</li>
-            <li>Inventory, expenses, staff, and branch reporting</li>
-            <li>Shop setup stays in the menu after the shop is created</li>
-          </ul>
           {signInNotice && <p className="auth-local-note">{signInNotice}</p>}
           {invitedEmail && <p className="auth-local-note">This invite is for {invitedEmail}. Sign in with Google using that address.</p>}
           {replaceShopName ? (
@@ -3102,6 +3105,13 @@ export default function Page() {
               </div>
             </>
           )}
+          <ul className="auth-highlights">
+            <li>Barcode register with hold, split payment, and change</li>
+            <li>Tax, cash drawer, returns, and customer accounts</li>
+            <li>Inventory, expenses, staff, and branch reporting</li>
+            <li>Shop setup stays in the menu after the shop is created</li>
+          </ul>
+        </div>
         </div>
       </div>
     );
@@ -3111,63 +3121,78 @@ export default function Page() {
     <div className="app">
       <div className={`sidebar-overlay ${isSidebarOpen ? 'show' : ''}`} onClick={() => setIsSidebarOpen(false)}></div>
       <aside className={`sidebar ${isSidebarOpen ? 'open' : ''}`}>
-        <div className="sidebar-header">
-          <h2><span className="brand-mark" aria-hidden="true">A</span> AlphaPOS</h2>
-          <div className="sidebar-subtitle">Point of sale · Operations</div>
+        <div className="rail-brand">
+          <span className="brand-mark" aria-hidden="true">A</span>
+          <div>
+            <strong>AlphaPOS</strong>
+            <span>Point of sale</span>
+          </div>
+          <button type="button" className="rail-close" onClick={() => setIsSidebarOpen(false)} aria-label="Close menu">×</button>
         </div>
 
-        <div className="sidebar-section">
-          <label className="role-label">Active Shop</label>
-          <select className="role-select" value={activeShopOwnerUid} onChange={(e) => handleShopSwitch(e.target.value)}>
+        <label className="rail-shop">
+          <span>Shop</span>
+          <select className="role-select" value={activeShopOwnerUid} onChange={(e) => handleShopSwitch(e.target.value)} aria-label="Active shop">
             {availableShops.map((s) => (
               <option key={s.ownerUid} value={s.ownerUid}>
-                {truncateShopName(s.shopName, 22)} · {roleLabels[s.role]}
+                {truncateShopName(s.shopName, 18)} · {roleLabels[s.role]}
               </option>
             ))}
           </select>
-        </div>
+        </label>
 
-        <button type="button" className={`sell-launch${view === 'sales' ? ' active' : ''}`} onClick={() => { setView('sales'); setIsSidebarOpen(false); }}>
+        <button type="button" className={`sell-launch${view === 'sales' ? ' active' : ''}`} onClick={() => { setView('sales'); setIsSidebarOpen(false); }} aria-current={view === 'sales' ? 'page' : undefined}>
+          <NavGlyph name="register" />
           <span>Register</span>
           <small>Take a sale</small>
         </button>
 
-        <nav className="sidebar-nav">
-          <div className="nav-group-label">Counter</div>
-          {canOpenSetup && (
-            <button className="nav-button" type="button" onClick={() => { openSetup(); setIsSidebarOpen(false); }}>
-              <span className="nav-icon" aria-hidden="true">⚑</span><span>Shop setup</span>
-            </button>
-          )}
-          <button className={`nav-button ${view === 'dashboard' ? 'active' : ''}`} onClick={() => { setView('dashboard'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">◫</span><span>Today</span></button>
-          <button className={`nav-button ${view === 'sales_history' ? 'active' : ''}`} onClick={() => { setView('sales_history'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">≡</span><span>Sales</span></button>
-          <button className={`nav-button ${view === 'customers' ? 'active' : ''}`} onClick={() => { setView('customers'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">☺</span><span>Customers</span></button>
+        <nav className="sidebar-nav" aria-label="Shop">
+          <div className="nav-group">
+            <h3>Counter</h3>
+            {canOpenSetup && (
+              <button className="nav-button" type="button" onClick={() => { openSetup(); setIsSidebarOpen(false); }}>
+                <span className="nav-icon"><NavGlyph name="setup" /></span>
+                <span>Shop setup</span>
+                {setupGaps.length > 0 && <em className="nav-dot"><span className="sr-only">Needs a look</span></em>}
+              </button>
+            )}
+            <button className={`nav-button${view === 'dashboard' ? ' active' : ''}`} type="button" aria-current={view === 'dashboard' ? 'page' : undefined} onClick={() => { setView('dashboard'); setIsSidebarOpen(false); }}><span className="nav-icon"><NavGlyph name="today" /></span><span>Today</span></button>
+            <button className={`nav-button${view === 'sales_history' ? ' active' : ''}`} type="button" aria-current={view === 'sales_history' ? 'page' : undefined} onClick={() => { setView('sales_history'); setIsSidebarOpen(false); }}><span className="nav-icon"><NavGlyph name="sales" /></span><span>Sales</span></button>
+            <button className={`nav-button${view === 'customers' ? ' active' : ''}`} type="button" aria-current={view === 'customers' ? 'page' : undefined} onClick={() => { setView('customers'); setIsSidebarOpen(false); }}><span className="nav-icon"><NavGlyph name="customers" /></span><span>Customers</span></button>
+          </div>
 
-          <div className="nav-group-label">Stock</div>
-          <button className={`nav-button ${view === 'products' ? 'active' : ''}`} onClick={() => { setView('products'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">□</span><span>Products</span></button>
-          <button className={`nav-button ${view === 'categories' ? 'active' : ''}`} onClick={() => { setView('categories'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">▣</span><span>Categories</span></button>
-          <button className={`nav-button ${view === 'services' ? 'active' : ''}`} onClick={() => { setView('services'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">✦</span><span>Services</span></button>
+          <div className="nav-group">
+            <h3>Stock</h3>
+            <button className={`nav-button${view === 'products' ? ' active' : ''}`} type="button" aria-current={view === 'products' ? 'page' : undefined} onClick={() => { setView('products'); setIsSidebarOpen(false); }}><span className="nav-icon"><NavGlyph name="products" /></span><span>Products</span></button>
+            <button className={`nav-button${view === 'categories' ? ' active' : ''}`} type="button" aria-current={view === 'categories' ? 'page' : undefined} onClick={() => { setView('categories'); setIsSidebarOpen(false); }}><span className="nav-icon"><NavGlyph name="categories" /></span><span>Categories</span></button>
+            <button className={`nav-button${view === 'services' ? ' active' : ''}`} type="button" aria-current={view === 'services' ? 'page' : undefined} onClick={() => { setView('services'); setIsSidebarOpen(false); }}><span className="nav-icon"><NavGlyph name="services" /></span><span>Services</span></button>
+          </div>
 
-          <div className="nav-group-label">Books</div>
-          <button className={`nav-button ${view === 'expenses' ? 'active' : ''}`} onClick={() => { setView('expenses'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">−</span><span>Expenses</span></button>
-          <button className={`nav-button ${view === 'reports' ? 'active' : ''}`} onClick={() => { setView('reports'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">▤</span><span>Reports</span></button>
-          <button className={`nav-button ${view === 'accounts' ? 'active' : ''}`} onClick={() => { setView('accounts'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">⌁</span><span>Accounts</span></button>
+          <div className="nav-group">
+            <h3>Books</h3>
+            <button className={`nav-button${view === 'expenses' ? ' active' : ''}`} type="button" aria-current={view === 'expenses' ? 'page' : undefined} onClick={() => { setView('expenses'); setIsSidebarOpen(false); }}><span className="nav-icon"><NavGlyph name="expenses" /></span><span>Expenses</span></button>
+            <button className={`nav-button${view === 'reports' ? ' active' : ''}`} type="button" aria-current={view === 'reports' ? 'page' : undefined} onClick={() => { setView('reports'); setIsSidebarOpen(false); }}><span className="nav-icon"><NavGlyph name="reports" /></span><span>Reports</span></button>
+            <button className={`nav-button${view === 'accounts' ? ' active' : ''}`} type="button" aria-current={view === 'accounts' ? 'page' : undefined} onClick={() => { setView('accounts'); setIsSidebarOpen(false); }}><span className="nav-icon"><NavGlyph name="accounts" /></span><span>Accounts</span></button>
+          </div>
 
-          <div className="nav-group-label">Shop</div>
-          <button className={`nav-button ${view === 'users' ? 'active' : ''}`} onClick={() => { setView('users'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">◎</span><span>Staff</span></button>
-          <button className={`nav-button ${view === 'activity_logs' ? 'active' : ''}`} onClick={() => { setView('activity_logs'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">⌘</span><span>Activity</span></button>
-          {isShopOwner && <button className={`nav-button ${view === 'settings' ? 'active' : ''}`} onClick={() => { setView('settings'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">⚙</span><span>Settings</span></button>}
+          <div className="nav-group">
+            <h3>Shop</h3>
+            <button className={`nav-button${view === 'users' ? ' active' : ''}`} type="button" aria-current={view === 'users' ? 'page' : undefined} onClick={() => { setView('users'); setIsSidebarOpen(false); }}><span className="nav-icon"><NavGlyph name="staff" /></span><span>Staff</span></button>
+            <button className={`nav-button${view === 'activity_logs' ? ' active' : ''}`} type="button" aria-current={view === 'activity_logs' ? 'page' : undefined} onClick={() => { setView('activity_logs'); setIsSidebarOpen(false); }}><span className="nav-icon"><NavGlyph name="activity" /></span><span>Activity</span></button>
+            {isShopOwner && <button className={`nav-button${view === 'settings' ? ' active' : ''}`} type="button" aria-current={view === 'settings' ? 'page' : undefined} onClick={() => { setView('settings'); setIsSidebarOpen(false); }}><span className="nav-icon"><NavGlyph name="settings" /></span><span>Settings</span></button>}
+          </div>
         </nav>
 
         <div className="sidebar-footer">
-          <button className="user-chip" onClick={() => setView('profile')}>
+          <button className={`user-chip${view === 'profile' ? ' active' : ''}`} type="button" onClick={() => { setView('profile'); setIsSidebarOpen(false); }}>
             <span className="user-avatar" aria-hidden="true">{(authUser.displayName || authUser.email || 'U').trim().charAt(0).toUpperCase()}</span>
             <span className="user-chip-text">
-              <strong>{authUser.displayName}</strong>
-              <small>{authUser.email}</small>
+              <strong>{authUser.displayName || 'Account'}</strong>
+              <small>{roleLabels[role]}</small>
             </span>
           </button>
-          <button className="logout-button" onClick={handleLogout}>Sign Out</button>
+          <button className="logout-button" type="button" onClick={handleLogout}>Sign out</button>
         </div>
 
         {notification && (
