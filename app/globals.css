@@ -2776,7 +2776,8 @@ button.primary:hover, .dashboard-refresh-btn:hover:not(:disabled) { box-shadow: 
 .setup-pill.is-complete { background: #e7f6ee; color: #176e4e; }
 .setup-pill.is-action_required { background: #fff4e5; color: #9a5b00; }
 .setup-pill.is-in_progress { background: #e8f1ff; color: #1f6feb; }
-.setup-banner { margin: 0 0 0.6rem; padding: 0.45rem 0.6rem; border-radius: 8px; background: #fff4e5; color: #9a5b00; font-weight: 750; text-align: center; }
+.setup-banner { margin: 0 0 0.6rem; padding: 0.45rem 0.6rem; border-radius: 8px; background: #fff4e5; color: #9a5b00; font-weight: 750; text-align: center; display: flex; justify-content: center; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+.setup-banner .edit-btn { background: #fff; }
 @media (max-width: 900px) {
   .setup-layout, .setup-grid, .setup-choices { grid-template-columns: 1fr; }
   .setup-rail { position: static; }
