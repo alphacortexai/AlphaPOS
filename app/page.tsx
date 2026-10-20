@@ -3058,17 +3058,19 @@ export default function Page() {
   if (loading) return <div className="auth-container"><div className="status">Loading AlphaPOS...</div></div>;
   if (!authUser) {
     return (
-      <div className="auth-container">
+      <div className="auth-container auth-split">
+        <section className="auth-stage" aria-label="A shop counter">
+          <img src="/pos-counter.jpg" alt="A shop counter with a point-of-sale screen, a receipt printer, and a barcode scanner" />
+          <div className="auth-stage-copy">
+            <strong>The counter for the whole sale</strong>
+            <span>Scan the item, take the payment, and hand over the receipt.</span>
+          </div>
+        </section>
+        <div className="auth-panel">
         <div className="auth-card">
           <span className="auth-badge">Retail counter</span>
           <h1>AlphaPOS</h1>
           <p>Create a shop, or sign in to the one you already run.</p>
-          <ul className="auth-highlights">
-            <li>Barcode register with hold, split payment, and change</li>
-            <li>Tax, cash drawer, returns, and customer accounts</li>
-            <li>Inventory, expenses, staff, and branch reporting</li>
-            <li>Shop setup stays in the menu after the shop is created</li>
-          </ul>
           {signInNotice && <p className="auth-local-note">{signInNotice}</p>}
           {invitedEmail && <p className="auth-local-note">This invite is for {invitedEmail}. Sign in with Google using that address.</p>}
           {replaceShopName ? (
@@ -3102,6 +3104,13 @@ export default function Page() {
               </div>
             </>
           )}
+          <ul className="auth-highlights">
+            <li>Barcode register with hold, split payment, and change</li>
+            <li>Tax, cash drawer, returns, and customer accounts</li>
+            <li>Inventory, expenses, staff, and branch reporting</li>
+            <li>Shop setup stays in the menu after the shop is created</li>
+          </ul>
+        </div>
         </div>
       </div>
     );
