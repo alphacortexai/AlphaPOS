@@ -1,45 +1,27 @@
 import { getAuth, isSignInWithEmailLink, signInWithEmailLink, type Auth } from 'firebase/auth';
-import { firebaseApp, firebaseConfig } from '../../lib.firebase';
+import { firebaseApp } from '../../lib.firebase';
 
 const EMAIL_FOR_SIGN_IN = 'emailForSignIn';
 const INVITE_SHOP = 'alphapos.inviteShop';
 
 let emailLinkAttempt: Promise<void> | null = null;
 
-export const createStaffInviteLink = async (email: string, shopOwnerUid: string) => {
+export const createStaffInviteLink = (email: string, shopOwnerUid: string) => {
   const normalized = email.trim().toLowerCase();
   const url = new URL(window.location.pathname || '/', window.location.origin);
   url.searchParams.set('email', normalized);
   url.searchParams.set('shop', shopOwnerUid);
-  const appLink = url.toString();
-  if (!firebaseApp || !firebaseConfig.apiKey) return { link: appLink, directSignIn: false };
-  try {
-    const response = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${firebaseConfig.apiKey}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal: AbortSignal.timeout(8000),
-      body: JSON.stringify({
-        requestType: 'EMAIL_SIGNIN',
-        email: normalized,
-        continueUrl: appLink,
-        canHandleCodeInApp: true,
-        returnOobLink: true,
-      }),
-    });
-    const payload = await response.json().catch(() => null) as { oobLink?: string } | null;
-    if (response.ok && typeof payload?.oobLink === 'string' && payload.oobLink.startsWith('https://')) {
-      return { link: payload.oobLink, directSignIn: true };
-    }
-  } catch {
-    // The shop still emails the app link through Resend.
-  }
-  return { link: appLink, directSignIn: false };
+  return { link: url.toString(), directSignIn: false };
 };
 
 export const staffSignInError = (error: unknown) => {
   const code = typeof error === 'object' && error && 'code' in error ? String((error as { code: string }).code) : '';
-  if (code === 'alphapos/no-firebase') return 'This browser-only counter cannot email anyone. Connect Firebase, then send the sign-in link again.';
-  if (error instanceof Error && error.message) return error.message;
+  const message = error instanceof Error ? error.message : '';
+  if (code === 'auth/quota-exceeded' || /quota-exceeded|daily quota/i.test(message)) {
+    return 'Firebase has used its daily allowance of sign-in emails. Open the shop invite from the shop address and sign in with Google using that same email. The Firebase allowance resets tomorrow.';
+  }
+  if (code === 'alphapos/no-firebase') return 'This browser-only counter cannot email anyone. Connect Firebase, then send the invite again.';
+  if (message) return message;
   return 'The sign-in email could not be sent.';
 };
 
