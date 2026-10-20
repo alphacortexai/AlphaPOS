@@ -8,8 +8,8 @@ import RegisterDesk from '../components/pos/RegisterDesk';
 import ReceiptDialog from '../components/pos/ReceiptDialog';
 import ReturnDialog, { type ReturnableLine } from '../components/pos/ReturnDialog';
 import { LOCAL_OPERATOR_ID, readLocalShop, writeLocalShop } from '../lib/pos/localShop';
-import { buildSalesDigest, claimSalesEmailSend, defaultSalesEmailSettings, finishSalesEmailSend, normalizeSalesEmailSettings, previousSalesPeriod, type SalesDigest, type SalesEmailSettings } from '../lib/pos/salesEmail';
-import { completeEmailLinkSignIn, rememberInviteFromUrl, sendStaffSignInLink, staffSignInError, takeInvitedShopId } from '../lib/pos/staffInvite';
+import { beginSalesEmailSend, buildSalesDigest, defaultSalesEmailSettings, finishSalesEmailSend, normalizeSalesEmailSettings, previousSalesPeriod, type SalesDigest, type SalesEmailSettings } from '../lib/pos/salesEmail';
+import { completeEmailLinkSignIn, createStaffInviteLink, rememberInviteFromUrl, staffSignInError, takeInvitedShopId } from '../lib/pos/staffInvite';
 import {
   customerAccountBalance,
   defaultReceiptSettings,
@@ -301,6 +301,7 @@ export default function Page() {
   const [settingsTab, setSettingsTab] = useState<'shop' | 'branches' | 'time' | 'accounts' | 'backup' | 'tax' | 'receipt' | 'email'>('shop');
   const [salesEmailSettings, setSalesEmailSettings] = useState<SalesEmailSettings>(defaultSalesEmailSettings);
   const [signInNotice, setSignInNotice] = useState('');
+  const [invitedEmail, setInvitedEmail] = useState('');
   const [sendingSalesEmail, setSendingSalesEmail] = useState(false);
   const [recipientDraft, setRecipientDraft] = useState('');
   const recipientInputRef = useRef<HTMLInputElement>(null);
@@ -344,6 +345,13 @@ export default function Page() {
       setNotification(null);
     }, duration);
   };
+  const showNotificationRef = useRef(showNotification);
+  showNotificationRef.current = showNotification;
+
+  useEffect(() => {
+    const emailFromLink = new URLSearchParams(window.location.search).get('email') || '';
+    if (emailFromLink.includes('@')) setInvitedEmail(emailFromLink.trim().toLowerCase());
+  }, []);
 
   // Firebase Auth Setup
   useEffect(() => {
@@ -665,6 +673,7 @@ export default function Page() {
     if (!firebaseApp) return;
     const auth = getAuth(firebaseApp);
     const provider = new GoogleAuthProvider();
+    if (invitedEmail) provider.setCustomParameters({ login_hint: invitedEmail });
     try {
       await signInWithPopup(auth, provider);
       setStatus('Logged in successfully!');
@@ -1454,42 +1463,43 @@ export default function Page() {
 
   const emailStaffSignInLink = async (email: string, staffRole: Role) => {
     await saveShopMembership(email, staffRole);
+    if (!firebaseApp || !authUser || authUser.uid === LOCAL_OPERATOR_ID) {
+      throw new Error('Sign in with Firebase before emailing a staff link. This browser-only counter cannot send email.');
+    }
     const shopName = availableShops.find((shop) => shop.ownerUid === activeShopOwnerUid)?.shopName || 'My Shop';
-    const link = new URL(window.location.pathname || '/', window.location.origin);
-    link.searchParams.set('email', email.trim().toLowerCase());
-    link.searchParams.set('shop', activeShopOwnerUid);
-    let firebaseFailure = '';
+    const idToken = await getAuth(firebaseApp).currentUser?.getIdToken();
+    if (!idToken) throw new Error('Sign in again before sending email.');
+    const inviteLink = await createStaffInviteLink(email, activeShopOwnerUid);
+    const response = await fetch('/api/email/invite', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        idToken,
+        email,
+        roleLabel: roleLabels[staffRole],
+        shopName,
+        link: inviteLink.link,
+        directSignIn: inviteLink.directSignIn,
+      }),
+    });
+    const raw = await response.text();
+    let payload: { ok?: boolean; reason?: string; error?: string } = {};
     try {
-      await sendStaffSignInLink(email, activeShopOwnerUid);
-    } catch (error) {
-      firebaseFailure = staffSignInError(error);
+      payload = raw ? JSON.parse(raw) as { ok?: boolean; reason?: string; error?: string } : {};
+    } catch {
+      payload = { error: 'The invite server failed before it could answer. Try again in a moment.' };
     }
-    let shopEmailSent = false;
-    if (firebaseFailure && firebaseApp && authUser && authUser.uid !== LOCAL_OPERATOR_ID) {
-      const idToken = await getAuth(firebaseApp).currentUser?.getIdToken().catch(() => '');
-      if (idToken) {
-        const response = await fetch('/api/email/invite', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ idToken, email, roleLabel: roleLabels[staffRole], shopName, link: link.toString() }),
-        }).catch(() => null);
-        const payload = await response?.json().catch(() => null) as { ok?: boolean } | null;
-        shopEmailSent = !!payload?.ok;
+    if (!response.ok || !payload.ok) {
+      if (payload.reason === 'not_configured') {
+        throw new Error('Staff email is not set up on the server yet. Add RESEND_API_KEY and EMAIL_FROM, then try again.');
       }
+      throw new Error(payload.error || 'The invite email could not be sent.');
     }
-    if (!firebaseFailure) {
-      const message = `Sign-in email sent to ${email}. They open the link to enter as ${roleLabels[staffRole]}.`;
-      setStatus(message);
-      showNotification(message, 'success', 5000);
-      return;
-    }
-    if (shopEmailSent) {
-      const message = `Invite emailed to ${email} for ${roleLabels[staffRole]}. They open the link and sign in with that address.`;
-      setStatus(message);
-      showNotification(message, 'success', 6000);
-      return;
-    }
-    throw Object.assign(new Error(firebaseFailure), { code: 'alphapos/firebase' });
+    const message = inviteLink.directSignIn
+      ? `Sign-in email sent to ${email}. They open the link to enter as ${roleLabels[staffRole]}.`
+      : `Invite emailed to ${email}. They open the link and sign in with Google using that address as ${roleLabels[staffRole]}.`;
+    setStatus(message);
+    showNotification(message, 'success', 6000);
   };
 
   const saveUser = async (e: React.FormEvent) => {
@@ -1532,20 +1542,25 @@ export default function Page() {
   };
 
   const deliverSalesReport = useCallback(async (manual: boolean) => {
+    const notify = (message: string, type: 'success' | 'error' | 'info' = 'info', duration = 3000) => {
+      showNotificationRef.current(message, type, duration);
+    };
     if (salesEmailSettings.cadence === 'off') {
-      if (manual) showNotification('Choose daily, weekly, or monthly first.', 'info');
+      if (manual) notify('Choose daily, weekly, or monthly first.', 'info');
       return;
     }
+    if (!manual && !hasLoadedUserDataRef.current) return;
     if (!firebaseApp || !authUser || authUser.uid === LOCAL_OPERATOR_ID) {
-      if (manual) showNotification('Sign in with Firebase before emailing a sales report. This browser-only counter cannot send email.', 'error', 6000);
+      if (manual) notify('Sign in with Firebase before emailing a sales report. This browser-only counter cannot send email.', 'error', 6000);
       return;
     }
     if (!(isShopOwner || role === 'admin')) return;
     const period = previousSalesPeriod(salesEmailSettings.cadence, new Date(), shopTimeSettings.timezoneOffsetMinutes);
     if (!manual && salesEmailSettings.lastSentKey === period.key) return;
     const claimKey = `${activeShopOwnerUid}:${period.key}`;
-    if (!manual && !claimSalesEmailSend(claimKey)) return;
+    if (!beginSalesEmailSend(claimKey, manual)) return;
     setSendingSalesEmail(true);
+    const stop = (result: 'sent' | 'blocked' | 'failed') => finishSalesEmailSend(claimKey, result);
     try {
       const digest: SalesDigest = buildSalesDigest(currentShop?.shopName || 'My Shop', salesEmailSettings.cadence, period, sales, expenses);
       const idToken = await getAuth(firebaseApp).currentUser?.getIdToken();
@@ -1555,29 +1570,38 @@ export default function Page() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ idToken, recipients: salesEmailSettings.recipients, digest }),
       });
-      const payload = await response.json() as { ok?: boolean; reason?: string; error?: string };
+      const raw = await response.text();
+      let payload: { ok?: boolean; reason?: string; error?: string } = {};
+      try {
+        payload = raw ? JSON.parse(raw) as { ok?: boolean; reason?: string; error?: string } : {};
+      } catch {
+        payload = { error: 'The sales email server failed before it could answer. Try again in a moment.' };
+      }
       if (payload.ok) {
         setSalesEmailSettings((prev) => ({ ...prev, lastSentKey: period.key }));
-        finishSalesEmailSend(claimKey, 'sent');
+        stop('sent');
         const message = `Sales email sent for ${period.label}.`;
         setStatus(message);
-        if (manual) showNotification(message, 'success', 5000);
+        if (manual) notify(message, 'success', 5000);
         return;
       }
+      stop(manual ? 'failed' : 'blocked');
+      if (!manual) return;
       if (payload.reason === 'not_configured') {
-        finishSalesEmailSend(claimKey, manual ? 'failed' : 'blocked');
-        if (manual) showNotification('Sales email is not set up on the server yet. Add RESEND_API_KEY and EMAIL_FROM, then try again.', 'error', 7000);
+        notify('Sales email is not set up on the server yet. Add RESEND_API_KEY and EMAIL_FROM, then try again.', 'error', 7000);
         return;
       }
-      finishSalesEmailSend(claimKey, 'failed');
-      if (manual) showNotification(payload.error || 'The sales email could not be sent.', 'error', 6000);
+      notify(payload.error || 'The sales email could not be sent.', 'error', 8000);
     } catch (error) {
-      finishSalesEmailSend(claimKey, 'failed');
-      if (manual) showNotification(error instanceof Error ? error.message : 'The sales email could not be sent.', 'error', 6000);
+      stop(manual ? 'failed' : 'blocked');
+      if (manual) notify(error instanceof Error ? error.message : 'The sales email could not be sent.', 'error', 6000);
     } finally {
       setSendingSalesEmail(false);
     }
-  }, [activeShopOwnerUid, authUser, currentShop?.shopName, expenses, isShopOwner, role, sales, salesEmailSettings, shopTimeSettings.timezoneOffsetMinutes, showNotification]);
+  }, [activeShopOwnerUid, authUser, currentShop?.shopName, expenses, isShopOwner, role, sales, salesEmailSettings, shopTimeSettings.timezoneOffsetMinutes]);
+
+  const deliverSalesReportRef = useRef(deliverSalesReport);
+  deliverSalesReportRef.current = deliverSalesReport;
 
   useEffect(() => {
     if (document.activeElement === recipientInputRef.current) return;
@@ -1585,9 +1609,9 @@ export default function Page() {
   }, [salesEmailSettings.recipients]);
 
   useEffect(() => {
-    if (!hasLoadedUserDataRef.current || salesEmailSettings.cadence === 'off') return;
-    void deliverSalesReport(false);
-  }, [deliverSalesReport, salesEmailSettings.cadence]);
+    if (salesEmailSettings.cadence === 'off') return;
+    void deliverSalesReportRef.current(false);
+  }, [salesEmailSettings.cadence, salesEmailSettings.lastSentKey, authUser, activeShopOwnerUid, role, isShopOwner, shopTimeSettings.timezoneOffsetMinutes]);
 
   const addProductToCart = (productId: string, silent = false) => {
     const product = products.find(p => p.id === productId);
@@ -2480,10 +2504,11 @@ export default function Page() {
             <li>Google sign-in for shared shops, or this device when Firebase is not configured</li>
           </ul>
           {signInNotice && <p className="auth-local-note">{signInNotice}</p>}
+          {invitedEmail && <p className="auth-local-note">This invite is for {invitedEmail}. Sign in with Google using that address.</p>}
           {firebaseApp ? (
             <>
               <button className="primary" style={{ width: '100%', padding: '1rem' }} onClick={handleLogin}>Sign in with Google</button>
-              <p className="auth-local-note">Invited staff can open the sign-in link in their email, or use Google with that same address.</p>
+              <p className="auth-local-note">Invited staff open the link in their email, then sign in with Google using that same address.</p>
             </>
           ) : (
             <>
@@ -3458,7 +3483,7 @@ export default function Page() {
             
             {canManageUsers ? (
               <>
-                <p className="section-lead">Invite someone by email. AlphaPOS emails that address a sign-in link, and opening it enters the shop as the role you chose. They can also use Google with the same address.</p>
+                <p className="section-lead">Invite someone by email. AlphaPOS sends the link from the shop address. They open it and sign in with Google using that same address, as the role you chose.</p>
                 {/* Staff Summary */}
                 {users.length > 0 && (
                   <div className="kpi-grid">
@@ -3907,7 +3932,7 @@ export default function Page() {
                     />
                   </label>
                 </div>
-                <p className="muted-copy">Your sign-in email is always included. Add up to five more addresses, separated by commas. Reports need RESEND_API_KEY and EMAIL_FROM on the server.</p>
+                <p className="muted-copy">Your sign-in email is always included. Add up to five more addresses, separated by commas. Reports need RESEND_API_KEY and EMAIL_FROM on the server. EMAIL_FROM has to be an address on a domain that shows Verified in Resend, such as AlphaPOS &lt;reports@yourshop.com&gt;.</p>
                 {salesEmailSettings.lastSentKey && <p className="muted-copy">Last report marked sent: {salesEmailSettings.lastSentKey}</p>}
                 <button type="button" className="primary" disabled={sendingSalesEmail || salesEmailSettings.cadence === 'off'} onClick={() => { void deliverSalesReport(true); }}>
                   {sendingSalesEmail ? 'Sending…' : 'Send the latest report'}
@@ -4387,7 +4412,7 @@ export default function Page() {
                       <span>Email Address</span>
                       <input type="email" value={userForm.email} onChange={(e) => setUserForm({ ...userForm, email: e.target.value })} required />
                     </label>
-                    {!userForm.id && <p className="muted-copy form-span">We email this address a link. They sign in with that link, or with Google, and open the shop as {roleLabels[userForm.role]}.</p>}
+                    {!userForm.id && <p className="muted-copy form-span">We email this address a link from the shop. They open it and sign in with Google using that same address as {roleLabels[userForm.role]}.</p>}
                     <label className="field">
                       <span>Role</span>
                       <select value={userForm.role} onChange={(e) => setUserForm({ ...userForm, role: e.target.value as Role })} required>
@@ -4408,7 +4433,7 @@ export default function Page() {
                 </div>
                 <div className="modal-footer">
                   <button type="button" className="edit-btn" onClick={() => setShowUserModal(false)}>Cancel</button>
-                  <button type="submit" className="primary">{userForm.id ? 'Update' : 'Email sign-in link'}</button>
+                  <button type="submit" className="primary">{userForm.id ? 'Update' : 'Send invite email'}</button>
                 </div>
               </form>
             </div>

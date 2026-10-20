@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { cleanEmailFrom, explainResendFailure, resendFailureStatus } from '../../../../lib/email/resendError';
 import { staffInviteHtml, staffInviteSubject, staffInviteText } from '../../../../lib/email/staffInviteMessage';
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -17,7 +18,7 @@ const callerEmail = async (idToken: string) => {
 };
 
 export async function POST(request: Request) {
-  let body: { idToken?: unknown; email?: unknown; roleLabel?: unknown; shopName?: unknown; link?: unknown };
+  let body: { idToken?: unknown; email?: unknown; roleLabel?: unknown; shopName?: unknown; link?: unknown; directSignIn?: unknown };
   try {
     body = await request.json();
   } catch {
@@ -30,30 +31,35 @@ export async function POST(request: Request) {
   const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
   const roleLabel = typeof body.roleLabel === 'string' ? body.roleLabel.slice(0, 40) : '';
   const shopName = typeof body.shopName === 'string' ? body.shopName.slice(0, 80) : '';
-  const link = typeof body.link === 'string' ? body.link.slice(0, 500) : '';
-  if (!emailPattern.test(email) || !roleLabel || !shopName || !(link.startsWith('https://') || link.startsWith('http://'))) {
+  const link = typeof body.link === 'string' ? body.link.trim() : '';
+  if (!emailPattern.test(email) || !roleLabel || !shopName || link.length > 4000 || !(link.startsWith('https://') || link.startsWith('http://'))) {
     return NextResponse.json({ ok: false, error: 'The invite is incomplete.' }, { status: 400 });
   }
 
-  const apiKey = process.env.RESEND_API_KEY;
-  const from = process.env.EMAIL_FROM;
+  const apiKey = process.env.RESEND_API_KEY?.trim();
+  const from = cleanEmailFrom(process.env.EMAIL_FROM);
   if (!apiKey || !from) return NextResponse.json({ ok: false, reason: 'not_configured' }, { status: 503 });
 
-  const invite = { email, roleLabel, shopName, link };
-  const response = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      from,
-      to: [email],
-      subject: staffInviteSubject(invite),
-      html: staffInviteHtml(invite),
-      text: staffInviteText(invite),
-    }),
-  });
+  const invite = { email, roleLabel, shopName, link, directSignIn: body.directSignIn === true };
+  let response: Response;
+  try {
+    response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        from,
+        to: [email],
+        subject: staffInviteSubject(invite),
+        html: staffInviteHtml(invite),
+        text: staffInviteText(invite),
+      }),
+    });
+  } catch {
+    return NextResponse.json({ ok: false, error: 'The email service could not be reached. Try again in a moment.' }, { status: 502 });
+  }
   if (!response.ok) {
     const detail = await response.text();
-    return NextResponse.json({ ok: false, error: detail.slice(0, 180) || 'The email service rejected the invite.' }, { status: 502 });
+    return NextResponse.json({ ok: false, error: explainResendFailure(response.status, detail) }, { status: resendFailureStatus(response.status) });
   }
   return NextResponse.json({ ok: true });
 }
