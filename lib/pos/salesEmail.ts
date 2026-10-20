@@ -27,18 +27,18 @@ export const defaultSalesEmailSettings: SalesEmailSettings = {
 const inflightSalesEmails = new Set<string>();
 const blockedSalesEmails = new Set<string>();
 
-export const claimSalesEmailSend = (key: string) => {
+export const beginSalesEmailSend = (key: string, manual: boolean) => {
+  if (manual) blockedSalesEmails.delete(key);
   if (inflightSalesEmails.has(key) || blockedSalesEmails.has(key)) return false;
   inflightSalesEmails.add(key);
   return true;
 };
 
+export const claimSalesEmailSend = (key: string) => beginSalesEmailSend(key, false);
+
 export const finishSalesEmailSend = (key: string, result: 'sent' | 'blocked' | 'failed') => {
-  if (result === 'failed') inflightSalesEmails.delete(key);
-  if (result === 'blocked') {
-    inflightSalesEmails.delete(key);
-    blockedSalesEmails.add(key);
-  }
+  inflightSalesEmails.delete(key);
+  if (result === 'blocked') blockedSalesEmails.add(key);
 };
 
 export const normalizeSalesEmailSettings = (value: unknown): SalesEmailSettings => {

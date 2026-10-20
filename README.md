@@ -28,7 +28,7 @@ This app now reads either **Next.js** or **Vite-style** public env names:
 
 If all five values are present, Firebase is initialized automatically.
 
-Staff invites send a Firebase email sign-in link to the address you enter. Enable the **Email link** provider in Firebase Authentication, and add this site under Authorized domains. The person opens that link, or signs in with Google using the same address, and the shop opens with the role you saved (cashier, manager, admin, or stock).
+Staff invites email a sign-in link. In Firebase Authentication, open Sign-in method → Email/Password and turn on both **Email/Password** and **Email link (passwordless sign-in)**, then Save. Also add this site under Authentication → Settings → Authorized domains. The person opens that link, or signs in with Google using the same address, and the shop opens with the role you saved.
 
 Sales emails (daily, weekly, or monthly) are sent with [Resend](https://resend.com) when `RESEND_API_KEY` and `EMAIL_FROM` are set. AlphaPOS sends the previous completed period the next time an owner or admin opens the shop. It does not send while the app is closed.
 
