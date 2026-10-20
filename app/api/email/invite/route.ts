@@ -18,7 +18,7 @@ const callerEmail = async (idToken: string) => {
 };
 
 export async function POST(request: Request) {
-  let body: { idToken?: unknown; email?: unknown; roleLabel?: unknown; shopName?: unknown; link?: unknown };
+  let body: { idToken?: unknown; email?: unknown; roleLabel?: unknown; shopName?: unknown; link?: unknown; directSignIn?: unknown };
   try {
     body = await request.json();
   } catch {
@@ -31,8 +31,8 @@ export async function POST(request: Request) {
   const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
   const roleLabel = typeof body.roleLabel === 'string' ? body.roleLabel.slice(0, 40) : '';
   const shopName = typeof body.shopName === 'string' ? body.shopName.slice(0, 80) : '';
-  const link = typeof body.link === 'string' ? body.link.slice(0, 500) : '';
-  if (!emailPattern.test(email) || !roleLabel || !shopName || !(link.startsWith('https://') || link.startsWith('http://'))) {
+  const link = typeof body.link === 'string' ? body.link.trim() : '';
+  if (!emailPattern.test(email) || !roleLabel || !shopName || link.length > 4000 || !(link.startsWith('https://') || link.startsWith('http://'))) {
     return NextResponse.json({ ok: false, error: 'The invite is incomplete.' }, { status: 400 });
   }
 
@@ -40,7 +40,7 @@ export async function POST(request: Request) {
   const from = cleanEmailFrom(process.env.EMAIL_FROM);
   if (!apiKey || !from) return NextResponse.json({ ok: false, reason: 'not_configured' }, { status: 503 });
 
-  const invite = { email, roleLabel, shopName, link };
+  const invite = { email, roleLabel, shopName, link, directSignIn: body.directSignIn === true };
   let response: Response;
   try {
     response = await fetch('https://api.resend.com/emails', {
