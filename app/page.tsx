@@ -5,10 +5,12 @@ import { firebaseApp } from '../lib.firebase';
 import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
 import { collection, deleteDoc, doc, getDoc, getDocs, getFirestore, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
 import CategorySelect from '../components/pos/CategorySelect';
+import OnboardingWizard, { SetupChecklist, type OnboardingSave } from '../components/pos/OnboardingWizard';
 import RegisterDesk from '../components/pos/RegisterDesk';
 import ReceiptDialog from '../components/pos/ReceiptDialog';
 import ReturnDialog, { type ReturnableLine } from '../components/pos/ReturnDialog';
 import { categoryIncludes, categoryPath, categoryTree, ensureCategoryPath, LOW_STOCK_UNITS, nextSku, parentWouldCycle, parseProductCsv, prepareShopCatalog, reservedProductCodes, type CatalogCategory } from '../lib/pos/catalog';
+import { buildChecklist, countryByCode, defaultBusinessProfile, defaultBusinessSetup, defaultOnboardingProgress, formatShopMoney, normalizeBusinessProfile, normalizeBusinessSetup, normalizeOnboardingProgress, shouldAutoOpenOnboarding, taxSettingsFromSetup, type BusinessProfile, type BusinessSetup, type OnboardingProgress } from '../lib/pos/onboarding';
 import { LOCAL_OPERATOR_ID, readLocalShop, writeLocalShop } from '../lib/pos/localShop';
 import { beginSalesEmailSend, buildSalesDigest, defaultSalesEmailSettings, finishSalesEmailSend, normalizeSalesEmailSettings, previousSalesPeriod, type SalesDigest, type SalesEmailSettings } from '../lib/pos/salesEmail';
 import { completeEmailLinkSignIn, createStaffInviteLink, rememberInviteFromUrl, staffSignInError, takeInvitedShopId } from '../lib/pos/staffInvite';
@@ -40,7 +42,7 @@ import {
 } from '../lib/pos/retail';
 
 type SessionUser = { uid: string; email: string | null; displayName: string | null };
-type Role = 'shop_owner' | 'admin' | 'manager' | 'cashier' | 'stock';
+type Role = 'shop_owner' | 'admin' | 'manager' | 'cashier' | 'stock' | 'accountant';
 type View = 'dashboard' | 'sales_history' | 'products' | 'sales' | 'services' | 'expenses' | 'users' | 'branches' | 'reports' | 'settings' | 'accounts' | 'profile' | 'activity_logs' | 'customers' | 'categories';
 type DashboardPeriod = 'daily' | 'weekly' | 'monthly' | 'yearly';
 type InsightTrendRange = 7 | 14 | 30 | 60 | 100;
@@ -58,9 +60,9 @@ type AuditStamp = {
   updatedByEmail?: string;
 };
 
-type Product = { id: string; name: string; branchId: string; stock: number; purchasePrice: number; salePrice: number; sku?: string; barcode?: string; category?: string; categoryId?: string } & AuditStamp;
+type Product = { id: string; name: string; branchId: string; stock: number; purchasePrice: number; salePrice: number; sku?: string; barcode?: string; category?: string; categoryId?: string; reorderAt?: number } & AuditStamp;
 type ServiceType = 'direct_cost' | 'shared_cost';
-type Service = { id: string; name: string; branchId: string; salePrice: number; serviceType: ServiceType; directCost: number; monthlySharedCost: number; expenseGroupId?: string; category?: string; categoryId?: string } & AuditStamp;
+type Service = { id: string; name: string; branchId: string; salePrice: number; serviceType: ServiceType; directCost: number; monthlySharedCost: number; expenseGroupId?: string; category?: string; categoryId?: string; durationMinutes?: number } & AuditStamp;
 type Sale = {
   id: string;
   type: 'product' | 'service';
@@ -81,6 +83,7 @@ type Sale = {
   discountAmount?: number;
   receiptNumber?: string;
   saleKind?: 'sale' | 'return';
+  practice?: boolean;
   returnOfTransactionId?: string;
   tenders?: Tender[];
   cashSessionId?: string;
@@ -123,6 +126,9 @@ type ShopBackupPayload = {
     receiptSettings?: ReceiptSettings;
     salesEmailSettings?: SalesEmailSettings;
     categories?: CatalogCategory[];
+    businessProfile?: BusinessProfile;
+    businessSetup?: BusinessSetup;
+    onboarding?: OnboardingProgress;
   };
 };
 type StockMovementReason = 'sale' | 'opening_stock' | 'restock' | 'count_correction' | 'damaged' | 'customer_return' | 'branch_transfer' | 'product_removed';
@@ -187,7 +193,7 @@ const removeUndefinedDeep = <T,>(value: T): T => {
 };
 
 const emptyCheckout = { customerName: '', customerPhone: '', paymentMethod: 'cash' as PaymentMethod, paymentReference: '' };
-const roleLabels: Record<Role, string> = { shop_owner: 'Owner', admin: 'Admin', manager: 'Manager', cashier: 'Cashier', stock: 'Stock' };
+const roleLabels: Record<Role, string> = { shop_owner: 'Owner', admin: 'Admin', manager: 'Manager', cashier: 'Cashier', stock: 'Stock', accountant: 'Accountant' };
 
 function heatLevel(revenue: number, max: number) {
   if (revenue <= 0 || max <= 0) return 0;
@@ -249,6 +255,10 @@ export default function Page() {
   const [cashSessions, setCashSessions] = useState<CashSession[]>([]);
   const [taxSettings, setTaxSettings] = useState<TaxSettings>(defaultTaxSettings);
   const [receiptSettings, setReceiptSettings] = useState<ReceiptSettings>(defaultReceiptSettings);
+  const [businessProfile, setBusinessProfile] = useState<BusinessProfile>(() => defaultBusinessProfile());
+  const [businessSetup, setBusinessSetup] = useState<BusinessSetup>(() => defaultBusinessSetup());
+  const [onboarding, setOnboarding] = useState<OnboardingProgress>(() => defaultOnboardingProgress());
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [cartDiscount, setCartDiscount] = useState<CartDiscount>({ mode: 'none', value: 0 });
   const [activeReceipt, setActiveReceipt] = useState<ReceiptModel | null>(null);
   const [returnTransactionId, setReturnTransactionId] = useState('');
@@ -330,7 +340,7 @@ export default function Page() {
     return item.unitPrice;
   }, []);
   const db = firebaseApp ? getFirestore(firebaseApp) : null;
-  const formatUGX = (value: number) => `UGX ${new Intl.NumberFormat('en-UG', { maximumFractionDigits: 0 }).format(Math.round(value))}`;
+  const formatUGX = (value: number) => formatShopMoney(value, businessProfile.currency || 'UGX');
   const ensureDefaultCashAccount = useCallback((existingAccounts: Account[]) => {
     const normalized = existingAccounts.map((account) => ({ ...account, openingBalance: Number.isFinite(account.openingBalance) ? account.openingBalance : 0 }));
     const existingCash = normalized.find((account) => account.name.trim().toLowerCase() === 'cash');
@@ -429,6 +439,26 @@ export default function Page() {
         setProducts(prepared.products);
         setServices(prepared.services);
       };
+      const applyBusinessState = (data: Record<string, unknown> | undefined, shopName: string, productCount: number, serviceCount: number, saleCount: number, shopRole: Role) => {
+        const localCounter = authUser.uid === LOCAL_OPERATOR_ID;
+        const nextProfile = normalizeBusinessProfile(
+          data?.businessProfile,
+          shopName,
+          localCounter ? '' : (authUser.displayName || ''),
+          localCounter ? '' : (authUser.email || ''),
+        );
+        const nextSetup = normalizeBusinessSetup(data?.businessSetup, nextProfile);
+        const nextProgress = normalizeOnboardingProgress(data?.onboarding);
+        setBusinessProfile(nextProfile);
+        setBusinessSetup(nextSetup);
+        setOnboarding(nextProgress);
+        const canGuide = shopRole === 'shop_owner' || shopRole === 'admin';
+        if (canGuide && nextProgress.startedAt && !nextProgress.completedAt) setView('dashboard');
+        if (canGuide && shouldAutoOpenOnboarding(nextProgress, { products: productCount, services: serviceCount, sales: saleCount })) {
+          setOnboardingOpen(true);
+          setView('dashboard');
+        }
+      };
       if (authUser.uid === LOCAL_OPERATOR_ID) {
         try {
           const data = readLocalShop();
@@ -444,9 +474,11 @@ export default function Page() {
             setUsers([]);
             setActivityLogs([]);
             setAccounts(ensureDefaultCashAccount([]));
-            setShopTimeSettings({ timezoneOffsetMinutes: 0, dayStartTime: '00:00' });
+            const freshProfile = defaultBusinessProfile(authUser.displayName || '', authUser.email || '');
+            setShopTimeSettings({ timezoneOffsetMinutes: countryByCode(freshProfile.countryCode).offset, dayStartTime: '00:00' });
             applyRetailCollections();
             setSalesEmailSettings(defaultSalesEmailSettings);
+            applyBusinessState(undefined, shopName, 0, 0, 0, 'shop_owner');
           } else {
             setBranches(Array.isArray(data.branches) ? data.branches as Branch[] : []);
             applyCatalog(data.categories, Array.isArray(data.products) ? data.products as Product[] : [], Array.isArray(data.services) ? data.services as Service[] : []);
@@ -462,6 +494,7 @@ export default function Page() {
               dayStartTime: typeof time?.dayStartTime === 'string' ? time.dayStartTime : '00:00',
             });
             applyRetailCollections(data);
+            applyBusinessState(data, shopName, Array.isArray(data.products) ? data.products.length : 0, Array.isArray(data.services) ? data.services.length : 0, Array.isArray(data.sales) ? (data.sales as Sale[]).filter((sale) => !sale.practice).length : 0, 'shop_owner');
           }
           setRole('shop_owner');
           hasLoadedUserDataRef.current = true;
@@ -508,10 +541,12 @@ export default function Page() {
           setUsers([]);
           setActivityLogs([]);
           applyRetailCollections();
-          setRole(selectedShop?.role || 'shop_owner');
+          const freshRole = selectedShop?.role || 'shop_owner';
+          applyBusinessState(undefined, selectedShop?.shopName || 'My Shop', 0, 0, 0, freshRole);
+          setRole(freshRole);
           hasLoadedUserDataRef.current = true;
           isSwitchingShopRef.current = false;
-          setStatus(`Viewing ${selectedShop?.shopName || 'selected shop'} as ${roleLabels[selectedShop?.role || role]}.`);
+          setStatus(`Viewing ${selectedShop?.shopName || 'selected shop'} as ${roleLabels[freshRole]}.`);
           return true;
         }
         const data = snap.data();
@@ -530,6 +565,8 @@ export default function Page() {
         setActivityLogs(Array.isArray(data.activityLogs) ? data.activityLogs : []);
         applyRetailCollections(data as Record<string, unknown>);
         const storedShopName = typeof data.shopName === 'string' ? data.shopName.trim() : '';
+        const loadedRole = selectedShop?.role || (data.role as Role) || 'shop_owner';
+        applyBusinessState(data as Record<string, unknown>, storedShopName || selectedShop?.shopName || 'My Shop', Array.isArray(data.products) ? data.products.length : 0, Array.isArray(data.services) ? data.services.length : 0, Array.isArray(data.sales) ? (data.sales as Sale[]).filter((sale) => !sale.practice).length : 0, loadedRole);
         if (storedShopName && selectedShopOwnerUid === authUser.uid) {
           memberships[0] = { ...memberships[0], shopName: storedShopName };
           setAvailableShops([...memberships]);
@@ -660,6 +697,9 @@ export default function Page() {
           taxSettings,
           receiptSettings,
           salesEmailSettings,
+          businessProfile,
+          businessSetup,
+          onboarding,
         };
         if (authUser.uid === LOCAL_OPERATOR_ID) {
           writeLocalShop(removeUndefinedDeep(shopPayload));
@@ -676,7 +716,7 @@ export default function Page() {
       }
     };
     void saveUserData();
-  }, [activeShopOwnerUid, authUser, db, role, branches, products, services, categories, sales, expenses, expenseGroups, users, activityLogs, shopTimeSettings, accounts, customers, heldTickets, cashSessions, taxSettings, receiptSettings, salesEmailSettings, currentShop?.shopName]);
+  }, [activeShopOwnerUid, authUser, db, role, branches, products, services, categories, sales, expenses, expenseGroups, users, activityLogs, shopTimeSettings, accounts, customers, heldTickets, cashSessions, taxSettings, receiptSettings, salesEmailSettings, businessProfile, businessSetup, onboarding, currentShop?.shopName]);
 
   const startLocalCounter = () => {
     hasLoadedUserDataRef.current = false;
@@ -733,6 +773,10 @@ export default function Page() {
     setCashSessions([]);
     setTaxSettings(defaultTaxSettings);
     setReceiptSettings(defaultReceiptSettings);
+    setBusinessProfile(defaultBusinessProfile());
+    setBusinessSetup(defaultBusinessSetup());
+    setOnboarding(defaultOnboardingProgress());
+    setOnboardingOpen(false);
     setCartDiscount({ mode: 'none', value: 0 });
     setBranchForm({ name: '', location: '', id: '' });
     setProductForm({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0, sku: '', barcode: '', categoryId: '' });
@@ -823,6 +867,7 @@ export default function Page() {
     }
 
     const periodSales = sales.filter(s => {
+      if (s.practice) return false;
       const d = new Date(s.createdAt);
       return d >= start && d < end;
     });
@@ -900,8 +945,8 @@ export default function Page() {
 
   // Product & Service Chart Data
   const chartData = useMemo(() => {
-    const productSales = sales.filter(s => s.type === 'product');
-    const serviceSales = sales.filter(s => s.type === 'service');
+    const productSales = sales.filter(s => s.type === 'product' && !s.practice);
+    const serviceSales = sales.filter(s => s.type === 'service' && !s.practice);
 
     // Group by item name
     const productMap: { [key: string]: { qty: number; revenue: number; count: number } } = {};
@@ -930,6 +975,7 @@ export default function Page() {
     const itemMap = new Map<string, { name: string; type: 'product' | 'service'; qty: number; revenue: number }>();
 
     sales.forEach((sale) => {
+      if (sale.practice) return;
       const key = `${sale.type}:${sale.itemName}`;
       if (!itemMap.has(key)) {
         itemMap.set(key, { name: sale.itemName, type: sale.type, qty: 0, revenue: 0 });
@@ -954,6 +1000,7 @@ export default function Page() {
     const trendMap = new Map(trendDays.map((item) => [item.date, item]));
 
     sales.forEach((sale) => {
+      if (sale.practice) return;
       const key = new Date(sale.createdAt).toISOString().slice(0, 10);
       const bucket = trendMap.get(key);
       if (bucket) bucket.revenue += sale.amount;
@@ -983,6 +1030,7 @@ export default function Page() {
     });
     const byDay = new Map(days.map((day) => [day.key, day]));
     sales.forEach((sale) => {
+      if (sale.practice) return;
       const bucket = byDay.get(new Date(sale.createdAt).toISOString().slice(0, 10));
       if (bucket) bucket.revenue += sale.amount;
     });
@@ -1000,6 +1048,7 @@ export default function Page() {
     });
     const byDay = new Map(days.map((day) => [day.key, day]));
     sales.forEach((sale) => {
+      if (sale.practice) return;
       const bucket = byDay.get(new Date(sale.createdAt).toISOString().slice(0, 10));
       if (bucket) bucket.revenue += sale.amount;
     });
@@ -1016,7 +1065,7 @@ export default function Page() {
       const matchesCategory = categoryIncludes(categories, productCategoryFilter, p.categoryId);
       const matchesStock = 
         productStockFilter === 'all' ? true :
-        productStockFilter === 'low' ? p.stock < 10 && p.stock > 0 :
+        productStockFilter === 'low' ? p.stock < (p.reorderAt ?? LOW_STOCK_UNITS) && p.stock > 0 :
         p.stock === 0;
       return matchesSearch && matchesBranch && matchesCategory && matchesStock;
     });
@@ -1055,7 +1104,7 @@ export default function Page() {
   }), [categories, inventoryByCategory, reportCategoryId]);
 
   const lowStockProducts = useMemo(() => products
-    .filter((product) => product.stock < LOW_STOCK_UNITS && categoryIncludes(categories, reportCategoryId, product.categoryId))
+    .filter((product) => product.stock < (product.reorderAt ?? LOW_STOCK_UNITS) && categoryIncludes(categories, reportCategoryId, product.categoryId))
     .sort((a, b) => a.stock - b.stock || a.name.localeCompare(b.name)), [categories, products, reportCategoryId]);
 
   const salesByCategory = useMemo(() => {
@@ -1064,6 +1113,7 @@ export default function Page() {
     start.setHours(0, 0, 0, 0);
     const rows = new Map<string, { label: string; qty: number; revenue: number; profit: number }>();
     sales.forEach((sale) => {
+      if (sale.practice) return;
       if (new Date(sale.createdAt) < start) return;
       const categoryId = categoryOfSale(sale);
       if (!categoryIncludes(categories, reportCategoryId, categoryId)) return;
@@ -1240,6 +1290,10 @@ export default function Page() {
 
   const saveProduct = (e: React.FormEvent) => {
     e.preventDefault();
+    if (role === 'accountant') {
+      showNotification('An accountant can view reports. An owner or manager can change products.', 'error');
+      return;
+    }
     const name = productForm.name.trim();
     const barcode = productForm.barcode.trim();
     if (!name || !productForm.branchId) return;
@@ -1324,18 +1378,13 @@ export default function Page() {
     logActivity('delete_category', `Deleted category "${name}"`);
   };
 
-  const importProductFile = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    event.target.value = '';
-    if (!file) return;
+  const importCatalogueCsv = (text: string, source = 'a product file') => {
     if (!canManageCatalog) {
-      showNotification('Only an owner, admin, manager, or stock lead can import products.', 'error');
-      return;
+      return { imported: 0, skipped: 0, errors: ['Only an owner, admin, manager, or stock lead can import products.'] };
     }
-    const parsed = parseProductCsv(await file.text());
+    const parsed = parseProductCsv(text);
     if (parsed.rows.length === 0) {
-      showNotification(parsed.errors[0] || 'No products were found in that file.', 'error', 6000);
-      return;
+      return { imported: 0, skipped: 0, errors: parsed.errors.length > 0 ? parsed.errors : ['No products were found in that file.'] };
     }
     let nextCategories = categories;
     const reserved = new Set(reservedProductCodes(products).map((code) => code.toUpperCase()));
@@ -1381,10 +1430,125 @@ export default function Page() {
       created.forEach((product) => {
         if (product.stock > 0) logStockMovement(product, product.stock, 'opening_stock', 'Imported from a product file');
       });
-      logActivity('import_products', `Imported ${created.length} product${created.length === 1 ? '' : 's'} from ${file.name}`);
+      logActivity('import_products', `Imported ${created.length} product${created.length === 1 ? '' : 's'} from ${source}`);
     }
-    const problem = parsed.errors.length > 0 ? ` ${parsed.errors.length} row${parsed.errors.length === 1 ? '' : 's'} skipped for missing names.` : '';
-    showNotification(`Imported ${created.length} product${created.length === 1 ? '' : 's'}.${skipped ? ` ${skipped} already existed or had no branch.` : ''}${problem}`, created.length > 0 ? 'success' : 'error', 7000);
+    const errors = [...parsed.errors];
+    if (skipped > 0) errors.push(`${skipped} row${skipped === 1 ? '' : 's'} skipped because the SKU, barcode, or branch was not usable.`);
+    return { imported: created.length, skipped, errors };
+  };
+
+  const importProductFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    const result = importCatalogueCsv(await file.text(), file.name);
+    const problem = result.errors.length > 0 ? ` ${result.errors[0]}` : '';
+    showNotification(`Imported ${result.imported} product${result.imported === 1 ? '' : 's'}.${problem}`, result.imported > 0 ? 'success' : 'error', 7000);
+  };
+
+  const applyOnboarding = (save: OnboardingSave) => {
+    const profile = { ...save.profile, currency: save.profile.currency.toUpperCase() };
+    setBusinessProfile(profile);
+    setBusinessSetup(save.setup);
+    setOnboarding(save.progress);
+    setTaxSettings(taxSettingsFromSetup(save.setup));
+    setShopTimeSettings((prev) => ({ ...prev, timezoneOffsetMinutes: countryByCode(profile.countryCode).offset }));
+    const address = [profile.address, profile.city].filter(Boolean).join(', ');
+    setReceiptSettings((prev) => ({
+      ...prev,
+      header: profile.displayName || prev.header,
+      phone: profile.phone || prev.phone,
+      address: address || prev.address,
+      footer: save.receiptFooter?.trim() || prev.footer,
+    }));
+    if (profile.displayName) {
+      setAvailableShops((prev) => prev.map((shop) => shop.ownerUid === activeShopOwnerUid ? { ...shop, shopName: profile.displayName } : shop));
+    }
+    if (save.branchName?.trim()) {
+      setBranches((prev) => {
+        const main = prev[0]
+          ? { ...prev[0], name: save.branchName!.trim(), location: save.branchLocation?.trim() || prev[0].location }
+          : { id: crypto.randomUUID(), name: save.branchName!.trim(), location: save.branchLocation?.trim() || '', createdAt: new Date().toISOString() };
+        const rest = prev.slice(1);
+        const secondName = save.secondBranchName?.trim();
+        const withSecond = secondName && !rest.some((branch) => branch.name.toLowerCase() === secondName.toLowerCase()) && main.name.toLowerCase() !== secondName.toLowerCase()
+          ? [...rest, { id: crypto.randomUUID(), name: secondName, location: save.secondBranchLocation?.trim() || '', createdAt: new Date().toISOString() }]
+          : rest;
+        return [main, ...withSecond];
+      });
+    }
+    if (save.item) {
+      const branchId = branches[0]?.id;
+      if (branchId) {
+        const categoryName = save.item.categoryName.trim();
+        const ensured = categoryName ? ensureCategoryPath(categories, categoryName) : { categories, id: '' };
+        if (categoryName) setCategories(ensured.categories);
+        if (save.item.kind === 'product') {
+          if (!products.some((product) => product.name.toLowerCase() === save.item!.name.toLowerCase())) {
+            const sku = nextSku(save.item.name, reservedProductCodes(products));
+            const product: Product = {
+              id: crypto.randomUUID(),
+              name: save.item.name,
+              branchId,
+              stock: save.setup.trackInventory ? save.item.stock : 0,
+              purchasePrice: save.item.cost,
+              salePrice: save.item.price,
+              sku,
+              reorderAt: save.item.reorderAt > 0 ? save.item.reorderAt : LOW_STOCK_UNITS,
+              ...(ensured.id ? { categoryId: ensured.id, category: categoryPath(ensured.categories, ensured.id) } : {}),
+              ...currentAuditStamp(),
+            };
+            setProducts((prev) => [...prev, product]);
+            if (product.stock > 0) logStockMovement(product, product.stock, 'opening_stock', 'Opening stock from shop setup');
+            logActivity('add_inventory', `Added product "${product.name}" during setup`);
+          }
+        } else if (!services.some((service) => service.name.toLowerCase() === save.item!.name.toLowerCase())) {
+          const service: Service = {
+            id: crypto.randomUUID(),
+            name: save.item.name,
+            branchId,
+            salePrice: save.item.price,
+            serviceType: 'direct_cost',
+            directCost: save.item.cost,
+            monthlySharedCost: 0,
+            ...(save.item.durationMinutes > 0 ? { durationMinutes: save.item.durationMinutes } : {}),
+            ...(ensured.id ? { categoryId: ensured.id, category: categoryPath(ensured.categories, ensured.id) } : {}),
+            ...currentAuditStamp(),
+          };
+          setServices((prev) => [...prev, service]);
+          logActivity('add_service', `Added service "${service.name}" during setup`);
+        }
+      }
+    }
+    if (save.staff && !users.some((user) => user.email.toLowerCase() === save.staff!.email.toLowerCase())) {
+      const email = save.staff.email.trim();
+      const staffUser: StaffUser = {
+        id: crypto.randomUUID(),
+        name: save.staff.name.trim(),
+        email,
+        role: save.staff.role,
+        branchId: branches[0]?.id || '',
+        ...currentAuditStamp(),
+      };
+      setUsers((prev) => [...prev, staffUser]);
+      logActivity('add_user', `Invited ${email} as ${roleLabels[save.staff.role]} during setup`);
+      if (authUser?.uid === LOCAL_OPERATOR_ID) {
+        showNotification(`${email} is saved on this counter. Email invites need Google sign-in.`, 'info', 6000);
+      } else {
+        void emailStaffSignInLink(email, save.staff.role).catch((error) => {
+          showNotification(`Staff saved. The sign-in email was not sent. ${staffSignInError(error)}`, 'info', 7000);
+        });
+      }
+    }
+    if (save.finish) {
+      logActivity('complete_onboarding', `Finished shop setup for "${profile.displayName || 'the shop'}"`);
+      setOnboardingOpen(false);
+      setView('dashboard');
+      showNotification('The shop is ready. Practice sales stay out of the sales totals.', 'success', 6000);
+    } else if (save.pause) {
+      setOnboardingOpen(false);
+      setView('dashboard');
+    }
   };
 
   const saveService = (e: React.FormEvent) => {
@@ -1418,6 +1582,10 @@ export default function Page() {
   };
 
   const sellService = (serviceId: string) => {
+    if (role === 'accountant') {
+      showNotification('An accountant can view reports. A cashier, manager, or owner records the sale.', 'error');
+      return;
+    }
     const service = services.find((item) => item.id === serviceId);
     if (!service) {
       showNotification('Service not found', 'error');
@@ -1472,6 +1640,7 @@ export default function Page() {
     const balances = new Map<string, number>();
     accounts.forEach((account) => balances.set(account.id, account.openingBalance || 0));
     sales.forEach((sale) => {
+      if (sale.practice) return;
       const accountId = sale.accountId || defaultAccount?.id;
       if (!accountId) return;
       balances.set(accountId, (balances.get(accountId) || 0) + sale.amount);
@@ -1967,10 +2136,71 @@ export default function Page() {
       total,
       tenders,
       showTax: receiptSettings.showTax && (taxSettings.enabled || tax !== 0),
-      note: kind === 'return'
+      practice: Boolean(first?.practice),
+      note: first?.practice
+        ? 'PRACTICE SALE. No money was collected. This is not a customer sale.'
+        : kind === 'return'
         ? 'Credit note. The original sale was not changed.'
         : 'Non-cash tenders are recorded only and were not processed by AlphaPOS.',
     };
+  };
+
+  const runPracticeSale = () => {
+    const product = businessSetup.sells !== 'services' ? products[0] : undefined;
+    const service = product ? undefined : services[0];
+    const itemName = product?.name || service?.name;
+    if (!itemName || (!product && !service)) {
+      showNotification('Add a product or service before the practice sale.', 'error');
+      return;
+    }
+    const branchId = product?.branchId || service?.branchId || branches[0]?.id || '';
+    const amount = product?.salePrice || service?.salePrice || 0;
+    const categoryId = product?.categoryId || service?.categoryId;
+    const practiceSale: Sale = {
+      id: crypto.randomUUID(),
+      type: product ? 'product' : 'service',
+      itemName,
+      itemId: product?.id || service?.id,
+      ...(categoryId ? { categoryId } : {}),
+      branchId,
+      qty: 1,
+      amount,
+      cost: product?.purchasePrice || service?.directCost || 0,
+      practice: true,
+      paymentMethod: 'cash',
+      paymentReference: 'PRACTICE',
+      receiptNumber: `PRACTICE-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}`,
+      saleKind: 'sale',
+      ...currentAuditStamp(),
+    };
+    setSales((prev) => [practiceSale, ...prev.filter((sale) => !sale.practice)]);
+    if (product && businessSetup.trackInventory) {
+      setProducts((prev) => prev.map((item) => item.id === product.id ? { ...item, stock: Math.max(0, item.stock - 1) } : item));
+      logStockMovement(product, -1, 'sale', 'Practice sale. No money was collected.');
+    }
+    setOnboarding((prev) => ({ ...prev, practiceSaleId: practiceSale.id }));
+    setActiveReceipt(receiptFromSaleLines([practiceSale]));
+    logActivity('practice_sale', `Practice sale for "${itemName}". No payment was collected.`);
+  };
+
+  const undoPracticeSale = () => {
+    const practice = sales.filter((sale) => sale.practice);
+    if (practice.length === 0) return;
+    if (businessSetup.trackInventory) {
+      setProducts((prev) => prev.map((product) => {
+        const qty = practice.filter((sale) => sale.type === 'product' && sale.itemId === product.id).reduce((sum, sale) => sum + sale.qty, 0);
+        return qty > 0 ? { ...product, stock: product.stock + qty } : product;
+      }));
+      practice.forEach((sale) => {
+        if (sale.type !== 'product') return;
+        const product = products.find((item) => item.id === sale.itemId);
+        if (product) logStockMovement(product, sale.qty, 'count_correction', 'Practice sale removed. Stock put back.');
+      });
+    }
+    setSales((prev) => prev.filter((sale) => !sale.practice));
+    setOnboarding((prev) => ({ ...prev, practiceSaleId: undefined }));
+    logActivity('practice_sale', 'Removed the practice sale.');
+    showNotification('Practice sale removed.', 'success');
   };
 
   const clearRegister = () => {
@@ -2052,6 +2282,10 @@ export default function Page() {
   };
 
   const completeRegisterSale = (tenders: Tender[]) => {
+    if (role === 'accountant') {
+      showNotification('An accountant can view reports. A cashier, manager, or owner takes payment.', 'error');
+      return;
+    }
     if (cart.length === 0) {
       showNotification('Cart is empty', 'error');
       return;
@@ -2262,6 +2496,10 @@ export default function Page() {
 
   const saveStockAdjustment = (e: React.FormEvent) => {
     e.preventDefault();
+    if (role === 'accountant' || role === 'cashier') {
+      showNotification('A stock lead, manager, or owner records stock changes.', 'error');
+      return;
+    }
     const product = products.find((item) => item.id === stockAdjustmentForm.productId);
     const quantity = Number(stockAdjustmentForm.quantity);
     const unitCostInput = stockAdjustmentForm.unitCost.trim();
@@ -2371,8 +2609,10 @@ export default function Page() {
       customerName: lines.find((line) => line.customerName)?.customerName,
       paymentMethod: lines[0].paymentMethod,
       saleKind: lines.some((line) => line.saleKind === 'return') ? 'return' as const : 'sale' as const,
+      practice: lines.some((line) => line.practice),
     })).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }, [filteredSales]);
+  const postedSales = useMemo(() => groupedSales.filter((sale) => !sale.practice), [groupedSales]);
   const salesHistoryTotalPages = Math.max(1, Math.ceil(groupedSales.length / salesHistoryPageSize));
   const paginatedSales = useMemo(() => {
     const safePage = Math.min(salesHistoryPage, salesHistoryTotalPages);
@@ -2444,9 +2684,28 @@ export default function Page() {
       setStatus('Only the shop owner or admin can delete sales.');
       return;
     }
+    const removed = sales.filter((sale) => ids.includes(sale.id));
+    const practiceLines = removed.filter((sale) => sale.practice && sale.type === 'product');
+    const practiceOnly = removed.length > 0 && removed.every((sale) => sale.practice);
+    if (practiceLines.length > 0 && businessSetup.trackInventory) {
+      setProducts((prev) => prev.map((product) => {
+        const qty = practiceLines.filter((sale) => sale.itemId === product.id).reduce((sum, sale) => sum + sale.qty, 0);
+        return qty > 0 ? { ...product, stock: product.stock + qty } : product;
+      }));
+      practiceLines.forEach((sale) => {
+        const product = products.find((item) => item.id === sale.itemId);
+        if (product) logStockMovement(product, sale.qty, 'count_correction', 'Practice sale removed. Stock put back.');
+      });
+    }
     setSales((prev) => prev.filter((sale) => !ids.includes(sale.id)));
-    logActivity('delete_sale', `Deleted ${ids.length} line(s) from a receipt. Stock was not changed.`);
-    showNotification('Receipt deleted. Stock was not changed.', 'success');
+    if (practiceOnly) setOnboarding((prev) => ({ ...prev, practiceSaleId: undefined }));
+    logActivity('delete_sale', practiceOnly ? 'Removed a practice sale.' : `Deleted ${ids.length} line(s) from a receipt. Stock was not changed.`);
+    showNotification(
+      practiceOnly
+        ? (practiceLines.length > 0 && businessSetup.trackInventory ? 'Practice sale removed. The unit was put back in stock.' : 'Practice sale removed.')
+        : 'Receipt deleted. Stock was not changed.',
+      'success',
+    );
   };
 
   const editExpense = (expense: Expense) => {
@@ -2558,6 +2817,9 @@ export default function Page() {
       receiptSettings,
       salesEmailSettings,
       categories,
+      businessProfile,
+      businessSetup,
+      onboarding,
     },
   });
 
@@ -2650,6 +2912,9 @@ export default function Page() {
         receiptSettings: restoredReceiptSettings,
         salesEmailSettings: restoredSalesEmailSettings,
         categories: restoredCatalog.categories,
+        businessProfile: normalizeBusinessProfile(parsed.data.businessProfile, restoredShopName),
+        businessSetup: normalizeBusinessSetup(parsed.data.businessSetup),
+        onboarding: normalizeOnboardingProgress(parsed.data.onboarding),
         restoredFromBackupAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       }), { merge: true });
@@ -2684,6 +2949,9 @@ export default function Page() {
       setTaxSettings(restoredTaxSettings);
       setReceiptSettings(restoredReceiptSettings);
       setSalesEmailSettings(restoredSalesEmailSettings);
+      setBusinessProfile(normalizeBusinessProfile(parsed.data.businessProfile, restoredShopName));
+      setBusinessSetup(normalizeBusinessSetup(parsed.data.businessSetup));
+      setOnboarding(normalizeOnboardingProgress(parsed.data.onboarding));
       setRole('shop_owner');
       setAvailableShops((prev) => prev.map((shop) => shop.ownerUid === activeShopOwnerUid ? { ...shop, shopName: restoredShopName, role: 'shop_owner' } : shop));
       showNotification('Backup restored successfully. Your POS data has been reuploaded.', 'success');
@@ -2693,6 +2961,20 @@ export default function Page() {
       setStatus('Backup restore failed. Please check the file and try again.');
     }
   };
+
+  const openSetup = (step?: OnboardingProgress['step']) => {
+    setOnboarding((prev) => ({ ...prev, step: step || prev.step, startedAt: prev.startedAt || new Date().toISOString(), pausedAt: undefined }));
+    setOnboardingOpen(true);
+  };
+  const setupItems = buildChecklist(businessProfile, businessSetup, onboarding, {
+    products: products.length,
+    services: services.length,
+    sales: sales.filter((sale) => !sale.practice).length,
+    branches: branches.length,
+    staff: users.length,
+    practice: sales.some((sale) => sale.practice),
+  });
+  const practiceSale = sales.find((sale) => sale.practice);
 
   const Badge = ({ value }: { value: number }) => (
     <span className={`badge ${value >= 0 ? 'badge-success' : 'badge-danger'}`}>
@@ -2853,7 +3135,7 @@ export default function Page() {
               const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
               const named = authUser.displayName && authUser.displayName !== 'Counter' ? authUser.displayName.split(' ')[0] : '';
               const periodNoun = dashboardPeriod === 'daily' ? 'today' : dashboardPeriod === 'weekly' ? 'this week' : dashboardPeriod === 'monthly' ? 'this month' : 'this year';
-              const lowStock = products.filter((product) => product.stock < 10).slice(0, 4);
+              const lowStock = products.filter((product) => product.stock < (product.reorderAt ?? LOW_STOCK_UNITS)).slice(0, 4);
               const labelEvery = insightTrendRange <= 7 ? 1 : insightTrendRange <= 14 ? 2 : insightTrendRange <= 30 ? 5 : insightTrendRange <= 60 ? 10 : 14;
               const barHeight = (value: number) => dashboardInsights.chartMax > 0 && value > 0 ? Math.max(8, (value / dashboardInsights.chartMax) * 100) : 0;
               return (
@@ -2879,6 +3161,10 @@ export default function Page() {
                       <button className="primary" onClick={() => setView('sales')}>Open register</button>
                     </div>
                   </div>
+
+                  {(onboarding.startedAt || onboarding.completedAt) && (role === 'shop_owner' || role === 'admin') && (
+                    <SetupChecklist items={setupItems} onOpen={openSetup} />
+                  )}
 
                   <div className="studio-layout">
                     <div>
@@ -3178,8 +3464,8 @@ export default function Page() {
                         </td>
                         <td>{branchMap[p.branchId]}</td>
                         <td>
-                          <span className={`badge ${p.stock === 0 ? 'badge-danger' : p.stock < 10 ? 'badge-warning' : 'badge-success'}`}>
-                            {p.stock === 0 ? 'Out' : p.stock < 10 ? `Low · ${p.stock}` : p.stock}
+                          <span className={`badge ${p.stock === 0 ? 'badge-danger' : p.stock < (p.reorderAt ?? LOW_STOCK_UNITS) ? 'badge-warning' : 'badge-success'}`}>
+                            {p.stock === 0 ? 'Out' : p.stock < (p.reorderAt ?? LOW_STOCK_UNITS) ? `Low · ${p.stock}` : p.stock}
                           </span>
                         </td>
                         <td>{formatUGX(p.purchasePrice)}</td>
@@ -3523,17 +3809,18 @@ export default function Page() {
               <div className="kpi-grid cols-3">
                 <article className="kpi">
                   <p>Receipts</p>
-                  <strong>{groupedSales.length}</strong>
+                  <strong>{postedSales.length}</strong>
                 </article>
                 <article className="kpi">
                   <p>Total</p>
-                  <strong>{formatUGX(groupedSales.reduce((sum, sale) => sum + sale.total, 0))}</strong>
+                  <strong>{formatUGX(postedSales.reduce((sum, sale) => sum + sale.total, 0))}</strong>
                 </article>
                 <article className="kpi">
                   <p>Margin</p>
-                  <strong className={groupedSales.reduce((sum, sale) => sum + sale.profit, 0) >= 0 ? 'is-positive' : 'is-negative'}>{showRegisterMargin ? formatUGX(groupedSales.reduce((sum, sale) => sum + sale.profit, 0)) : '—'}</strong>
+                  <strong className={postedSales.reduce((sum, sale) => sum + sale.profit, 0) >= 0 ? 'is-positive' : 'is-negative'}>{showRegisterMargin ? formatUGX(postedSales.reduce((sum, sale) => sum + sale.profit, 0)) : '—'}</strong>
                 </article>
               </div>
+              {postedSales.length !== groupedSales.length && <p className="setup-note">Practice sales are listed below and left out of these totals. No money was collected.</p>}
 
             <div className="table-wrap">
                 <table className="data-table">
@@ -3562,7 +3849,7 @@ export default function Page() {
                           <td>
                             <div>{saleGroup.customerName || 'Walk-in'}</div>
                             <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>
-                              {saleGroup.saleKind === 'return' ? 'Credit note · ' : ''}
+                              {saleGroup.practice ? 'Practice · ' : ''}{saleGroup.saleKind === 'return' ? 'Credit note · ' : ''}
                               {saleGroup.paymentMethod ? PAYMENT_METHOD_LABELS[saleGroup.paymentMethod] : 'Tender not recorded'}
                             </div>
                           </td>
@@ -3570,7 +3857,7 @@ export default function Page() {
                           <td style={{ color: saleGroup.profit >= 0 ? 'var(--success)' : 'var(--danger)', fontWeight: 600 }}>{showRegisterMargin ? formatUGX(saleGroup.profit) : '—'}</td>
                           <td>
                             <button className="edit-btn" onClick={() => setActiveReceipt(receiptFromSaleLines(saleGroup.lines))}>Receipt</button>
-                            {saleGroup.saleKind !== 'return' && <button className="edit-btn" onClick={() => setReturnTransactionId(saleGroup.id)}>Return</button>}
+                            {saleGroup.saleKind !== 'return' && !saleGroup.practice && <button className="edit-btn" onClick={() => setReturnTransactionId(saleGroup.id)}>Return</button>}
                             {canManageSalesAndExpenses ? (
                               <button className="delete-btn" onClick={() => deleteTransaction(saleGroup.lines.map((line) => line.id))}>Delete</button>
                             ) : null}
@@ -4029,7 +4316,7 @@ export default function Page() {
                     {reportsSalesPagination.rows.length > 0 ? reportsSalesPagination.rows.map((s) => (
                       <tr key={s.id}>
                         <td>{new Date(s.createdAt).toLocaleDateString()}</td>
-                        <td><span className="badge badge-info">{s.type}</span></td>
+                        <td><span className="badge badge-info">{s.practice ? 'practice' : s.type}</span></td>
                         <td className="cell-strong">{s.itemName}</td>
                         <td>{categoryPath(categories, categoryOfSale(s)) || 'Uncategorized'}</td>
                         <td>{branchMap[s.branchId]}</td>
@@ -4165,6 +4452,9 @@ export default function Page() {
                 </div>
                 {isShopOwner && (
                   <button className="primary" onClick={() => { setShopNameForm(currentShop?.shopName || ''); setShowSettingsModal(true); }}>Edit shop name</button>
+                )}
+                {(isShopOwner || role === 'admin') && (
+                  <button className="edit-btn" type="button" onClick={() => openSetup()}>Open shop setup</button>
                 )}
               </div>
             )}
@@ -4376,7 +4666,7 @@ export default function Page() {
                     <input value={accountForm.name} onChange={(e) => setAccountForm((prev) => ({ ...prev, name: e.target.value }))} placeholder="e.g. Mobile Money" required />
                   </label>
                   <label className="field">
-                    <span>Opening Balance (UGX)</span>
+                    <span>Opening Balance ({businessProfile.currency})</span>
                     <input type="number" value={accountForm.openingBalance} onChange={(e) => setAccountForm((prev) => ({ ...prev, openingBalance: Number(e.target.value) }))} />
                   </label>
                   <div><button type="submit" className="primary">+ Add Account</button></div>
@@ -4390,7 +4680,7 @@ export default function Page() {
                       </select>
                     </label>
                     <label className="field">
-                      <span>Top Up Amount (UGX)</span>
+                      <span>Top Up Amount ({businessProfile.currency})</span>
                       <input type="number" min={1} value={accountTopUpForm.amount} onChange={(e) => setAccountTopUpForm((prev) => ({ ...prev, amount: Number(e.target.value) }))} required />
                     </label>
                     <div><button type="submit" className="primary">+ Top Up</button></div>
@@ -4442,7 +4732,7 @@ export default function Page() {
                   <input value={accountForm.name} onChange={(e) => setAccountForm((prev) => ({ ...prev, name: e.target.value }))} placeholder="e.g. Mobile Money" required />
                 </label>
                 <label className="field">
-                  <span>Opening Balance (UGX)</span>
+                  <span>Opening Balance ({businessProfile.currency})</span>
                   <input type="number" value={accountForm.openingBalance} onChange={(e) => setAccountForm((prev) => ({ ...prev, openingBalance: Number(e.target.value) }))} />
                 </label>
                 <div><button type="submit" className="primary">+ Add Account</button></div>
@@ -4456,7 +4746,7 @@ export default function Page() {
                     </select>
                   </label>
                   <label className="field">
-                    <span>Top Up Amount (UGX)</span>
+                    <span>Top Up Amount ({businessProfile.currency})</span>
                     <input type="number" min={1} value={accountTopUpForm.amount} onChange={(e) => setAccountTopUpForm((prev) => ({ ...prev, amount: Number(e.target.value) }))} required />
                   </label>
                   <div><button type="submit" className="primary">+ Top Up</button></div>
@@ -4627,11 +4917,11 @@ export default function Page() {
                       <input type="number" min="0" step="0.01" value={productForm.stock} onChange={(e) => setProductForm({ ...productForm, stock: Number(e.target.value) })} required />
                     </label>
                     <label className="field">
-                      <span>Purchase Price (UGX)</span>
+                      <span>Purchase Price ({businessProfile.currency})</span>
                       <input type="number" min="0" step="0.01" value={productForm.purchasePrice} onChange={(e) => setProductForm({ ...productForm, purchasePrice: Number(e.target.value) })} required />
                     </label>
                     <label className="field">
-                      <span>Selling Price (UGX)</span>
+                      <span>Selling Price ({businessProfile.currency})</span>
                       <input type="number" min="0" step="0.01" value={productForm.salePrice} onChange={(e) => setProductForm({ ...productForm, salePrice: Number(e.target.value) })} required />
                     </label>
                   </div>
@@ -4769,7 +5059,7 @@ export default function Page() {
                       </select>
                     </label>
                     <label className="field">
-                      <span>Amount (UGX)</span>
+                      <span>Amount ({businessProfile.currency})</span>
                       <input type="number" value={expenseForm.amount} onChange={(e) => setExpenseForm({ ...expenseForm, amount: Number(e.target.value) })} required />
                     </label>
                   </div>
@@ -4810,6 +5100,7 @@ export default function Page() {
                         <option value="admin">Admin</option>
                         <option value="manager">Manager</option>
                         <option value="stock">Stock Manager</option>
+                        <option value="accountant">Accountant — reports only</option>
                       </select>
                     </label>
                     <label className="field">
@@ -4886,6 +5177,25 @@ export default function Page() {
         )}
 
       </main>
+      {onboardingOpen && (role === 'shop_owner' || role === 'admin') && (
+        <OnboardingWizard
+          profile={businessProfile}
+          setup={businessSetup}
+          progress={onboarding}
+          branches={branches}
+          productCount={products.length}
+          serviceCount={services.length}
+          staffCount={users.length}
+          existingCodes={reservedProductCodes(products)}
+          practiceSale={practiceSale ? { itemName: practiceSale.itemName, amount: practiceSale.amount } : null}
+          formatMoney={formatUGX}
+          initialReceiptFooter={receiptSettings.footer}
+          onSave={applyOnboarding}
+          onPractice={runPracticeSale}
+          onUndoPractice={undoPracticeSale}
+          onImportCsv={(text) => importCatalogueCsv(text, 'shop setup')}
+        />
+      )}
     </div>
   );
 }
