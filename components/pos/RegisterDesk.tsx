@@ -12,7 +12,8 @@ export type RegisterProduct = {
   salePrice: number;
   sku?: string;
   barcode?: string;
-  category?: string;
+  categoryId?: string;
+  categoryLabel?: string;
 };
 
 export type RegisterService = {
@@ -20,6 +21,13 @@ export type RegisterService = {
   name: string;
   branchId: string;
   salePrice: number;
+  categoryId?: string;
+  categoryLabel?: string;
+};
+
+export type RegisterCategoryChoice = {
+  id: string;
+  label: string;
 };
 
 export type RegisterCartItem = {
@@ -64,6 +72,8 @@ const emptyPayment = (total: number): PaymentDraft => ({
 export default function RegisterDesk({
   products,
   services,
+  categoryChoices,
+  categoryIncludesItem,
   cart,
   customers,
   heldTickets,
@@ -96,6 +106,8 @@ export default function RegisterDesk({
 }: {
   products: RegisterProduct[];
   services: RegisterService[];
+  categoryChoices: RegisterCategoryChoice[];
+  categoryIncludesItem: (categoryId: string | undefined, selectedId: string) => boolean;
   cart: RegisterCartItem[];
   customers: Customer[];
   heldTickets: HeldTicketView[];
@@ -128,7 +140,7 @@ export default function RegisterDesk({
 }) {
   const searchRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState('');
-  const [category, setCategory] = useState('All');
+  const [category, setCategory] = useState('all');
   const [notice, setNotice] = useState('');
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [payment, setPayment] = useState<PaymentDraft>(emptyPayment(0));
@@ -140,25 +152,24 @@ export default function RegisterDesk({
   const [heldOpen, setHeldOpen] = useState(false);
   const [customerOpen, setCustomerOpen] = useState(false);
 
-  const categories = useMemo(() => {
-    const names = new Set(products.map((product) => product.category?.trim()).filter((value): value is string => Boolean(value)));
-    return ['All', ...Array.from(names).sort((a, b) => a.localeCompare(b)), ...(services.length > 0 ? ['Services'] : [])];
-  }, [products, services]);
+  useEffect(() => {
+    if (!categoryChoices.some((choice) => choice.id === category)) setCategory('all');
+  }, [category, categoryChoices]);
 
   const visibleProducts = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return products
-      .filter((product) => category === 'All' || category === product.category || (category !== 'Services' && !product.category && category === 'Uncategorized'))
-      .filter(() => category !== 'Services')
-      .filter((product) => !needle || [product.name, product.sku, product.barcode, product.category].some((value) => value?.toLowerCase().includes(needle)))
+      .filter((product) => categoryIncludesItem(product.categoryId, category))
+      .filter((product) => !needle || [product.name, product.sku, product.barcode, product.categoryLabel].some((value) => value?.toLowerCase().includes(needle)))
       .sort((a, b) => Number(a.stock <= 0) - Number(b.stock <= 0) || a.name.localeCompare(b.name));
-  }, [category, products, query]);
+  }, [category, categoryIncludesItem, products, query]);
 
   const visibleServices = useMemo(() => {
-    if (category !== 'All' && category !== 'Services') return [];
     const needle = query.trim().toLowerCase();
-    return services.filter((service) => !needle || service.name.toLowerCase().includes(needle));
-  }, [category, query, services]);
+    return services
+      .filter((service) => categoryIncludesItem(service.categoryId, category))
+      .filter((service) => !needle || [service.name, service.categoryLabel].some((value) => value?.toLowerCase().includes(needle)));
+  }, [category, categoryIncludesItem, query, services]);
 
   const customerMatches = useMemo(() => {
     const needle = customerName.trim().toLowerCase();
@@ -269,8 +280,8 @@ export default function RegisterDesk({
           </div>
         </div>
         <div className="pos-categories" role="tablist" aria-label="Product categories">
-          {categories.map((item) => (
-            <button key={item} type="button" className={item === category ? 'active' : ''} onClick={() => setCategory(item)}>{item}</button>
+          {categoryChoices.map((item) => (
+            <button key={item.id} type="button" className={item.id === category ? 'active' : ''} onClick={() => setCategory(item.id)}>{item.label}</button>
           ))}
         </div>
         {notice && <div className="pos-inline-notice">{notice}</div>}
@@ -282,7 +293,7 @@ export default function RegisterDesk({
               <button key={product.id} type="button" className={`pos-tile ${out ? 'is-out' : ''}`} disabled={out} onClick={() => onAddProduct(product.id)}>
                 <span className="pos-avatar" aria-hidden="true">{product.name.slice(0, 1).toUpperCase()}</span>
                 <span className="pos-tile-name">{product.name}</span>
-                {product.category && <span className="pos-tile-meta">{product.category}</span>}
+                {product.categoryLabel && <span className="pos-tile-meta">{product.categoryLabel}</span>}
                 <span className="pos-tile-foot">
                   <strong>{formatMoney(product.salePrice)}</strong>
                   <em className={low ? 'is-low' : ''}>{out ? 'Out' : `${product.stock} left`}</em>
@@ -295,7 +306,7 @@ export default function RegisterDesk({
             <button key={service.id} type="button" className="pos-tile is-service" onClick={() => onAddService(service.id)}>
               <span className="pos-avatar" aria-hidden="true">S</span>
               <span className="pos-tile-name">{service.name}</span>
-              <span className="pos-tile-meta">Service</span>
+              <span className="pos-tile-meta">{service.categoryLabel ? `Service · ${service.categoryLabel}` : 'Service'}</span>
               <span className="pos-tile-foot"><strong>{formatMoney(service.salePrice)}</strong></span>
             </button>
           ))}

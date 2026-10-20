@@ -4,9 +4,11 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, ty
 import { firebaseApp } from '../lib.firebase';
 import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
 import { collection, deleteDoc, doc, getDoc, getDocs, getFirestore, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
+import CategorySelect from '../components/pos/CategorySelect';
 import RegisterDesk from '../components/pos/RegisterDesk';
 import ReceiptDialog from '../components/pos/ReceiptDialog';
 import ReturnDialog, { type ReturnableLine } from '../components/pos/ReturnDialog';
+import { categoryIncludes, categoryPath, categoryTree, ensureCategoryPath, LOW_STOCK_UNITS, nextSku, parentWouldCycle, parseProductCsv, prepareShopCatalog, reservedProductCodes, type CatalogCategory } from '../lib/pos/catalog';
 import { LOCAL_OPERATOR_ID, readLocalShop, writeLocalShop } from '../lib/pos/localShop';
 import { beginSalesEmailSend, buildSalesDigest, defaultSalesEmailSettings, finishSalesEmailSend, normalizeSalesEmailSettings, previousSalesPeriod, type SalesDigest, type SalesEmailSettings } from '../lib/pos/salesEmail';
 import { completeEmailLinkSignIn, createStaffInviteLink, rememberInviteFromUrl, staffSignInError, takeInvitedShopId } from '../lib/pos/staffInvite';
@@ -39,7 +41,7 @@ import {
 
 type SessionUser = { uid: string; email: string | null; displayName: string | null };
 type Role = 'shop_owner' | 'admin' | 'manager' | 'cashier' | 'stock';
-type View = 'dashboard' | 'sales_history' | 'products' | 'sales' | 'services' | 'expenses' | 'users' | 'branches' | 'reports' | 'settings' | 'accounts' | 'profile' | 'activity_logs' | 'customers';
+type View = 'dashboard' | 'sales_history' | 'products' | 'sales' | 'services' | 'expenses' | 'users' | 'branches' | 'reports' | 'settings' | 'accounts' | 'profile' | 'activity_logs' | 'customers' | 'categories';
 type DashboardPeriod = 'daily' | 'weekly' | 'monthly' | 'yearly';
 type InsightTrendRange = 7 | 14 | 30 | 60 | 100;
 type ExpenseChartRange = 'day' | '7days' | '14days' | 'month' | '3months' | '6months' | '1year';
@@ -56,13 +58,15 @@ type AuditStamp = {
   updatedByEmail?: string;
 };
 
-type Product = { id: string; name: string; branchId: string; stock: number; purchasePrice: number; salePrice: number; sku?: string; barcode?: string; category?: string } & AuditStamp;
+type Product = { id: string; name: string; branchId: string; stock: number; purchasePrice: number; salePrice: number; sku?: string; barcode?: string; category?: string; categoryId?: string } & AuditStamp;
 type ServiceType = 'direct_cost' | 'shared_cost';
-type Service = { id: string; name: string; branchId: string; salePrice: number; serviceType: ServiceType; directCost: number; monthlySharedCost: number; expenseGroupId?: string } & AuditStamp;
+type Service = { id: string; name: string; branchId: string; salePrice: number; serviceType: ServiceType; directCost: number; monthlySharedCost: number; expenseGroupId?: string; category?: string; categoryId?: string } & AuditStamp;
 type Sale = {
   id: string;
   type: 'product' | 'service';
   itemName: string;
+  itemId?: string;
+  categoryId?: string;
   branchId: string;
   qty: number;
   amount: number;
@@ -118,6 +122,7 @@ type ShopBackupPayload = {
     taxSettings?: TaxSettings;
     receiptSettings?: ReceiptSettings;
     salesEmailSettings?: SalesEmailSettings;
+    categories?: CatalogCategory[];
   };
 };
 type StockMovementReason = 'sale' | 'opening_stock' | 'restock' | 'count_correction' | 'damaged' | 'customer_return' | 'branch_transfer' | 'product_removed';
@@ -227,9 +232,11 @@ export default function Page() {
   const isSwitchingShopRef = useRef(false);
   const notificationTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const backupFileInputRef = useRef<HTMLInputElement | null>(null);
+  const productImportRef = useRef<HTMLInputElement | null>(null);
 
   const [branches, setBranches] = useState<Branch[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  const [categories, setCategories] = useState<CatalogCategory[]>([]);
   const [services, setServices] = useState<Service[]>([]);
   const [sales, setSales] = useState<Sale[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
@@ -275,13 +282,17 @@ export default function Page() {
   const [insightTrendRange, setInsightTrendRange] = useState<InsightTrendRange>(7);
   const [productSearchQuery, setProductSearchQuery] = useState('');
   const [productBranchFilter, setProductBranchFilter] = useState('');
+  const [productCategoryFilter, setProductCategoryFilter] = useState('all');
   const [productStockFilter, setProductStockFilter] = useState<'all' | 'low' | 'out'>('all');
+  const [reportCategoryId, setReportCategoryId] = useState('all');
+  const [skuManual, setSkuManual] = useState(false);
   const [isRefreshingDashboard, setIsRefreshingDashboard] = useState(false);
 
   const [branchForm, setBranchForm] = useState({ name: '', location: '', id: '' });
-  const [productForm, setProductForm] = useState({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0, sku: '', barcode: '', category: '' });
+  const [productForm, setProductForm] = useState({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0, sku: '', barcode: '', categoryId: '' });
+  const [categoryForm, setCategoryForm] = useState({ id: '', name: '', parentId: '' });
   const [stockAdjustmentForm, setStockAdjustmentForm] = useState({ productId: '', direction: 'add' as 'add' | 'remove', quantity: 1, reason: 'restock' as Exclude<StockMovementReason, 'sale' | 'opening_stock' | 'branch_transfer'>, note: '', supplierName: '', reference: '', unitCost: '' });
-  const [serviceForm, setServiceForm] = useState({ name: '', branchId: '', amount: 0, serviceType: 'direct_cost' as ServiceType, directCost: 0, monthlySharedCost: 0, expenseGroupId: '' });
+  const [serviceForm, setServiceForm] = useState({ id: '', name: '', branchId: '', amount: 0, serviceType: 'direct_cost' as ServiceType, directCost: 0, monthlySharedCost: 0, expenseGroupId: '', categoryId: '' });
   const [saleForm, setSaleForm] = useState({ productId: '', qty: 1 });
   const [checkoutDetails, setCheckoutDetails] = useState({ customerName: '', customerPhone: '', paymentMethod: 'cash' as PaymentMethod, paymentReference: '' });
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -381,6 +392,7 @@ export default function Page() {
         setAvailableShops([]);
         setBranches([]);
         setProducts([]);
+        setCategories([]);
         setServices([]);
         setSales([]);
         setExpenses([]);
@@ -411,6 +423,12 @@ export default function Page() {
         setReceiptSettings(normalizeReceiptSettings(data?.receiptSettings));
         setSalesEmailSettings(normalizeSalesEmailSettings(data?.salesEmailSettings));
       };
+      const applyCatalog = (rawCategories: unknown, rawProducts: Product[], rawServices: Service[]) => {
+        const prepared = prepareShopCatalog(rawCategories, rawProducts, rawServices);
+        setCategories(prepared.categories);
+        setProducts(prepared.products);
+        setServices(prepared.services);
+      };
       if (authUser.uid === LOCAL_OPERATOR_ID) {
         try {
           const data = readLocalShop();
@@ -419,8 +437,7 @@ export default function Page() {
           if (!activeShopOwnerUid) setActiveShopOwnerUid(LOCAL_OPERATOR_ID);
           if (!data) {
             setBranches([{ id: crypto.randomUUID(), name: 'Main Branch', location: 'Counter', createdAt: new Date().toISOString() }]);
-            setProducts([]);
-            setServices([]);
+            applyCatalog(undefined, [], []);
             setSales([]);
             setExpenses([]);
             setExpenseGroups([]);
@@ -432,8 +449,7 @@ export default function Page() {
             setSalesEmailSettings(defaultSalesEmailSettings);
           } else {
             setBranches(Array.isArray(data.branches) ? data.branches as Branch[] : []);
-            setProducts(Array.isArray(data.products) ? data.products as Product[] : []);
-            setServices(Array.isArray(data.services) ? data.services as Service[] : []);
+            applyCatalog(data.categories, Array.isArray(data.products) ? data.products as Product[] : [], Array.isArray(data.services) ? data.services as Service[] : []);
             setSales(Array.isArray(data.sales) ? data.sales as Sale[] : []);
             setExpenses(Array.isArray(data.expenses) ? data.expenses as Expense[] : []);
             setExpenseGroups(Array.isArray(data.expenseGroups) ? data.expenseGroups as ExpenseGroup[] : []);
@@ -488,6 +504,7 @@ export default function Page() {
           const defaultCashAccount = ensureDefaultCashAccount([]);
           setAccounts(defaultCashAccount);
           setExpenseGroups([]);
+          applyCatalog(undefined, [], []);
           setUsers([]);
           setActivityLogs([]);
           applyRetailCollections();
@@ -499,8 +516,7 @@ export default function Page() {
         }
         const data = snap.data();
         setBranches(Array.isArray(data.branches) ? data.branches : []);
-        setProducts(Array.isArray(data.products) ? data.products : []);
-        setServices(Array.isArray(data.services) ? data.services : []);
+        applyCatalog(data.categories, Array.isArray(data.products) ? data.products : [], Array.isArray(data.services) ? data.services : []);
         setSales(Array.isArray(data.sales) ? data.sales : []);
         setExpenses(Array.isArray(data.expenses) ? data.expenses : []);
         setAccounts(ensureDefaultCashAccount(Array.isArray(data.accounts) ? data.accounts : []));
@@ -630,6 +646,7 @@ export default function Page() {
           branches,
           products,
           services,
+          categories,
           sales,
           expenses,
           expenseGroups,
@@ -659,7 +676,7 @@ export default function Page() {
       }
     };
     void saveUserData();
-  }, [activeShopOwnerUid, authUser, db, role, branches, products, services, sales, expenses, expenseGroups, users, activityLogs, shopTimeSettings, accounts, customers, heldTickets, cashSessions, taxSettings, receiptSettings, salesEmailSettings, currentShop?.shopName]);
+  }, [activeShopOwnerUid, authUser, db, role, branches, products, services, categories, sales, expenses, expenseGroups, users, activityLogs, shopTimeSettings, accounts, customers, heldTickets, cashSessions, taxSettings, receiptSettings, salesEmailSettings, currentShop?.shopName]);
 
   const startLocalCounter = () => {
     hasLoadedUserDataRef.current = false;
@@ -703,6 +720,7 @@ export default function Page() {
   const resetShopScopedState = () => {
     setBranches([]);
     setProducts([]);
+    setCategories([]);
     setServices([]);
     setSales([]);
     setExpenses([]);
@@ -717,10 +735,10 @@ export default function Page() {
     setReceiptSettings(defaultReceiptSettings);
     setCartDiscount({ mode: 'none', value: 0 });
     setBranchForm({ name: '', location: '', id: '' });
-    setProductForm({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0, sku: '', barcode: '', category: '' });
+    setProductForm({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0, sku: '', barcode: '', categoryId: '' });
     setStockAdjustmentForm({ productId: '', direction: 'add', quantity: 1, reason: 'restock', note: '', supplierName: '', reference: '', unitCost: '' });
     setShowStockAdjustmentModal(false);
-    setServiceForm({ name: '', branchId: '', amount: 0, serviceType: 'direct_cost', directCost: 0, monthlySharedCost: 0, expenseGroupId: '' });
+    setServiceForm({ id: '', name: '', branchId: '', amount: 0, serviceType: 'direct_cost', directCost: 0, monthlySharedCost: 0, expenseGroupId: '', categoryId: '' });
     setSaleForm({ productId: '', qty: 1 });
     setCheckoutDetails({ customerName: '', customerPhone: '', paymentMethod: 'cash', paymentReference: '' });
     setCart([]);
@@ -993,15 +1011,76 @@ export default function Page() {
   const filteredProducts = useMemo(() => {
     return products.filter(p => {
       const query = productSearchQuery.trim().toLowerCase();
-      const matchesSearch = [p.name, p.sku, p.barcode, p.category].some((value) => value?.toLowerCase().includes(query));
+      const matchesSearch = [p.name, p.sku, p.barcode, p.category, categoryPath(categories, p.categoryId)].some((value) => value?.toLowerCase().includes(query));
       const matchesBranch = !productBranchFilter || p.branchId === productBranchFilter;
+      const matchesCategory = categoryIncludes(categories, productCategoryFilter, p.categoryId);
       const matchesStock = 
         productStockFilter === 'all' ? true :
         productStockFilter === 'low' ? p.stock < 10 && p.stock > 0 :
         p.stock === 0;
-      return matchesSearch && matchesBranch && matchesStock;
+      return matchesSearch && matchesBranch && matchesCategory && matchesStock;
     });
-  }, [products, productSearchQuery, productBranchFilter, productStockFilter]);
+  }, [categories, products, productSearchQuery, productBranchFilter, productCategoryFilter, productStockFilter]);
+
+  const registerCategoryChoices = useMemo(() => {
+    const choices = [{ id: 'all', label: 'All' }, ...categoryTree(categories).map((item) => ({ id: item.category.id, label: item.label }))];
+    if (products.some((product) => !product.categoryId) || services.some((service) => !service.categoryId)) choices.push({ id: 'none', label: 'Uncategorized' });
+    return choices;
+  }, [categories, products, services]);
+
+  const categoryOfSale = useCallback((sale: Sale) => {
+    if (sale.categoryId && categories.some((category) => category.id === sale.categoryId)) return sale.categoryId;
+    if (sale.type === 'product') return (products.find((product) => product.id === sale.itemId) || products.find((product) => product.name === sale.itemName && product.branchId === sale.branchId))?.categoryId;
+    return (services.find((service) => service.id === sale.itemId) || services.find((service) => service.name === sale.itemName && service.branchId === sale.branchId))?.categoryId;
+  }, [categories, products, services]);
+
+  const inventoryByCategory = useMemo(() => {
+    const rows = new Map<string, { label: string; count: number; units: number; value: number }>();
+    products.forEach((product) => {
+      const key = product.categoryId || 'none';
+      const current = rows.get(key) || { label: categoryPath(categories, product.categoryId) || 'Uncategorized', count: 0, units: 0, value: 0 };
+      current.count += 1;
+      current.units += product.stock;
+      current.value += product.stock * product.purchasePrice;
+      rows.set(key, current);
+    });
+    return [...rows.values()].sort((a, b) => a.label.localeCompare(b.label));
+  }, [categories, products]);
+
+  const visibleInventoryByCategory = useMemo(() => inventoryByCategory.filter((row) => {
+    if (reportCategoryId === 'all') return true;
+    if (reportCategoryId === 'none') return row.label === 'Uncategorized';
+    const selected = categoryPath(categories, reportCategoryId);
+    return Boolean(selected) && (row.label === selected || row.label.startsWith(`${selected} / `));
+  }), [categories, inventoryByCategory, reportCategoryId]);
+
+  const lowStockProducts = useMemo(() => products
+    .filter((product) => product.stock < LOW_STOCK_UNITS && categoryIncludes(categories, reportCategoryId, product.categoryId))
+    .sort((a, b) => a.stock - b.stock || a.name.localeCompare(b.name)), [categories, products, reportCategoryId]);
+
+  const salesByCategory = useMemo(() => {
+    const start = new Date();
+    start.setDate(1);
+    start.setHours(0, 0, 0, 0);
+    const rows = new Map<string, { label: string; qty: number; revenue: number; profit: number }>();
+    sales.forEach((sale) => {
+      if (new Date(sale.createdAt) < start) return;
+      const categoryId = categoryOfSale(sale);
+      if (!categoryIncludes(categories, reportCategoryId, categoryId)) return;
+      const key = categoryId || 'none';
+      const current = rows.get(key) || { label: categoryPath(categories, categoryId) || 'Uncategorized', qty: 0, revenue: 0, profit: 0 };
+      current.qty += sale.qty;
+      current.revenue += sale.amount;
+      current.profit += sale.amount - sale.cost;
+      rows.set(key, current);
+    });
+    return [...rows.values()].sort((a, b) => b.revenue - a.revenue);
+  }, [categories, categoryOfSale, reportCategoryId, sales]);
+
+  const reportSales = useMemo(
+    () => sales.filter((sale) => categoryIncludes(categories, reportCategoryId, categoryOfSale(sale))),
+    [categories, categoryOfSale, reportCategoryId, sales],
+  );
 
   const recentStockMovements = useMemo(() => activityLogs
     .filter((log): log is ActivityLog & { stockMovement: StockMovementAudit } => Boolean(log.stockMovement))
@@ -1140,14 +1219,40 @@ export default function Page() {
     </>
   );
 
+  const canEditSku = role === 'shop_owner' || role === 'admin' || role === 'manager' || role === 'stock';
+  const canManageCatalog = canEditSku;
+
+  const openNewProduct = () => {
+    setSkuManual(false);
+    setProductForm({
+      id: '',
+      name: '',
+      branchId: branches[0]?.id || '',
+      stock: 0,
+      purchasePrice: 0,
+      salePrice: 0,
+      sku: nextSku('Item', reservedProductCodes(products)),
+      barcode: '',
+      categoryId: '',
+    });
+    setShowProductModal(true);
+  };
+
   const saveProduct = (e: React.FormEvent) => {
     e.preventDefault();
     const name = productForm.name.trim();
-    const sku = productForm.sku.trim().toUpperCase();
     const barcode = productForm.barcode.trim();
     if (!name || !productForm.branchId) return;
     if (!Number.isFinite(productForm.stock) || productForm.stock < 0 || !Number.isFinite(productForm.purchasePrice) || productForm.purchasePrice < 0 || !Number.isFinite(productForm.salePrice) || productForm.salePrice < 0) {
       showNotification('Enter valid non-negative stock and price values.', 'error');
+      return;
+    }
+    const previousProduct = products.find((product) => product.id === productForm.id);
+    const taken = reservedProductCodes(products, productForm.id, barcode ? [barcode] : []);
+    let sku = canEditSku ? productForm.sku.trim().toUpperCase() : (previousProduct?.sku || '');
+    if (!sku) sku = nextSku(name, taken);
+    if (barcode && sku.toLowerCase() === barcode.toLowerCase()) {
+      showNotification('The SKU and barcode need to be different.', 'error');
       return;
     }
     const identifiers = [sku, barcode].filter(Boolean).map((identifier) => identifier.toLowerCase());
@@ -1156,7 +1261,8 @@ export default function Page() {
       showNotification('That SKU or barcode is already assigned to another product.', 'error');
       return;
     }
-    const productDetails = { ...productForm, name, sku: sku || undefined, barcode: barcode || undefined, category: productForm.category.trim() || undefined };
+    const categoryId = productForm.categoryId || undefined;
+    const productDetails = { ...productForm, name, sku, barcode: barcode || undefined, categoryId, category: categoryPath(categories, categoryId) || undefined };
     if (productForm.id) {
       const previousProduct = products.find((product) => product.id === productForm.id);
       setProducts((prev) => prev.map((p) => (p.id === productForm.id ? { ...p, ...productDetails, ...updatedAuditStamp() } : p)));
@@ -1177,8 +1283,108 @@ export default function Page() {
       setStatus('Product added.');
       logActivity('add_inventory', `Added product "${name}"`);
     }
-    setProductForm({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0, sku: '', barcode: '', category: '' });
+    setProductForm({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0, sku: '', barcode: '', categoryId: '' });
+    setSkuManual(false);
     setShowProductModal(false);
+  };
+
+  const saveCategory = (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!canManageCatalog) return;
+    const name = categoryForm.name.trim();
+    if (!name) return;
+    const id = categoryForm.id || crypto.randomUUID();
+    const parentId = categoryForm.parentId;
+    if (parentWouldCycle(categories, id, parentId)) {
+      showNotification('A category cannot sit inside itself.', 'error');
+      return;
+    }
+    const duplicate = categories.some((category) => category.id !== id && category.name.toLowerCase() === name.toLowerCase() && (category.parentId || '') === parentId);
+    if (duplicate) {
+      showNotification('That category already exists there.', 'error');
+      return;
+    }
+    const next = { id, name: name.slice(0, 60), ...(parentId ? { parentId } : {}) };
+    setCategories((prev) => prev.some((category) => category.id === id) ? prev.map((category) => (category.id === id ? next : category)) : [...prev, next]);
+    setCategoryForm({ id: '', name: '', parentId: '' });
+    logActivity(categoryForm.id ? 'edit_category' : 'add_category', `${categoryForm.id ? 'Updated' : 'Added'} category "${name}"`);
+  };
+
+  const deleteCategory = (id: string) => {
+    if (categories.some((category) => category.parentId === id)) {
+      showNotification('Move or delete the categories inside this one first.', 'error');
+      return;
+    }
+    if (products.some((product) => product.categoryId === id) || services.some((service) => service.categoryId === id)) {
+      showNotification('This category is still used by a product or service.', 'error');
+      return;
+    }
+    const name = categories.find((category) => category.id === id)?.name || 'category';
+    setCategories((prev) => prev.filter((category) => category.id !== id));
+    logActivity('delete_category', `Deleted category "${name}"`);
+  };
+
+  const importProductFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    if (!canManageCatalog) {
+      showNotification('Only an owner, admin, manager, or stock lead can import products.', 'error');
+      return;
+    }
+    const parsed = parseProductCsv(await file.text());
+    if (parsed.rows.length === 0) {
+      showNotification(parsed.errors[0] || 'No products were found in that file.', 'error', 6000);
+      return;
+    }
+    let nextCategories = categories;
+    const reserved = new Set(reservedProductCodes(products).map((code) => code.toUpperCase()));
+    const created: Product[] = [];
+    let skipped = 0;
+    parsed.rows.forEach((row) => {
+      let categoryId = '';
+      if (row.categoryPath) {
+        const ensured = ensureCategoryPath(nextCategories, row.categoryPath);
+        nextCategories = ensured.categories;
+        categoryId = ensured.id;
+      }
+      const branch = branches.find((item) => item.name.toLowerCase() === row.branchName.toLowerCase()) || branches[0];
+      if (!branch) {
+        skipped += 1;
+        return;
+      }
+      let sku = row.sku;
+      if (!sku) sku = nextSku(row.name, reserved);
+      const barcodeKey = row.barcode.toUpperCase();
+      if (reserved.has(sku.toUpperCase()) || (barcodeKey && (barcodeKey === sku.toUpperCase() || reserved.has(barcodeKey)))) {
+        skipped += 1;
+        return;
+      }
+      reserved.add(sku.toUpperCase());
+      if (barcodeKey) reserved.add(barcodeKey);
+      created.push({
+        id: crypto.randomUUID(),
+        name: row.name,
+        branchId: branch.id,
+        stock: row.stock,
+        purchasePrice: row.purchasePrice,
+        salePrice: row.salePrice,
+        sku,
+        ...(row.barcode ? { barcode: row.barcode } : {}),
+        ...(categoryId ? { categoryId, category: categoryPath(nextCategories, categoryId) } : {}),
+        ...currentAuditStamp(),
+      });
+    });
+    setCategories(nextCategories);
+    if (created.length > 0) {
+      setProducts((prev) => [...prev, ...created]);
+      created.forEach((product) => {
+        if (product.stock > 0) logStockMovement(product, product.stock, 'opening_stock', 'Imported from a product file');
+      });
+      logActivity('import_products', `Imported ${created.length} product${created.length === 1 ? '' : 's'} from ${file.name}`);
+    }
+    const problem = parsed.errors.length > 0 ? ` ${parsed.errors.length} row${parsed.errors.length === 1 ? '' : 's'} skipped for missing names.` : '';
+    showNotification(`Imported ${created.length} product${created.length === 1 ? '' : 's'}.${skipped ? ` ${skipped} already existed or had no branch.` : ''}${problem}`, created.length > 0 ? 'success' : 'error', 7000);
   };
 
   const saveService = (e: React.FormEvent) => {
@@ -1187,39 +1393,28 @@ export default function Page() {
     if (serviceForm.serviceType === 'direct_cost' && serviceForm.directCost < 0) return;
     if (serviceForm.serviceType === 'shared_cost' && serviceForm.monthlySharedCost <= 0) return;
 
+    const categoryId = serviceForm.categoryId || undefined;
+    const serviceDetails = {
+      name: serviceForm.name.trim(),
+      branchId: serviceForm.branchId,
+      salePrice: serviceForm.amount,
+      serviceType: serviceForm.serviceType,
+      directCost: serviceForm.serviceType === 'direct_cost' ? serviceForm.directCost : 0,
+      monthlySharedCost: serviceForm.serviceType === 'shared_cost' ? serviceForm.monthlySharedCost : 0,
+      expenseGroupId: serviceForm.serviceType === 'shared_cost' ? (serviceForm.expenseGroupId || undefined) : undefined,
+      categoryId,
+      category: categoryPath(categories, categoryId) || undefined,
+    };
     setServices((prev) => {
-      const existing = prev.find((service) => service.name.toLowerCase() === serviceForm.name.trim().toLowerCase() && service.branchId === serviceForm.branchId);
+      const existing = prev.find((service) => service.id === serviceForm.id) || prev.find((service) => service.name.toLowerCase() === serviceDetails.name.toLowerCase() && service.branchId === serviceForm.branchId);
       if (existing) {
-        return prev.map((service) =>
-          service.id === existing.id
-            ? {
-                ...service,
-                name: serviceForm.name.trim(),
-                salePrice: serviceForm.amount,
-                serviceType: serviceForm.serviceType,
-                directCost: serviceForm.serviceType === 'direct_cost' ? serviceForm.directCost : 0,
-                monthlySharedCost: serviceForm.serviceType === 'shared_cost' ? serviceForm.monthlySharedCost : 0,
-                expenseGroupId: serviceForm.serviceType === 'shared_cost' ? (serviceForm.expenseGroupId || undefined) : undefined,
-                ...updatedAuditStamp()
-              }
-            : service
-        );
+        return prev.map((service) => (service.id === existing.id ? { ...service, ...serviceDetails, ...updatedAuditStamp() } : service));
       }
-      return [...prev, {
-        id: crypto.randomUUID(),
-        name: serviceForm.name.trim(),
-        branchId: serviceForm.branchId,
-        salePrice: serviceForm.amount,
-        serviceType: serviceForm.serviceType,
-        directCost: serviceForm.serviceType === 'direct_cost' ? serviceForm.directCost : 0,
-        monthlySharedCost: serviceForm.serviceType === 'shared_cost' ? serviceForm.monthlySharedCost : 0,
-        expenseGroupId: serviceForm.serviceType === 'shared_cost' ? (serviceForm.expenseGroupId || undefined) : undefined,
-        ...currentAuditStamp()
-      }];
+      return [...prev, { id: crypto.randomUUID(), ...serviceDetails, ...currentAuditStamp() }];
     });
 
     showNotification('Service saved successfully!', 'success');
-    setServiceForm({ name: '', branchId: '', amount: 0, serviceType: 'direct_cost', directCost: 0, monthlySharedCost: 0, expenseGroupId: '' });
+    setServiceForm({ id: '', name: '', branchId: '', amount: 0, serviceType: 'direct_cost', directCost: 0, monthlySharedCost: 0, expenseGroupId: '', categoryId: '' });
   };
 
   const sellService = (serviceId: string) => {
@@ -1244,6 +1439,8 @@ export default function Page() {
       id: crypto.randomUUID(),
       type: 'service',
       itemName: service.name,
+      itemId: service.id,
+      ...(service.categoryId ? { categoryId: service.categoryId } : {}),
       branchId: service.branchId,
       qty: 1,
       amount: serviceLine?.amount ?? service.salePrice,
@@ -1897,6 +2094,13 @@ export default function Page() {
         id: crypto.randomUUID(),
         type: item.itemType,
         itemName: item.itemName,
+        itemId: item.itemId,
+        ...(() => {
+          const categoryId = item.itemType === 'product'
+            ? products.find((product) => product.id === item.itemId)?.categoryId
+            : services.find((service) => service.id === item.itemId)?.categoryId;
+          return categoryId ? { categoryId } : {};
+        })(),
         branchId: item.branchId,
         qty: line.qty,
         amount: line.amount,
@@ -1962,6 +2166,8 @@ export default function Page() {
         id: crypto.randomUUID(),
         type: sale.type,
         itemName: sale.itemName,
+        ...(sale.itemId ? { itemId: sale.itemId } : {}),
+        ...(sale.categoryId ? { categoryId: sale.categoryId } : {}),
         branchId: sale.branchId,
         qty: -qty,
         amount,
@@ -2019,6 +2225,8 @@ export default function Page() {
       id: crypto.randomUUID(),
       type: 'product',
       itemName: p.name,
+      itemId: p.id,
+      ...(p.categoryId ? { categoryId: p.categoryId } : {}),
       branchId: p.branchId,
       qty: saleForm.qty,
       amount: quickLine?.amount ?? p.salePrice * saleForm.qty,
@@ -2214,7 +2422,7 @@ export default function Page() {
   const servicesPagination = paginateData(services, servicesPage, setServicesPage);
   const expensesPagination = paginateData(filteredExpenses, expensesPage, setExpensesPage);
   const usersPagination = paginateData(users, usersPage, setUsersPage);
-  const reportsSalesPagination = paginateData(sales, reportsSalesPage, setReportsSalesPage);
+  const reportsSalesPagination = paginateData(reportSales, reportsSalesPage, setReportsSalesPage);
   const activityLogsPagination = paginateData(activityLogs, activityLogsPage, setActivityLogsPage);
 
   const PaginationControls = ({ totalItems, totalPages, page, start, end, onPrevious, onNext }: { totalItems: number; totalPages: number; page: number; start: number; end: number; onPrevious: () => void; onNext: () => void }) => (
@@ -2349,6 +2557,7 @@ export default function Page() {
       taxSettings,
       receiptSettings,
       salesEmailSettings,
+      categories,
     },
   });
 
@@ -2407,6 +2616,7 @@ export default function Page() {
       const restoredTaxSettings = normalizeTaxSettings(parsed.data.taxSettings);
       const restoredReceiptSettings = normalizeReceiptSettings(parsed.data.receiptSettings);
       const restoredSalesEmailSettings = normalizeSalesEmailSettings(parsed.data.salesEmailSettings);
+      const restoredCatalog = prepareShopCatalog(parsed.data.categories, restoredProducts, restoredServices);
       const restoredShopName = parsed.shopName?.trim() || currentShop?.shopName || 'Restored Shop';
 
       const restoredLog: ActivityLog = {
@@ -2424,8 +2634,8 @@ export default function Page() {
         role: 'shop_owner' as Role,
         shopName: restoredShopName,
         branches: restoredBranches,
-        products: restoredProducts,
-        services: restoredServices,
+        products: restoredCatalog.products,
+        services: restoredCatalog.services,
         sales: restoredSales,
         expenses: restoredExpenses,
         expenseGroups: restoredExpenseGroups,
@@ -2439,6 +2649,7 @@ export default function Page() {
         taxSettings: restoredTaxSettings,
         receiptSettings: restoredReceiptSettings,
         salesEmailSettings: restoredSalesEmailSettings,
+        categories: restoredCatalog.categories,
         restoredFromBackupAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       }), { merge: true });
@@ -2457,8 +2668,9 @@ export default function Page() {
       }));
 
       setBranches(restoredBranches);
-      setProducts(restoredProducts);
-      setServices(restoredServices);
+      setProducts(restoredCatalog.products);
+      setServices(restoredCatalog.services);
+      setCategories(restoredCatalog.categories);
       setSales(restoredSales);
       setExpenses(restoredExpenses);
       setExpenseGroups(restoredExpenseGroups);
@@ -2554,6 +2766,7 @@ export default function Page() {
 
           <div className="nav-group-label">Stock</div>
           <button className={`nav-button ${view === 'products' ? 'active' : ''}`} onClick={() => { setView('products'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">□</span><span>Products</span></button>
+          <button className={`nav-button ${view === 'categories' ? 'active' : ''}`} onClick={() => { setView('categories'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">▣</span><span>Categories</span></button>
           <button className={`nav-button ${view === 'services' ? 'active' : ''}`} onClick={() => { setView('services'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">✦</span><span>Services</span></button>
 
           <div className="nav-group-label">Books</div>
@@ -2600,6 +2813,7 @@ export default function Page() {
                  view === 'sales_history' ? 'Sales' :
                  view === 'customers' ? 'Customers' :
                  view === 'products' ? 'Products' :
+                 view === 'categories' ? 'Categories' :
                  view === 'services' ? 'Services' :
                  view === 'expenses' ? 'Expenses' :
                  view === 'users' ? 'Staff' :
@@ -2615,6 +2829,7 @@ export default function Page() {
                  view === 'sales_history' ? 'Find a receipt, print it again, or take a return.' :
                  view === 'customers' ? 'People who bought on a name, and what they still owe.' :
                  view === 'products' ? 'What is on the shelf, what it cost, and what just moved.' :
+                 view === 'categories' ? 'Groups for products and services, used by the register and the reports.' :
                  view === 'services' ? 'Work you sell that is not a stocked product.' :
                  view === 'expenses' ? 'Money that left the shop, grouped so the books stay clear.' :
                  view === 'users' ? 'Who can sell, count stock, or run the shop.' :
@@ -2818,6 +3033,62 @@ export default function Page() {
           </section>
         )}
 
+        {view === 'categories' && (
+          <section>
+            <div className="page-header">
+              <h2>Categories</h2>
+            </div>
+            <p className="section-lead">Categories group products and services. A category can sit inside another one, such as Drinks and then Sodas. The register, inventory, low-stock list, sales report, and product import all use this list.</p>
+            {canManageCatalog ? (
+              <form className="card office-form" onSubmit={saveCategory} style={{ marginBottom: '1rem' }}>
+                <label>
+                  Name
+                  <input value={categoryForm.name} maxLength={60} onChange={(event) => setCategoryForm((prev) => ({ ...prev, name: event.target.value }))} />
+                </label>
+                <label>
+                  Inside
+                  <CategorySelect categories={categories.filter((category) => !categoryForm.id || !parentWouldCycle(categories, categoryForm.id, category.id))} value={categoryForm.parentId} onChange={(parentId) => setCategoryForm((prev) => ({ ...prev, parentId }))} emptyLabel="Top level" />
+                </label>
+                <button className="primary" type="submit">{categoryForm.id ? 'Save category' : 'Add category'}</button>
+                {categoryForm.id && <button className="edit-btn" type="button" onClick={() => setCategoryForm({ id: '', name: '', parentId: '' })}>Cancel</button>}
+              </form>
+            ) : <p className="muted-copy">An owner, admin, manager, or stock lead can change categories.</p>}
+            <div className="table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Category</th>
+                    <th>Products</th>
+                    <th>Services</th>
+                    {canManageCatalog && <th>Actions</th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {categoryTree(categories).length > 0 ? categoryTree(categories).map((item) => (
+                    <tr key={item.category.id}>
+                      <td style={{ fontWeight: 600, paddingLeft: `${0.75 + item.depth * 1.5}rem` }}>
+                        {item.depth > 0 && <span aria-hidden="true" style={{ color: 'var(--text-muted)', marginRight: '0.4rem' }}>↳</span>}
+                        {item.category.name}
+                        {item.depth > 0 && <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', fontWeight: 400 }}>{item.label}</div>}
+                      </td>
+                      <td>{products.filter((product) => product.categoryId === item.category.id).length}</td>
+                      <td>{services.filter((service) => service.categoryId === item.category.id).length}</td>
+                      {canManageCatalog && (
+                        <td>
+                          <button className="edit-btn" type="button" onClick={() => setCategoryForm({ id: item.category.id, name: item.category.name, parentId: item.category.parentId || '' })}>Edit</button>
+                          <button className="delete-btn" type="button" onClick={() => deleteCategory(item.category.id)}>Delete</button>
+                        </td>
+                      )}
+                    </tr>
+                  )) : (
+                    <tr><td colSpan={canManageCatalog ? 4 : 3} className="empty-cell">No categories yet. Add one before assigning it to a product or service.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
+
         {view === 'products' && (
           <section>
             <div className="page-header">
@@ -2827,11 +3098,14 @@ export default function Page() {
                   setStockAdjustmentForm({ productId: '', direction: 'add', quantity: 1, reason: 'restock', note: '', supplierName: '', reference: '', unitCost: '' });
                   setShowStockAdjustmentModal(true);
                 }}>Receive stock</button>
-                <button className="primary" onClick={() => { setProductForm({ id: '', name: '', branchId: branches[0]?.id || '', stock: 0, purchasePrice: 0, salePrice: 0, sku: '', barcode: '', category: '' }); setShowProductModal(true); }}>
+                {canManageCatalog && <button className="edit-btn" type="button" onClick={() => productImportRef.current?.click()}>Import CSV</button>}
+                <input ref={productImportRef} type="file" accept=".csv,text/csv" onChange={importProductFile} style={{ display: 'none' }} />
+                <button className="primary" onClick={openNewProduct}>
                   + Add Product
                 </button>
               </div>
             </div>
+            {canManageCatalog && <p className="muted-copy">CSV columns: name, sku, barcode, category, stock, purchase, sale, branch. Leave sku blank to generate one. Category can be a path such as Drinks / Sodas.</p>}
 
             {/* Inventory Search & Filter */}
             <div className="filter-bar inventory-filter-bar">
@@ -2857,6 +3131,10 @@ export default function Page() {
                 </select>
               </div>
               <div className="filter-group">
+                <label>Category</label>
+                <CategorySelect categories={categories} value={productCategoryFilter === 'all' ? '' : productCategoryFilter} onChange={(categoryId) => setProductCategoryFilter(categoryId || 'all')} emptyLabel="All categories" noneLabel="Uncategorized" />
+              </div>
+              <div className="filter-group">
                 <label>Stock Status</label>
                 <select 
                   value={productStockFilter}
@@ -2867,7 +3145,7 @@ export default function Page() {
                   <option value="out">Out of Stock</option>
                 </select>
               </div>
-              <button className="edit-btn" onClick={() => { setProductSearchQuery(''); setProductBranchFilter(''); setProductStockFilter('all'); }}>Reset Filters</button>
+              <button className="edit-btn" onClick={() => { setProductSearchQuery(''); setProductBranchFilter(''); setProductCategoryFilter('all'); setProductStockFilter('all'); }}>Reset Filters</button>
             </div>
 
             {/* Inventory Table */}
@@ -2892,7 +3170,7 @@ export default function Page() {
                       <tr key={p.id} style={{ opacity: p.stock === 0 ? 0.6 : 1 }}>
                         <td style={{ fontWeight: 600, color: 'var(--text)' }}>
                           {p.name}
-                          {p.category && <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', fontWeight: 400 }}>{p.category}</div>}
+                          {(categoryPath(categories, p.categoryId) || p.category) && <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', fontWeight: 400 }}>{categoryPath(categories, p.categoryId) || p.category}</div>}
                         </td>
                         <td>
                           <div>{p.sku || '—'}</div>
@@ -2908,7 +3186,7 @@ export default function Page() {
                         <td>{formatUGX(p.salePrice)}</td>
                         <td style={{ color: 'var(--success)', fontWeight: 600 }}>{formatUGX(p.salePrice - p.purchasePrice)}</td>
                         <td>
-                          <button className="edit-btn" onClick={() => { setProductForm({ ...p, sku: p.sku || '', barcode: p.barcode || '', category: p.category || '' }); setShowProductModal(true); }}>Edit</button>
+                          <button className="edit-btn" onClick={() => { setSkuManual(true); setProductForm({ id: p.id, name: p.name, branchId: p.branchId, stock: p.stock, purchasePrice: p.purchasePrice, salePrice: p.salePrice, sku: p.sku || '', barcode: p.barcode || '', categoryId: p.categoryId || '' }); setShowProductModal(true); }}>Edit</button>
                           <button className="edit-btn" onClick={() => restockProduct(p.id)}>Adjust stock</button>
                           <button className="delete-btn" onClick={() => {
                             if (p.stock > 0) logStockMovement(p, -p.stock, 'product_removed', 'Product removed from inventory');
@@ -3004,8 +3282,27 @@ export default function Page() {
 
         {view === 'sales' && (
           <RegisterDesk
-            products={products}
-            services={services}
+            products={products.map((product) => ({
+              id: product.id,
+              name: product.name,
+              branchId: product.branchId,
+              stock: product.stock,
+              salePrice: product.salePrice,
+              sku: product.sku,
+              barcode: product.barcode,
+              categoryId: product.categoryId,
+              categoryLabel: categoryPath(categories, product.categoryId) || product.category,
+            }))}
+            services={services.map((service) => ({
+              id: service.id,
+              name: service.name,
+              branchId: service.branchId,
+              salePrice: service.salePrice,
+              categoryId: service.categoryId,
+              categoryLabel: categoryPath(categories, service.categoryId) || service.category,
+            }))}
+            categoryChoices={registerCategoryChoices}
+            categoryIncludesItem={(categoryId, selectedId) => categoryIncludes(categories, selectedId, categoryId)}
             cart={cart}
             customers={customers}
             heldTickets={heldTickets.map((ticket) => ({
@@ -3046,7 +3343,7 @@ export default function Page() {
             onCloseDrawer={closeDrawer}
             onClear={() => { if (cart.length === 0 || window.confirm('Clear this sale?')) clearRegister(); }}
             onPay={completeRegisterSale}
-            onCreateProduct={() => { setProductForm({ id: '', name: '', branchId: branches[0]?.id || '', stock: 0, purchasePrice: 0, salePrice: 0, sku: '', barcode: '', category: '' }); setShowProductModal(true); }}
+            onCreateProduct={openNewProduct}
           />
         )}
 
@@ -3071,6 +3368,10 @@ export default function Page() {
                 <div className="field">
                   <label>Service Name</label>
                   <input type="text" value={serviceForm.name} onChange={(e) => setServiceForm((prev) => ({ ...prev, name: e.target.value }))} placeholder="e.g. Phone Repair" />
+                </div>
+                <div className="field">
+                  <label>Category</label>
+                  <CategorySelect categories={categories} value={serviceForm.categoryId} onChange={(categoryId) => setServiceForm((prev) => ({ ...prev, categoryId }))} />
                 </div>
                 <div className="field">
                   <label>Branch</label>
@@ -3121,6 +3422,7 @@ export default function Page() {
                 <thead>
                   <tr>
                     <th>Service</th>
+                    <th>Category</th>
                     <th>Branch</th>
                     <th>Type</th>
                     <th>Price</th>
@@ -3132,6 +3434,7 @@ export default function Page() {
                   {services.length > 0 ? servicesPagination.rows.map((service) => (
                     <tr key={service.id}>
                       <td style={{ fontWeight: 600 }}>{service.name}</td>
+                      <td>{categoryPath(categories, service.categoryId) || '—'}</td>
                       <td>{branchMap[service.branchId]}</td>
                       <td>{service.serviceType === 'direct_cost' ? 'Direct Cost' : 'Shared Cost'}</td>
                       <td>{formatUGX(service.salePrice)}</td>
@@ -3142,13 +3445,15 @@ export default function Page() {
                       </td>
                       <td>
                         <button className="edit-btn" onClick={() => setServiceForm({
+                          id: service.id,
                           name: service.name,
                           branchId: service.branchId,
                           amount: service.salePrice,
                           serviceType: service.serviceType || 'direct_cost',
                           directCost: service.directCost || 0,
                           monthlySharedCost: service.monthlySharedCost || 0,
-                          expenseGroupId: service.expenseGroupId || ''
+                          expenseGroupId: service.expenseGroupId || '',
+                          categoryId: service.categoryId || '',
                         })}>Edit</button>
                         <button className="primary" onClick={() => sellService(service.id)}>Sell</button>
                         <button className="delete-btn" onClick={() => { setServices((prev) => prev.filter((item) => item.id !== service.id)); logActivity('delete_service', `Deleted service "${service.name}"`); }}>Delete</button>
@@ -3156,7 +3461,7 @@ export default function Page() {
                     </tr>
                   )) : (
                     <tr>
-                      <td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>
+                      <td colSpan={7} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>
                         No services added yet.
                       </td>
                     </tr>
@@ -3628,6 +3933,81 @@ export default function Page() {
               </div>
             </div>
 
+            <div className="filter-bar">
+              <div className="filter-group">
+                <label>Category for the tables below</label>
+                <CategorySelect categories={categories} value={reportCategoryId === 'all' ? '' : reportCategoryId} onChange={(categoryId) => setReportCategoryId(categoryId || 'all')} emptyLabel="All categories" noneLabel="Uncategorized" />
+              </div>
+            </div>
+
+            <div className="table-block">
+              <h3>Inventory by category</h3>
+              <div className="table-wrap">
+                <table className="data-table">
+                  <thead>
+                    <tr><th>Category</th><th>Products</th><th>Units</th><th>Stock value</th></tr>
+                  </thead>
+                  <tbody>
+                    {visibleInventoryByCategory.map((row) => (
+                      <tr key={row.label}>
+                        <td className="cell-strong">{row.label}</td>
+                        <td>{row.count}</td>
+                        <td>{row.units}</td>
+                        <td>{formatUGX(row.value)}</td>
+                      </tr>
+                    ))}
+                    {visibleInventoryByCategory.length === 0 && <tr><td colSpan={4} className="empty-cell">No products in this category.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="table-block">
+              <h3>Low stock</h3>
+              <p className="muted-copy">Products with fewer than {LOW_STOCK_UNITS} on hand.</p>
+              <div className="table-wrap">
+                <table className="data-table">
+                  <thead>
+                    <tr><th>Product</th><th>SKU</th><th>Category</th><th>Branch</th><th>On hand</th></tr>
+                  </thead>
+                  <tbody>
+                    {lowStockProducts.map((product) => (
+                      <tr key={product.id}>
+                        <td className="cell-strong">{product.name}</td>
+                        <td>{product.sku || '—'}</td>
+                        <td>{categoryPath(categories, product.categoryId) || product.category || 'Uncategorized'}</td>
+                        <td>{branchMap[product.branchId]}</td>
+                        <td>{product.stock}</td>
+                      </tr>
+                    ))}
+                    {lowStockProducts.length === 0 && <tr><td colSpan={5} className="empty-cell">Nothing is below {LOW_STOCK_UNITS} in this category.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="table-block">
+              <h3>Sales by category this month</h3>
+              <div className="table-wrap">
+                <table className="data-table">
+                  <thead>
+                    <tr><th>Category</th><th>Qty</th><th>Revenue</th><th>Profit</th></tr>
+                  </thead>
+                  <tbody>
+                    {salesByCategory.map((row) => (
+                      <tr key={row.label}>
+                        <td className="cell-strong">{row.label}</td>
+                        <td>{row.qty}</td>
+                        <td>{formatUGX(row.revenue)}</td>
+                        <td className={row.profit >= 0 ? 'money-in' : 'money-out'}>{formatUGX(row.profit)}</td>
+                      </tr>
+                    ))}
+                    {salesByCategory.length === 0 && <tr><td colSpan={4} className="empty-cell">No sales in this category this month.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
             <div className="table-block">
               <h3>Sales lines</h3>
             <div className="table-wrap">
@@ -3637,6 +4017,7 @@ export default function Page() {
                       <th>Date</th>
                       <th>Type</th>
                       <th>Item</th>
+                      <th>Category</th>
                       <th>Branch</th>
                       <th>Qty</th>
                       <th>Revenue</th>
@@ -3650,6 +4031,7 @@ export default function Page() {
                         <td>{new Date(s.createdAt).toLocaleDateString()}</td>
                         <td><span className="badge badge-info">{s.type}</span></td>
                         <td className="cell-strong">{s.itemName}</td>
+                        <td>{categoryPath(categories, categoryOfSale(s)) || 'Uncategorized'}</td>
                         <td>{branchMap[s.branchId]}</td>
                         <td>{s.qty}</td>
                         <td>{formatUGX(s.amount)}</td>
@@ -3657,13 +4039,13 @@ export default function Page() {
                         <td className={s.amount - s.cost >= 0 ? 'money-in' : 'money-out'}>{formatUGX(s.amount - s.cost)}</td>
                       </tr>
                     )) : (
-                      <tr><td colSpan={8} className="empty-cell">No sales recorded yet.</td></tr>
+                      <tr><td colSpan={9} className="empty-cell">{sales.length === 0 ? 'No sales recorded yet.' : 'No sales in this category.'}</td></tr>
                     )}
                   </tbody>
                 </table>
               </div>
               <PaginationControls
-                totalItems={sales.length}
+                totalItems={reportSales.length}
                 totalPages={reportsSalesPagination.totalPages}
                 page={reportsSalesPagination.safePage}
                 start={reportsSalesPagination.start}
@@ -4211,16 +4593,24 @@ export default function Page() {
                   <div className="form">
                     <label className="field">
                       <span>Product Name</span>
-                      <input value={productForm.name} onChange={(e) => setProductForm({ ...productForm, name: e.target.value })} required />
+                      <input value={productForm.name} onChange={(e) => {
+                        const name = e.target.value;
+                        setProductForm((prev) => ({
+                          ...prev,
+                          name,
+                          sku: !prev.id && !skuManual ? nextSku(name || 'Item', reservedProductCodes(products, prev.id, prev.barcode ? [prev.barcode] : [])) : prev.sku,
+                        }));
+                      }} required />
                     </label>
                     <label className="field">
                       <span>Category</span>
-                      <input value={productForm.category} onChange={(e) => setProductForm({ ...productForm, category: e.target.value })} placeholder="e.g. Beverages" />
+                      <CategorySelect categories={categories} value={productForm.categoryId} onChange={(categoryId) => setProductForm((prev) => ({ ...prev, categoryId }))} />
                     </label>
                     <label className="field">
                       <span>SKU</span>
-                      <input value={productForm.sku} onChange={(e) => setProductForm({ ...productForm, sku: e.target.value })} autoCapitalize="characters" />
+                      <input value={productForm.sku} onChange={(e) => { setSkuManual(true); setProductForm({ ...productForm, sku: e.target.value }); }} autoCapitalize="characters" readOnly={!canEditSku} />
                     </label>
+                    {canEditSku ? <p className="muted-copy form-span">Filled in from the product name. Change it when this product already has a code.</p> : <p className="muted-copy form-span">A SKU is created automatically. An owner, admin, manager, or stock lead can change it.</p>}
                     <label className="field">
                       <span>Barcode</span>
                       <input value={productForm.barcode} onChange={(e) => setProductForm({ ...productForm, barcode: e.target.value })} inputMode="numeric" />
