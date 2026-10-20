@@ -293,14 +293,20 @@ export const buildChecklist = (
       title: 'Payments and receipts',
       detail: setup.taxAcknowledged
         ? 'Cash is recorded in the till. Card, mobile money, and bank payments are written on the sale only. No provider is connected.'
-        : 'Confirm how tax and receipts should read. No payment provider is connected yet.',
+        : counts.sales > 0
+          ? 'This shop is already selling. Confirm the tax note when you can. No payment provider is connected.'
+          : 'Confirm how tax and receipts should read. No payment provider is connected yet.',
       status: setup.taxAcknowledged ? 'complete' : 'action_required',
       required: true,
     },
     {
       id: 'practice',
       title: 'Practice sale',
-      detail: counts.practice ? 'A practice sale is on file. It is excluded from sales totals and no money was collected.' : 'Run one practice sale before you call the shop open.',
+      detail: counts.practice
+        ? 'A practice sale is on file. It is excluded from sales totals and no money was collected.'
+        : counts.sales > 0
+          ? 'Optional. Real sales stay in the totals. A practice sale is separate and is not counted.'
+          : 'Run one practice sale before you call the shop open.',
       status: counts.practice ? 'complete' : skipped.has('practice') ? 'action_required' : 'not_started',
       required: false,
     },

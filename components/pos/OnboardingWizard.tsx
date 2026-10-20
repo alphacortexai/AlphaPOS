@@ -64,6 +64,7 @@ export default function OnboardingWizard({
   productCount,
   serviceCount,
   staffCount,
+  saleCount,
   existingCodes,
   practiceSale,
   formatMoney,
@@ -80,6 +81,7 @@ export default function OnboardingWizard({
   productCount: number;
   serviceCount: number;
   staffCount: number;
+  saleCount: number;
   existingCodes: string[];
   practiceSale: { itemName: string; amount: number } | null;
   formatMoney: (value: number) => string;
@@ -150,7 +152,7 @@ export default function OnboardingWizard({
   const checklist = buildChecklist(draftProfile, draftSetup, { ...progress, step, skipped }, {
     products: productCount,
     services: serviceCount,
-    sales: 0,
+    sales: saleCount,
     branches: branches.length + (secondBranchName.trim() ? 1 : 0),
     staff: staffCount,
     practice: Boolean(practiceSale),
@@ -598,6 +600,7 @@ export default function OnboardingWizard({
               <>
                 <h3 id="setup-step-title" tabIndex={-1}>Practice sale</h3>
                 <p>This sale is labeled practice. No money is collected, and it stays out of the sales totals.</p>
+                {saleCount > 0 && !practiceSale && <p className="setup-note">This shop already has real sales. A practice sale is optional and is left out of the totals.</p>}
                 {productCount + serviceCount === 0 ? (
                   <p className="setup-note">Add a product or service first. Then come back and run the practice sale.</p>
                 ) : practiceSale ? (
@@ -615,7 +618,7 @@ export default function OnboardingWizard({
                     <li key={itemEntry.id}><strong>{itemEntry.title}</strong><span>{itemEntry.status === 'complete' ? 'Done. ' : itemEntry.status === 'action_required' ? 'Still needed. ' : ''}{itemEntry.detail}</span></li>
                   ))}
                 </ul>
-                {issues.length > 0 && <p className="setup-note">Before go-live, finish: {issues.join(', ')}.</p>}
+                {issues.length > 0 && <p className="setup-note">{saleCount > 0 ? 'The register stays open. Still to confirm:' : 'Before go-live, finish:'} {issues.join(', ')}.</p>}
               </>
             )}
           </div>
@@ -629,7 +632,7 @@ export default function OnboardingWizard({
             {step === 'outlet' && <button type="button" className="primary" onClick={continueOutlet}>Continue</button>}
             {step === 'staff' && <button type="button" className="primary" onClick={continueStaff}>{staff.email.trim() ? 'Save staff' : 'Continue'}</button>}
             {step === 'payments' && <button type="button" className="primary" onClick={continuePayments}>Continue</button>}
-            {step === 'practice' && <button type="button" className="primary" disabled={issues.length > 0 || !practiceSale} onClick={() => persist('practice', { finish: true })}>Start selling</button>}
+            {step === 'practice' && <button type="button" className="primary" disabled={issues.length > 0 || (!practiceSale && saleCount === 0)} onClick={() => persist('practice', { finish: true })}>{saleCount > 0 ? 'Save and close' : 'Start selling'}</button>}
           </footer>
         </section>
       </div>
@@ -640,9 +643,11 @@ export default function OnboardingWizard({
 export function SetupChecklist({
   items,
   onOpen,
+  alreadySelling = false,
 }: {
   items: ChecklistItem[];
   onOpen: (id: OnboardingStepId) => void;
+  alreadySelling?: boolean;
 }) {
   const done = items.filter((item) => item.status === 'complete').length;
   return (
@@ -650,7 +655,7 @@ export function SetupChecklist({
       <header>
         <div>
           <h3>Shop setup</h3>
-          <p>{done} of {items.length} ready. Optional steps do not block the register.</p>
+          <p>{done} of {items.length} ready. {alreadySelling ? 'This shop is already selling. The register stays open.' : 'Optional steps do not block the register.'}</p>
         </div>
         <strong>{Math.round((done / items.length) * 100)}%</strong>
       </header>

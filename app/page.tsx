@@ -10,7 +10,7 @@ import RegisterDesk from '../components/pos/RegisterDesk';
 import ReceiptDialog from '../components/pos/ReceiptDialog';
 import ReturnDialog, { type ReturnableLine } from '../components/pos/ReturnDialog';
 import { categoryIncludes, categoryPath, categoryTree, ensureCategoryPath, LOW_STOCK_UNITS, nextSku, parentWouldCycle, parseProductCsv, prepareShopCatalog, reservedProductCodes, type CatalogCategory } from '../lib/pos/catalog';
-import { buildChecklist, countryByCode, defaultBusinessProfile, defaultBusinessSetup, defaultOnboardingProgress, formatShopMoney, normalizeBusinessProfile, normalizeBusinessSetup, normalizeOnboardingProgress, shouldAutoOpenOnboarding, taxSettingsFromSetup, type BusinessProfile, type BusinessSetup, type OnboardingProgress } from '../lib/pos/onboarding';
+import { buildChecklist, countryByCode, defaultBusinessProfile, defaultBusinessSetup, defaultOnboardingProgress, formatShopMoney, goLiveIssues, normalizeBusinessProfile, normalizeBusinessSetup, normalizeOnboardingProgress, shouldAutoOpenOnboarding, taxSettingsFromSetup, type BusinessProfile, type BusinessSetup, type OnboardingProgress } from '../lib/pos/onboarding';
 import { LOCAL_OPERATOR_ID, readLocalShop, writeLocalShop } from '../lib/pos/localShop';
 import { beginSalesEmailSend, buildSalesDigest, defaultSalesEmailSettings, finishSalesEmailSend, normalizeSalesEmailSettings, previousSalesPeriod, type SalesDigest, type SalesEmailSettings } from '../lib/pos/salesEmail';
 import { completeEmailLinkSignIn, createStaffInviteLink, rememberInviteFromUrl, staffSignInError, takeInvitedShopId } from '../lib/pos/staffInvite';
@@ -2974,6 +2974,8 @@ export default function Page() {
     staff: users.length,
     practice: sales.some((sale) => sale.practice),
   });
+  const setupGaps = goLiveIssues(setupItems);
+  const alreadySelling = sales.some((sale) => !sale.practice);
   const practiceSale = sales.find((sale) => sale.practice);
 
   const Badge = ({ value }: { value: number }) => (
@@ -3162,8 +3164,8 @@ export default function Page() {
                     </div>
                   </div>
 
-                  {(onboarding.startedAt || onboarding.completedAt) && (role === 'shop_owner' || role === 'admin') && (
-                    <SetupChecklist items={setupItems} onOpen={openSetup} />
+                  {(role === 'shop_owner' || role === 'admin') && (
+                    <SetupChecklist items={setupItems} onOpen={openSetup} alreadySelling={alreadySelling} />
                   )}
 
                   <div className="studio-layout">
@@ -3564,6 +3566,13 @@ export default function Page() {
               onNext={() => setProductsPage((prev) => Math.min(productsPagination.totalPages, prev + 1))}
             />
           </section>
+        )}
+
+        {view === 'sales' && (role === 'shop_owner' || role === 'admin') && setupGaps.length > 0 && (
+          <div className="setup-banner" role="status">
+            <span>{setupGaps.join(', ')} still need a look. The register stays open.</span>
+            <button type="button" className="edit-btn" onClick={() => openSetup(setupItems.find((item) => item.required && item.status !== 'complete')?.id)}>Review</button>
+          </div>
         )}
 
         {view === 'sales' && (
@@ -5186,6 +5195,7 @@ export default function Page() {
           productCount={products.length}
           serviceCount={services.length}
           staffCount={users.length}
+          saleCount={sales.filter((sale) => !sale.practice).length}
           existingCodes={reservedProductCodes(products)}
           practiceSale={practiceSale ? { itemName: practiceSale.itemName, amount: practiceSale.amount } : null}
           formatMoney={formatUGX}
