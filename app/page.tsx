@@ -184,15 +184,6 @@ const removeUndefinedDeep = <T,>(value: T): T => {
 const emptyCheckout = { customerName: '', customerPhone: '', paymentMethod: 'cash' as PaymentMethod, paymentReference: '' };
 const roleLabels: Record<Role, string> = { shop_owner: 'Owner', admin: 'Admin', manager: 'Manager', cashier: 'Cashier', stock: 'Stock' };
 
-function heatLevel(revenue: number, max: number) {
-  if (revenue <= 0 || max <= 0) return 0;
-  const ratio = revenue / max;
-  if (ratio >= 0.999) return 4;
-  if (ratio >= 0.66) return 3;
-  if (ratio >= 0.33) return 2;
-  return 1;
-}
-
 const normalizeHeldTickets = (value: unknown): HeldTicket[] => {
   if (!Array.isArray(value)) return [];
   return value.flatMap((item) => {
@@ -269,14 +260,12 @@ export default function Page() {
   const [expensesViewMode, setExpensesViewMode] = useState<'all' | 'day'>('all');
   const [expensesDayFilter, setExpensesDayFilter] = useState(new Date().toISOString().split('T')[0]);
   const [usersPage, setUsersPage] = useState(1);
-  const [reportsSalesPage, setReportsSalesPage] = useState(1);
   const [activityLogsPage, setActivityLogsPage] = useState(1);
-  const [dashboardPeriod, setDashboardPeriod] = useState<DashboardPeriod>('weekly');
+  const [dashboardPeriod, setDashboardPeriod] = useState<DashboardPeriod>('daily');
   const [insightTrendRange, setInsightTrendRange] = useState<InsightTrendRange>(7);
   const [productSearchQuery, setProductSearchQuery] = useState('');
   const [productBranchFilter, setProductBranchFilter] = useState('');
   const [productStockFilter, setProductStockFilter] = useState<'all' | 'low' | 'out'>('all');
-  const [isRefreshingDashboard, setIsRefreshingDashboard] = useState(false);
 
   const [branchForm, setBranchForm] = useState({ name: '', location: '', id: '' });
   const [productForm, setProductForm] = useState({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0, sku: '', barcode: '', category: '' });
@@ -298,7 +287,7 @@ export default function Page() {
   const [showExpenseGroupsDetails, setShowExpenseGroupsDetails] = useState(false);
   const [userForm, setUserForm] = useState({ id: '', name: '', email: '', role: 'cashier' as Role, branchId: '' });
   const [shopNameForm, setShopNameForm] = useState('');
-  const [settingsTab, setSettingsTab] = useState<'shop' | 'branches' | 'time' | 'accounts' | 'backup' | 'tax' | 'receipt' | 'email'>('shop');
+  const [settingsTab, setSettingsTab] = useState<'shop' | 'branches' | 'time' | 'backup' | 'tax' | 'receipt' | 'email'>('shop');
   const [salesEmailSettings, setSalesEmailSettings] = useState<SalesEmailSettings>(defaultSalesEmailSettings);
   const [signInNotice, setSignInNotice] = useState('');
   const [sendingSalesEmail, setSendingSalesEmail] = useState(false);
@@ -335,6 +324,19 @@ export default function Page() {
   }, []);
   const currentShop = availableShops.find((s) => s.ownerUid === activeShopOwnerUid);
   const isShopOwner = activeShopOwnerUid === authUser?.uid;
+  const seesBooks = role === 'shop_owner' || role === 'admin' || role === 'manager';
+  const canOpenView = useCallback((next: View) => {
+    if (next === 'profile' || next === 'sales' || next === 'dashboard' || next === 'products' || next === 'services') return true;
+    if (next === 'sales_history' || next === 'customers') return role !== 'stock';
+    if (next === 'expenses' || next === 'reports' || next === 'accounts') return seesBooks;
+    if (next === 'users' || next === 'activity_logs') return seesBooks;
+    if (next === 'settings' || next === 'branches') return isShopOwner;
+    return false;
+  }, [isShopOwner, role, seesBooks]);
+  useEffect(() => {
+    if (!authUser) return;
+    if (!canOpenView(view)) setView(role === 'stock' ? 'products' : 'sales');
+  }, [authUser, canOpenView, role, view]);
   const truncateShopName = (name: string, maxLength: number = 15) => name.length > maxLength ? name.substring(0, maxLength) + '...' : name;
 
   const showNotification = (message: string, type: 'success' | 'error' | 'info' = 'info', duration: number = 3000) => {
@@ -522,93 +524,6 @@ export default function Page() {
   useEffect(() => {
     void loadUserData();
   }, [loadUserData]);
-
-  const recalculateSystemData = useCallback((payload: { products: Product[]; services: Service[]; sales: Sale[]; expenses: Expense[] }) => {
-    const productCostByName = new Map(payload.products.map((product) => [product.name.trim().toLowerCase(), product.purchasePrice]));
-    const serviceCostByName = new Map(
-      payload.services.map((service) => [
-        service.name.trim().toLowerCase(),
-        service.serviceType === 'shared_cost' ? 0 : service.directCost,
-      ])
-    );
-
-    const recalculatedSales = payload.sales.map((sale) => {
-      const itemKey = sale.itemName.trim().toLowerCase();
-      const unitCost = sale.type === 'product' ? (productCostByName.get(itemKey) ?? 0) : (serviceCostByName.get(itemKey) ?? 0);
-      return { ...sale, cost: unitCost * sale.qty };
-    });
-
-    const totalInventoryValue = payload.products.reduce((sum, product) => sum + product.stock * product.purchasePrice, 0);
-    const monthlySharedCostTotal = payload.services
-      .filter((service) => service.serviceType === 'shared_cost')
-      .reduce((sum, service) => sum + service.monthlySharedCost, 0);
-    const totalExpenseValue = payload.expenses.reduce((sum, expense) => sum + expense.amount, 0);
-
-    return {
-      sales: recalculatedSales,
-      stats: {
-        totalInventoryValue,
-        monthlySharedCostTotal,
-        totalExpenseValue,
-      },
-    };
-  }, []);
-
-  const handleDashboardRefresh = async () => {
-    if (!authUser || !db || isRefreshingDashboard) return;
-    setIsRefreshingDashboard(true);
-    try {
-      const didRefresh = await loadUserData();
-      if (!didRefresh) return;
-
-      const userDataRef = doc(db, 'users', activeShopOwnerUid, 'pos', 'data');
-      const freshSnap = await getDoc(userDataRef);
-      if (!freshSnap.exists()) {
-        showNotification('No stored records found for this shop yet.', 'info');
-        return;
-      }
-
-      const data = freshSnap.data();
-      const latestProducts = Array.isArray(data.products) ? (data.products as Product[]) : [];
-      const latestServices = Array.isArray(data.services) ? (data.services as Service[]) : [];
-      const latestSales = Array.isArray(data.sales) ? (data.sales as Sale[]) : [];
-      const latestExpenses = Array.isArray(data.expenses) ? (data.expenses as Expense[]) : [];
-
-      const recalculated = recalculateSystemData({
-        products: latestProducts,
-        services: latestServices,
-        sales: latestSales,
-        expenses: latestExpenses,
-      });
-
-      setProducts(latestProducts);
-      setServices(latestServices);
-      setExpenses(latestExpenses);
-      setSales(recalculated.sales);
-
-      await setDoc(
-        userDataRef,
-        removeUndefinedDeep({
-          products: latestProducts,
-          services: latestServices,
-          expenses: latestExpenses,
-          sales: recalculated.sales,
-          recalculatedAt: serverTimestamp(),
-          recalculatedSummary: recalculated.stats,
-          updatedAt: serverTimestamp(),
-        }),
-        { merge: true }
-      );
-
-      showNotification('Dashboard fully recalculated and updated successfully.', 'success');
-      setStatus('Dashboard recalculated from source data and synced to database.');
-    } catch (error) {
-      showNotification('Dashboard update failed. Please retry.', 'error');
-      setStatus(`Dashboard recalculation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    } finally {
-      setIsRefreshingDashboard(false);
-    }
-  };
 
   useEffect(() => {
     const saveUserData = async () => {
@@ -962,23 +877,6 @@ export default function Page() {
     return { days, max, total: days.reduce((sum, day) => sum + day.revenue, 0) };
   }, [sales]);
 
-  const salesHeat = useMemo(() => {
-    const today = new Date();
-    const days = Array.from({ length: 28 }, (_, idx) => {
-      const date = new Date(today);
-      date.setHours(12, 0, 0, 0);
-      date.setDate(today.getDate() - (27 - idx));
-      return { key: date.toISOString().slice(0, 10), label: date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }), revenue: 0 };
-    });
-    const byDay = new Map(days.map((day) => [day.key, day]));
-    sales.forEach((sale) => {
-      const bucket = byDay.get(new Date(sale.createdAt).toISOString().slice(0, 10));
-      if (bucket) bucket.revenue += sale.amount;
-    });
-    const max = days.reduce((peak, day) => Math.max(peak, day.revenue), 0);
-    return { days, max, active: days.filter((day) => day.revenue > 0).length };
-  }, [sales]);
-
   // Filtered products for inventory
   const filteredProducts = useMemo(() => {
     return products.filter(p => {
@@ -1211,48 +1109,6 @@ export default function Page() {
     showNotification('Service saved successfully!', 'success');
     setServiceForm({ name: '', branchId: '', amount: 0, serviceType: 'direct_cost', directCost: 0, monthlySharedCost: 0, expenseGroupId: '' });
   };
-
-  const sellService = (serviceId: string) => {
-    const service = services.find((item) => item.id === serviceId);
-    if (!service) {
-      showNotification('Service not found', 'error');
-      return;
-    }
-    if (!selectedSaleAccountId) {
-      showNotification('Please create an account first (CASH is created by default).', 'error');
-      return;
-    }
-    const serviceQuote = settleCart([{
-      key: service.id,
-      unitPrice: service.salePrice,
-      qty: 1,
-      effectiveUnitPrice: service.salePrice,
-      unitCost: service.serviceType === 'direct_cost' ? service.directCost : 0,
-    }], { mode: 'none', value: 0 }, taxSettings);
-    const serviceLine = serviceQuote.lines[0];
-    const newSale: Sale = {
-      id: crypto.randomUUID(),
-      type: 'service',
-      itemName: service.name,
-      branchId: service.branchId,
-      qty: 1,
-      amount: serviceLine?.amount ?? service.salePrice,
-      cost: serviceLine?.cost ?? (service.serviceType === 'direct_cost' ? service.directCost : 0),
-      taxAmount: serviceLine?.taxAmount,
-      discountAmount: serviceLine?.discountAmount,
-      accountId: selectedSaleAccountId,
-      receiptNumber: nextDocumentNumber(sales, receiptPrefix(new Date(), 'sale')),
-      saleKind: 'sale',
-      ...(openCashSession ? { cashSessionId: openCashSession.id } : {}),
-      ...createCheckoutMetadata(),
-      ...currentAuditStamp(),
-    };
-    setSales((prev) => [newSale, ...prev]);
-    logActivity('sale', `Sold service "${service.name}"`);
-    showNotification(`${service.name} sold successfully`, 'success');
-    setCheckoutDetails({ customerName: '', customerPhone: '', paymentMethod: 'cash', paymentReference: '' });
-  };
-
 
   const expenseGroupMap = useMemo(() => Object.fromEntries(expenseGroups.map((g) => [g.id, g.name])), [expenseGroups]);
   const defaultAccount = useMemo(() => accounts.find((account) => account.isDefault) || accounts[0], [accounts]);
@@ -2157,7 +2013,6 @@ export default function Page() {
   const servicesPagination = paginateData(services, servicesPage, setServicesPage);
   const expensesPagination = paginateData(filteredExpenses, expensesPage, setExpensesPage);
   const usersPagination = paginateData(users, usersPage, setUsersPage);
-  const reportsSalesPagination = paginateData(sales, reportsSalesPage, setReportsSalesPage);
   const activityLogsPagination = paginateData(activityLogs, activityLogsPage, setActivityLogsPage);
 
   const PaginationControls = ({ totalItems, totalPages, page, start, end, onPrevious, onNext }: { totalItems: number; totalPages: number; page: number; start: number; end: number; onPrevious: () => void; onNext: () => void }) => (
@@ -2426,9 +2281,11 @@ export default function Page() {
   };
 
   const Badge = ({ value }: { value: number }) => (
-    <span className={`badge ${value >= 0 ? 'badge-success' : 'badge-danger'}`}>
-      {value >= 0 ? '↑' : '↓'} {Math.abs(value).toFixed(1)}%
-    </span>
+    value === 0 ? null : (
+      <span className={`badge ${value >= 0 ? 'badge-success' : 'badge-danger'}`}>
+        {value >= 0 ? '↑' : '↓'} {Math.abs(value).toFixed(1)}%
+      </span>
+    )
   );
 
 
@@ -2437,25 +2294,19 @@ export default function Page() {
     return (
       <div className="auth-container">
         <div className="auth-card">
-          <span className="auth-badge">Retail counter</span>
+          <span className="brand-mark" aria-hidden="true">A</span>
           <h1>AlphaPOS</h1>
-          <p>Sell, take payment, print a receipt, and keep stock in one counter.</p>
-          <ul className="auth-highlights">
-            <li>Barcode register with hold, split payment, and change</li>
-            <li>Tax, cash drawer, returns, and customer accounts</li>
-            <li>Inventory, expenses, staff, and branch reporting</li>
-            <li>Google sign-in for shared shops, or this device when Firebase is not configured</li>
-          </ul>
+          <p>Sell, take payment, and keep the shop’s books.</p>
           {signInNotice && <p className="auth-local-note">{signInNotice}</p>}
           {firebaseApp ? (
             <>
-              <button className="primary" style={{ width: '100%', padding: '1rem' }} onClick={handleLogin}>Sign in with Google</button>
-              <p className="auth-local-note">Invited staff can open the sign-in link in their email, or use Google with that same address.</p>
+              <button className="primary" onClick={handleLogin}>Sign in with Google</button>
+              <p className="auth-local-note">Staff open the link in their invite, or sign in with Google using that same email.</p>
             </>
           ) : (
             <>
-              <p className="auth-local-note">No Firebase project is configured. The counter will keep this shop in this browser only.</p>
-              <button className="primary" style={{ width: '100%', padding: '1rem' }} onClick={startLocalCounter}>Open the counter</button>
+              <p className="auth-local-note">This browser will keep the shop on this device.</p>
+              <button className="primary" onClick={startLocalCounter}>Open the counter</button>
             </>
           )}
         </div>
@@ -2469,52 +2320,63 @@ export default function Page() {
       <aside className={`sidebar ${isSidebarOpen ? 'open' : ''}`}>
         <div className="sidebar-header">
           <h2><span className="brand-mark" aria-hidden="true">A</span> AlphaPOS</h2>
-          <div className="sidebar-subtitle">Point of sale · Operations</div>
-        </div>
-
-        <div className="sidebar-section">
-          <label className="role-label">Active Shop</label>
-          <select className="role-select" value={activeShopOwnerUid} onChange={(e) => handleShopSwitch(e.target.value)}>
-            {availableShops.map((s) => (
-              <option key={s.ownerUid} value={s.ownerUid}>
-                {truncateShopName(s.shopName, 22)} · {roleLabels[s.role]}
-              </option>
-            ))}
-          </select>
+          {availableShops.length > 1 ? (
+            <select className="role-select" aria-label="Active shop" value={activeShopOwnerUid} onChange={(e) => handleShopSwitch(e.target.value)}>
+              {availableShops.map((s) => (
+                <option key={s.ownerUid} value={s.ownerUid}>
+                  {truncateShopName(s.shopName, 22)} · {roleLabels[s.role]}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <p className="rail-shop">{currentShop?.shopName || 'My Shop'}</p>
+          )}
         </div>
 
         <button type="button" className={`sell-launch${view === 'sales' ? ' active' : ''}`} onClick={() => { setView('sales'); setIsSidebarOpen(false); }}>
           <span>Register</span>
-          <small>Take a sale</small>
+          <small>{openCashSession ? 'Drawer open' : 'Open a sale'}</small>
         </button>
 
-        <nav className="sidebar-nav">
-          <div className="nav-group-label">Counter</div>
-          <button className={`nav-button ${view === 'dashboard' ? 'active' : ''}`} onClick={() => { setView('dashboard'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">◫</span><span>Today</span></button>
-          <button className={`nav-button ${view === 'sales_history' ? 'active' : ''}`} onClick={() => { setView('sales_history'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">≡</span><span>Sales</span></button>
-          <button className={`nav-button ${view === 'customers' ? 'active' : ''}`} onClick={() => { setView('customers'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">☺</span><span>Customers</span></button>
+        <nav className="sidebar-nav" aria-label="Shop">
+          <div className="nav-group">
+            <div className="nav-group-label">Today</div>
+            <button className={`nav-button ${view === 'dashboard' ? 'active' : ''}`} onClick={() => { setView('dashboard'); setIsSidebarOpen(false); }}>Today</button>
+            {role !== 'stock' && <button className={`nav-button ${view === 'sales_history' ? 'active' : ''}`} onClick={() => { setView('sales_history'); setIsSidebarOpen(false); }}>Sales</button>}
+            {role !== 'stock' && <button className={`nav-button ${view === 'customers' ? 'active' : ''}`} onClick={() => { setView('customers'); setIsSidebarOpen(false); }}>Customers</button>}
+          </div>
 
-          <div className="nav-group-label">Stock</div>
-          <button className={`nav-button ${view === 'products' ? 'active' : ''}`} onClick={() => { setView('products'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">□</span><span>Products</span></button>
-          <button className={`nav-button ${view === 'services' ? 'active' : ''}`} onClick={() => { setView('services'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">✦</span><span>Services</span></button>
+          <div className="nav-group">
+            <div className="nav-group-label">Items</div>
+            <button className={`nav-button ${view === 'products' ? 'active' : ''}`} onClick={() => { setView('products'); setIsSidebarOpen(false); }}>Products</button>
+            <button className={`nav-button ${view === 'services' ? 'active' : ''}`} onClick={() => { setView('services'); setIsSidebarOpen(false); }}>Services</button>
+          </div>
 
-          <div className="nav-group-label">Books</div>
-          <button className={`nav-button ${view === 'expenses' ? 'active' : ''}`} onClick={() => { setView('expenses'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">−</span><span>Expenses</span></button>
-          <button className={`nav-button ${view === 'reports' ? 'active' : ''}`} onClick={() => { setView('reports'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">▤</span><span>Reports</span></button>
-          <button className={`nav-button ${view === 'accounts' ? 'active' : ''}`} onClick={() => { setView('accounts'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">⌁</span><span>Accounts</span></button>
+          {seesBooks && (
+            <div className="nav-group">
+              <div className="nav-group-label">Money</div>
+              <button className={`nav-button ${view === 'expenses' ? 'active' : ''}`} onClick={() => { setView('expenses'); setIsSidebarOpen(false); }}>Expenses</button>
+              <button className={`nav-button ${view === 'reports' ? 'active' : ''}`} onClick={() => { setView('reports'); setIsSidebarOpen(false); }}>Reports</button>
+              <button className={`nav-button ${view === 'accounts' ? 'active' : ''}`} onClick={() => { setView('accounts'); setIsSidebarOpen(false); }}>Balances</button>
+            </div>
+          )}
 
-          <div className="nav-group-label">Shop</div>
-          <button className={`nav-button ${view === 'users' ? 'active' : ''}`} onClick={() => { setView('users'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">◎</span><span>Staff</span></button>
-          <button className={`nav-button ${view === 'activity_logs' ? 'active' : ''}`} onClick={() => { setView('activity_logs'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">⌘</span><span>Activity</span></button>
-          {isShopOwner && <button className={`nav-button ${view === 'settings' ? 'active' : ''}`} onClick={() => { setView('settings'); setIsSidebarOpen(false); }}><span className="nav-icon" aria-hidden="true">⚙</span><span>Settings</span></button>}
+          {(seesBooks || isShopOwner) && (
+            <div className="nav-group">
+              <div className="nav-group-label">Shop</div>
+              {seesBooks && <button className={`nav-button ${view === 'users' ? 'active' : ''}`} onClick={() => { setView('users'); setIsSidebarOpen(false); }}>Staff</button>}
+              {seesBooks && <button className={`nav-button ${view === 'activity_logs' ? 'active' : ''}`} onClick={() => { setView('activity_logs'); setIsSidebarOpen(false); }}>Activity</button>}
+              {isShopOwner && <button className={`nav-button ${view === 'settings' ? 'active' : ''}`} onClick={() => { setView('settings'); setIsSidebarOpen(false); }}>Settings</button>}
+            </div>
+          )}
         </nav>
 
         <div className="sidebar-footer">
           <button className="user-chip" onClick={() => setView('profile')}>
             <span className="user-avatar" aria-hidden="true">{(authUser.displayName || authUser.email || 'U').trim().charAt(0).toUpperCase()}</span>
             <span className="user-chip-text">
-              <strong>{authUser.displayName}</strong>
-              <small>{authUser.email}</small>
+              <strong>{authUser.email === 'counter@this-device' ? 'This counter' : authUser.displayName}</strong>
+              <small>{authUser.email === 'counter@this-device' ? 'Saved in this browser' : authUser.email}</small>
             </span>
           </button>
           <button className="logout-button" onClick={handleLogout}>Sign Out</button>
@@ -2531,7 +2393,7 @@ export default function Page() {
         )}
       </aside>
 
-      <main className={`main${view === 'sales' ? ' main-register' : ''}`} style={{ display: 'flex', flexDirection: 'column' }}>
+      <main className={`main${view === 'sales' ? ' main-register' : ''}`}>
         <header className="main-header">
           <div className="header-title">
             <button className="mobile-menu-toggle" onClick={() => setIsSidebarOpen(true)} aria-label="Open menu">Menu</button>
@@ -2547,30 +2409,18 @@ export default function Page() {
                  view === 'users' ? 'Staff' :
                  view === 'activity_logs' ? 'Activity' :
                  view === 'reports' ? 'Reports' :
-                 view === 'accounts' ? 'Accounts' :
+                 view === 'accounts' ? 'Balances' :
                  view === 'settings' ? 'Settings' :
                  'Profile'}
               </h1>
-              <p className="header-kicker">
-                {view === 'dashboard' ? 'What the shop took in, what is low, and whether the drawer is open.' :
-                 view === 'sales' ? 'Scan an item, take payment, and hand over the receipt.' :
-                 view === 'sales_history' ? 'Find a receipt, print it again, or take a return.' :
-                 view === 'customers' ? 'People who bought on a name, and what they still owe.' :
-                 view === 'products' ? 'What is on the shelf, what it cost, and what just moved.' :
-                 view === 'services' ? 'Work you sell that is not a stocked product.' :
-                 view === 'expenses' ? 'Money that left the shop, grouped so the books stay clear.' :
-                 view === 'users' ? 'Who can sell, count stock, or run the shop.' :
-                 view === 'activity_logs' ? 'A plain record of who changed what.' :
-                 view === 'reports' ? 'Today, this week, and this month in one place.' :
-                 view === 'accounts' ? 'Where sales land and where expenses come out.' :
-                 view === 'settings' ? 'Shop name, tax, receipt, branches, and backup.' :
-                 `${currentShop?.shopName || 'My Shop'} · ${roleLabels[role]}`}
-              </p>
+              <p className="header-kicker">{currentShop?.shopName || 'My Shop'} · {roleLabels[role]}</p>
             </div>
           </div>
-          <div className="status-container">
-            <span className="status">{status}</span>
-          </div>
+          {status && /fail|error|could not/i.test(status) && (
+            <div className="status-container">
+              <span className="status">{status}</span>
+            </div>
+          )}
         </header>
 
         {view === 'dashboard' && (
@@ -2588,7 +2438,6 @@ export default function Page() {
                   <div className="studio-top">
                     <div>
                       <h2>{named ? `${greeting}, ${named}` : greeting}</h2>
-                      <p>Stay on the sales, the stock, and the drawer.</p>
                     </div>
                     <div className="studio-controls">
                       <label>
@@ -2600,9 +2449,6 @@ export default function Page() {
                           <option value="yearly">This year</option>
                         </select>
                       </label>
-                      <button className="edit-btn" onClick={handleDashboardRefresh} disabled={isRefreshingDashboard || authUser.uid === LOCAL_OPERATOR_ID} title={authUser.uid === LOCAL_OPERATOR_ID ? 'This counter already saves on this device.' : 'Reload the shop record and recalculate costs'}>
-                        {isRefreshingDashboard ? 'Refreshing…' : 'Reload'}
-                      </button>
                       <button className="primary" onClick={() => setView('sales')}>Open register</button>
                     </div>
                   </div>
@@ -2637,26 +2483,6 @@ export default function Page() {
                       </div>
 
                       <div className="studio-charts">
-                        <article className="card heat-card">
-                          <div className="insight-header-row">
-                            <div>
-                              <h3>Sales map</h3>
-                              <p className="muted-copy">Last 28 days. Darker days took in more.</p>
-                            </div>
-                          </div>
-                          <div className="heat-grid" role="img" aria-label={`Sales map. ${salesHeat.active} of 28 days had sales. Peak ${formatUGX(salesHeat.max)}.`}>
-                            {salesHeat.days.map((day) => (
-                              <span key={day.key} className="heat-cell" data-level={heatLevel(day.revenue, salesHeat.max)} title={`${day.label}: ${formatUGX(day.revenue)}`} />
-                            ))}
-                          </div>
-                          <div className="heat-legend">
-                            <span>Quiet</span>
-                            <i data-level="0" /><i data-level="1" /><i data-level="2" /><i data-level="3" /><i data-level="4" />
-                            <span>Busy</span>
-                            <em>{salesHeat.active} active day{salesHeat.active === 1 ? '' : 's'}</em>
-                          </div>
-                        </article>
-
                         <article className="card pair-card">
                           <div className="insight-header-row">
                             <div>
@@ -2995,24 +2821,15 @@ export default function Page() {
         {view === 'services' && (
           <section>
             <div className="page-header">
-              <h2>Service Catalog</h2>
+              <h2>Services</h2>
             </div>
             <div className="card" style={{ marginBottom: '1rem' }}>
-              <h3>Sell a service</h3>
-              <div className="field" style={{ maxWidth: '320px' }}>
-                <label>Credit service sales to account</label>
-                <select value={selectedSaleAccountId || ''} onChange={(e) => setSaleAccountId(e.target.value)}>
-                  {accounts.map((account) => <option key={account.id} value={account.id}>{account.name}{account.isDefault ? ' (Default)' : ''}</option>)}
-                </select>
-              </div>
-              {renderCheckoutDetailsFields()}
-            </div>
-            <div className="card" style={{ marginBottom: '1rem' }}>
-              <h3>Service catalog</h3>
+              <h3>Add a service</h3>
+              <p className="muted-copy">Photocopy, scanning, lamination, printing, and typing belong here. Sell them from the register. They do not reduce shelf stock.</p>
               <form onSubmit={saveService} className="office-form">
                 <div className="field">
                   <label>Service Name</label>
-                  <input type="text" value={serviceForm.name} onChange={(e) => setServiceForm((prev) => ({ ...prev, name: e.target.value }))} placeholder="e.g. Phone Repair" />
+                  <input type="text" value={serviceForm.name} onChange={(e) => setServiceForm((prev) => ({ ...prev, name: e.target.value }))} placeholder="Photocopy, scan, lamination" />
                 </div>
                 <div className="field">
                   <label>Branch</label>
@@ -3030,13 +2847,13 @@ export default function Page() {
                 <div className="field">
                   <label>Service Type</label>
                   <select value={serviceForm.serviceType} onChange={(e) => setServiceForm((prev) => ({ ...prev, serviceType: e.target.value as ServiceType }))}>
-                    <option value="direct_cost">Direct Cost Service</option>
-                    <option value="shared_cost">Shared Cost Service</option>
+                    <option value="direct_cost">Per sale</option>
+                    <option value="shared_cost">Monthly</option>
                   </select>
                 </div>
                 {serviceForm.serviceType === 'direct_cost' ? (
                   <div className="field">
-                    <label>Direct Cost</label>
+                    <label>Cost per sale</label>
                     <input type="number" min={0} value={serviceForm.directCost} onChange={(e) => setServiceForm((prev) => ({ ...prev, directCost: Number(e.target.value) }))} />
                   </div>
                 ) : (
@@ -3075,7 +2892,7 @@ export default function Page() {
                     <tr key={service.id}>
                       <td style={{ fontWeight: 600 }}>{service.name}</td>
                       <td>{branchMap[service.branchId]}</td>
-                      <td>{service.serviceType === 'direct_cost' ? 'Direct Cost' : 'Shared Cost'}</td>
+                      <td>{service.serviceType === 'direct_cost' ? 'Each sale' : 'Monthly'}</td>
                       <td>{formatUGX(service.salePrice)}</td>
                       <td>
                         {service.serviceType === 'direct_cost'
@@ -3092,7 +2909,7 @@ export default function Page() {
                           monthlySharedCost: service.monthlySharedCost || 0,
                           expenseGroupId: service.expenseGroupId || ''
                         })}>Edit</button>
-                        <button className="primary" onClick={() => sellService(service.id)}>Sell</button>
+                        <button className="edit-btn" onClick={() => { addServiceToCart(service.id, true); setView('sales'); }}>Add to register</button>
                         <button className="delete-btn" onClick={() => { setServices((prev) => prev.filter((item) => item.id !== service.id)); logActivity('delete_service', `Deleted service "${service.name}"`); }}>Delete</button>
                       </td>
                     </tr>
@@ -3320,8 +3137,8 @@ export default function Page() {
                 {expenseGroups.length > 0 ? `${expenseGroups.length} group(s) created.` : 'No expense groups yet. Create one to organize expenses.'}
               </div>
             </div>
-            <div className="card" style={{ marginBottom: '1rem' }}>
-              <h4 style={{ marginTop: 0 }}>Expense Group Distribution</h4>
+            <details className="quiet-fold">
+              <summary>Spending by group</summary>
               <div className="segmented">
                 {(['day', '7days', '14days', 'month', '3months', '6months', '1year'] as ExpenseChartRange[]).map((range) => (
                   <button key={range} type="button" className={expenseChartRange === range ? 'primary' : 'edit-btn'} onClick={() => setExpenseChartRange(range)}>
@@ -3342,7 +3159,7 @@ export default function Page() {
                   </div>
                 </div>
               ) : <div style={{ color: 'var(--text-muted)' }}>No expenses in this period.</div>}
-            </div>
+            </details>
 
             <div className="segmented">
               <button type="button" className={expensesViewMode === 'all' ? 'primary' : 'edit-btn'} onClick={() => setExpensesViewMode('all')}>
@@ -3425,7 +3242,7 @@ export default function Page() {
             
             {canManageUsers ? (
               <>
-                <p className="section-lead">Invite someone by email. AlphaPOS emails that address a sign-in link, and opening it enters the shop as the role you chose. They can also use Google with the same address.</p>
+                <p className="muted-copy">Invite by email. They open the link, or sign in with Google using that same address.</p>
                 {/* Staff Summary */}
                 {users.length > 0 && (
                   <div className="kpi-grid">
@@ -3512,10 +3329,6 @@ export default function Page() {
 
         {view === 'reports' && (
           <section>
-            <div className="page-header">
-              <h2>Business Reports & Analytics</h2>
-            </div>
-
             <div className="card trend-card">
               <div className="insight-header-row">
                 <div>
@@ -3569,57 +3382,12 @@ export default function Page() {
                 </div>
               </div>
             </div>
-
-            <div className="table-block">
-              <h3>Sales lines</h3>
-            <div className="table-wrap">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Date</th>
-                      <th>Type</th>
-                      <th>Item</th>
-                      <th>Branch</th>
-                      <th>Qty</th>
-                      <th>Revenue</th>
-                      <th>Cost</th>
-                      <th>Profit</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {reportsSalesPagination.rows.length > 0 ? reportsSalesPagination.rows.map((s) => (
-                      <tr key={s.id}>
-                        <td>{new Date(s.createdAt).toLocaleDateString()}</td>
-                        <td><span className="badge badge-info">{s.type}</span></td>
-                        <td className="cell-strong">{s.itemName}</td>
-                        <td>{branchMap[s.branchId]}</td>
-                        <td>{s.qty}</td>
-                        <td>{formatUGX(s.amount)}</td>
-                        <td>{formatUGX(s.cost)}</td>
-                        <td className={s.amount - s.cost >= 0 ? 'money-in' : 'money-out'}>{formatUGX(s.amount - s.cost)}</td>
-                      </tr>
-                    )) : (
-                      <tr><td colSpan={8} className="empty-cell">No sales recorded yet.</td></tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-              <PaginationControls
-                totalItems={sales.length}
-                totalPages={reportsSalesPagination.totalPages}
-                page={reportsSalesPagination.safePage}
-                start={reportsSalesPagination.start}
-                end={reportsSalesPagination.end}
-                onPrevious={() => setReportsSalesPage((prev) => Math.max(1, prev - 1))}
-                onNext={() => setReportsSalesPage((prev) => Math.min(reportsSalesPagination.totalPages, prev + 1))}
-              />
-            </div>
           </section>
         )}
 
         {view === 'activity_logs' && (
           <section>
-            <p className="section-lead">Sales, stock, staff, and settings changes for this shop.</p>
+            <p className="muted-copy">Who changed stock, sales, staff, or settings.</p>
             <div className="table-wrap">
               <table className="data-table">
                 <thead>
@@ -3696,24 +3464,23 @@ export default function Page() {
         )}
 
         {view === 'settings' && (
-          <section>
-            <div className="page-header">
-              <h2>Shop Settings</h2>
-            </div>
-            <div className="settings-tabs" role="tablist">
-              {([
-                ['shop', 'Shop'],
-                ['branches', 'Branches'],
-                ['time', 'Business day'],
-                ['accounts', 'Accounts'],
-                ['tax', 'Tax'],
-                ['receipt', 'Receipt'],
-                ['email', 'Email'],
-                ['backup', 'Backup'],
-              ] as const).map(([tab, label]) => (
-                <button key={tab} type="button" role="tab" aria-selected={settingsTab === tab} className={settingsTab === tab ? 'active' : ''} onClick={() => setSettingsTab(tab)}>{label}</button>
-              ))}
-            </div>
+          <section className="settings-shell">
+            <nav className="settings-nav" aria-label="Settings sections">
+              <p>Shop</p>
+              <button type="button" className={settingsTab === 'shop' ? 'active' : ''} onClick={() => setSettingsTab('shop')}>Name</button>
+              <button type="button" className={settingsTab === 'branches' ? 'active' : ''} onClick={() => setSettingsTab('branches')}>Branches</button>
+              <button type="button" className={settingsTab === 'time' ? 'active' : ''} onClick={() => setSettingsTab('time')}>Business day</button>
+              <p>Checkout</p>
+              <button type="button" className={settingsTab === 'tax' ? 'active' : ''} onClick={() => setSettingsTab('tax')}>Tax</button>
+              <button type="button" className={settingsTab === 'receipt' ? 'active' : ''} onClick={() => setSettingsTab('receipt')}>Receipt</button>
+              <p>Money</p>
+              <button type="button" onClick={() => { setView('accounts'); setIsSidebarOpen(false); }}>Balances</button>
+              <p>Updates</p>
+              <button type="button" className={settingsTab === 'email' ? 'active' : ''} onClick={() => setSettingsTab('email')}>Sales email</button>
+              <p>Records</p>
+              <button type="button" className={settingsTab === 'backup' ? 'active' : ''} onClick={() => setSettingsTab('backup')}>Backup</button>
+            </nav>
+            <div className="settings-panel">
 
             {settingsTab === 'shop' && (
               <div className="card">
@@ -3925,59 +3692,7 @@ export default function Page() {
                 </div>
               </div>
             )}
-
-            {settingsTab === 'accounts' && (
-              <div className="card">
-                <h3>Accounts</h3>
-                <p style={{ color: 'var(--text-muted)' }}>Sales (products and services) are credited to the selected account below (or default CASH). Expenses are deducted from the selected expense account.</p>
-                <form onSubmit={createAccount} className="form" style={{ marginTop: '1rem' }}>
-                  <label className="field">
-                    <span>Account Name</span>
-                    <input value={accountForm.name} onChange={(e) => setAccountForm((prev) => ({ ...prev, name: e.target.value }))} placeholder="e.g. Mobile Money" required />
-                  </label>
-                  <label className="field">
-                    <span>Opening Balance (UGX)</span>
-                    <input type="number" value={accountForm.openingBalance} onChange={(e) => setAccountForm((prev) => ({ ...prev, openingBalance: Number(e.target.value) }))} />
-                  </label>
-                  <div><button type="submit" className="primary">+ Add Account</button></div>
-                </form>
-                {(isShopOwner || role === 'admin') && (
-                  <form onSubmit={topUpAccount} className="form" style={{ marginTop: '0.75rem' }}>
-                    <label className="field">
-                      <span>Top Up Account</span>
-                      <select value={accountTopUpForm.accountId || defaultAccount?.id || ''} onChange={(e) => setAccountTopUpForm((prev) => ({ ...prev, accountId: e.target.value }))}>
-                        {accounts.map((account) => <option key={account.id} value={account.id}>{account.name}{account.isDefault ? ' (Default)' : ''}</option>)}
-                      </select>
-                    </label>
-                    <label className="field">
-                      <span>Top Up Amount (UGX)</span>
-                      <input type="number" min={1} value={accountTopUpForm.amount} onChange={(e) => setAccountTopUpForm((prev) => ({ ...prev, amount: Number(e.target.value) }))} required />
-                    </label>
-                    <div><button type="submit" className="primary">+ Top Up</button></div>
-                  </form>
-                )}
-                <div className="table-wrap" style={{ marginTop: '1rem' }}>
-                  <table className="data-table">
-                    <thead><tr><th>Account</th><th>Type</th><th>Opening Balance</th><th>Current Balance</th>{(isShopOwner || role === 'admin') && <th>Actions</th>}</tr></thead>
-                    <tbody>
-                      {accounts.map((account) => (
-                        <tr key={account.id}>
-                          <td>{account.name}</td>
-                          <td>{account.isDefault ? 'Default' : 'Custom'}</td>
-                          <td>{formatUGX(account.openingBalance || 0)}</td>
-                          <td>{formatUGX(accountBalances.get(account.id) || 0)}</td>
-                          {(isShopOwner || role === 'admin') && (
-                            <td>
-                              <button type="button" className="edit-btn" onClick={() => editAccountOpeningBalance(account.id)}>Edit value</button>
-                            </td>
-                          )}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
+            </div>
           </section>
         )}
 
@@ -3994,33 +3709,36 @@ export default function Page() {
               ))}
             </div>
             <div className="card">
-              <h3>Accounts</h3>
-              <p className="muted-copy">Sales are credited to the account chosen at the counter. Expenses are deducted from the account selected on the expense.</p>
-              <form onSubmit={createAccount} className="form" style={{ marginTop: '1rem' }}>
-                <label className="field">
-                  <span>Account Name</span>
-                  <input value={accountForm.name} onChange={(e) => setAccountForm((prev) => ({ ...prev, name: e.target.value }))} placeholder="e.g. Mobile Money" required />
-                </label>
-                <label className="field">
-                  <span>Opening Balance (UGX)</span>
-                  <input type="number" value={accountForm.openingBalance} onChange={(e) => setAccountForm((prev) => ({ ...prev, openingBalance: Number(e.target.value) }))} />
-                </label>
-                <div><button type="submit" className="primary">+ Add Account</button></div>
-              </form>
+              <h3>Where money sits</h3>
+              <p className="muted-copy">Each sale and expense updates one of these balances. Cash in the drawer is counted on the register.</p>
               {(isShopOwner || role === 'admin') && (
-                <form onSubmit={topUpAccount} className="form" style={{ marginTop: '0.75rem' }}>
-                  <label className="field">
-                    <span>Top Up Account</span>
-                    <select value={accountTopUpForm.accountId || defaultAccount?.id || ''} onChange={(e) => setAccountTopUpForm((prev) => ({ ...prev, accountId: e.target.value }))}>
-                      {accounts.map((account) => <option key={account.id} value={account.id}>{account.name}{account.isDefault ? ' (Default)' : ''}</option>)}
-                    </select>
-                  </label>
-                  <label className="field">
-                    <span>Top Up Amount (UGX)</span>
-                    <input type="number" min={1} value={accountTopUpForm.amount} onChange={(e) => setAccountTopUpForm((prev) => ({ ...prev, amount: Number(e.target.value) }))} required />
-                  </label>
-                  <div><button type="submit" className="primary">+ Top Up</button></div>
-                </form>
+                <details className="quiet-fold">
+                  <summary>Add or adjust a balance</summary>
+                  <form onSubmit={createAccount} className="form" style={{ marginTop: '1rem' }}>
+                    <label className="field">
+                      <span>Account name</span>
+                      <input value={accountForm.name} onChange={(e) => setAccountForm((prev) => ({ ...prev, name: e.target.value }))} placeholder="Mobile money" required />
+                    </label>
+                    <label className="field">
+                      <span>Opening balance</span>
+                      <input type="number" value={accountForm.openingBalance} onChange={(e) => setAccountForm((prev) => ({ ...prev, openingBalance: Number(e.target.value) }))} />
+                    </label>
+                    <div><button type="submit" className="primary">Add account</button></div>
+                  </form>
+                  <form onSubmit={topUpAccount} className="form" style={{ marginTop: '0.75rem' }}>
+                    <label className="field">
+                      <span>Account</span>
+                      <select value={accountTopUpForm.accountId || defaultAccount?.id || ''} onChange={(e) => setAccountTopUpForm((prev) => ({ ...prev, accountId: e.target.value }))}>
+                        {accounts.map((account) => <option key={account.id} value={account.id}>{account.name}{account.isDefault ? ' (Default)' : ''}</option>)}
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Amount to add</span>
+                      <input type="number" min={1} value={accountTopUpForm.amount} onChange={(e) => setAccountTopUpForm((prev) => ({ ...prev, amount: Number(e.target.value) }))} required />
+                    </label>
+                    <div><button type="submit" className="primary">Add money</button></div>
+                  </form>
+                </details>
               )}
               <div className="table-wrap" style={{ marginTop: '1rem' }}>
                 <table className="data-table">
