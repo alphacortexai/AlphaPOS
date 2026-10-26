@@ -2908,6 +2908,148 @@ input:focus, select:focus, textarea:focus { box-shadow: 0 0 0 3px rgba(31, 107, 
 
 .status { color: #b42318; background: #fef3f2; border-color: #fecdca; }
 
+.auth-container {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: clamp(1.25rem, 4vw, 3rem);
+  overflow: hidden;
+  background:
+    radial-gradient(1200px 700px at 50% 120%, rgba(16, 40, 28, 0.8), transparent 60%),
+    #101612;
+  color: #f7f5f0;
+}
+.auth-glow {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(30px);
+  pointer-events: none;
+  z-index: 0;
+}
+.auth-glow-a {
+  width: min(46vw, 560px);
+  height: min(46vw, 560px);
+  left: -8vw;
+  top: -12vw;
+  background: radial-gradient(circle, rgba(146, 214, 176, 0.55), transparent 68%);
+}
+.auth-glow-b {
+  width: min(40vw, 520px);
+  height: min(40vw, 520px);
+  right: -8vw;
+  bottom: -16vw;
+  background: radial-gradient(circle, rgba(38, 112, 78, 0.72), transparent 70%);
+}
+.auth-glow-c {
+  width: min(28vw, 340px);
+  height: min(28vw, 340px);
+  left: 46%;
+  top: 34%;
+  background: radial-gradient(circle, rgba(255, 244, 220, 0.22), transparent 70%);
+}
+.auth-layout {
+  position: relative;
+  z-index: 1;
+  width: min(1080px, 100%);
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(280px, 400px);
+  gap: clamp(1.5rem, 5vw, 4rem);
+  align-items: center;
+}
+.auth-kicker {
+  margin: 0;
+  color: rgba(247, 245, 240, 0.62);
+  font-size: 0.74rem;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+.auth-copy h1 {
+  margin: 0.55rem 0 0.85rem;
+  max-width: 11ch;
+  color: #f7f5f0;
+  font-size: clamp(2.7rem, 5.4vw, 4.6rem);
+  font-weight: 500;
+  line-height: 0.96;
+  letter-spacing: -0.05em;
+}
+.auth-copy p:last-child {
+  margin: 0;
+  max-width: 28rem;
+  color: rgba(247, 245, 240, 0.72);
+  font-size: 1.05rem;
+  line-height: 1.5;
+}
+.auth-container .auth-card {
+  position: relative;
+  overflow: hidden;
+  max-width: none;
+  margin: 0;
+  padding: 1.7rem 1.45rem 1.35rem;
+  text-align: left;
+  color: #f7f5f0;
+  background: linear-gradient(165deg, rgba(255, 255, 255, 0.26), rgba(255, 255, 255, 0.08) 46%, rgba(255, 255, 255, 0.04));
+  border: 1px solid rgba(255, 255, 255, 0.46);
+  border-radius: 28px;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.62);
+  backdrop-filter: blur(28px) saturate(1.6);
+  -webkit-backdrop-filter: blur(28px) saturate(1.6);
+}
+.auth-container .auth-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.28), transparent 34%);
+}
+.auth-container .auth-card > * { position: relative; z-index: 1; }
+.auth-container .auth-card h2 {
+  margin: 0.95rem 0 0.3rem;
+  color: #fff;
+  font-size: 1.65rem;
+  font-weight: 600;
+  letter-spacing: -0.04em;
+}
+.auth-container .auth-card p { color: rgba(247, 245, 240, 0.74); margin-bottom: 0; }
+.auth-fine { margin-top: 0.85rem; font-size: 0.82rem; line-height: 1.45; }
+.auth-container .auth-local-note {
+  margin: 0.9rem 0 0;
+  padding: 0.7rem 0.8rem;
+  color: rgba(247, 245, 240, 0.86);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 12px;
+}
+.auth-action {
+  width: 100%;
+  margin-top: 1.2rem;
+  padding: 0.95rem 1rem;
+  border: 0;
+  border-radius: 14px;
+  background: #f7f5f0;
+  color: #142018;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.auth-action:hover { background: #fff; }
+.auth-action:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
+.auth-loading {
+  position: relative;
+  z-index: 1;
+  margin: 0;
+  color: rgba(247, 245, 240, 0.78);
+  letter-spacing: 0.04em;
+}
+@media (max-width: 800px) {
+  .auth-layout { grid-template-columns: 1fr; gap: 1.4rem; }
+  .auth-copy h1 { max-width: 14ch; font-size: 2.55rem; }
+}
+
 @media (max-width: 860px) {
   .settings-shell { grid-template-columns: 1fr; }
   .settings-nav { position: static; flex-direction: row; flex-wrap: wrap; gap: 0.35rem; }

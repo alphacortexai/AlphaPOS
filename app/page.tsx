@@ -2289,27 +2289,37 @@ export default function Page() {
   );
 
 
-  if (loading) return <div className="auth-container"><div className="status">Loading AlphaPOS...</div></div>;
-  if (!authUser) {
+  if (loading || !authUser) {
     return (
       <div className="auth-container">
-        <div className="auth-card">
-          <span className="brand-mark" aria-hidden="true">A</span>
-          <h1>AlphaPOS</h1>
-          <p>Sell, take payment, and keep the shop’s books.</p>
-          {signInNotice && <p className="auth-local-note">{signInNotice}</p>}
-          {firebaseApp ? (
-            <>
-              <button className="primary" onClick={handleLogin}>Sign in with Google</button>
-              <p className="auth-local-note">Staff open the link in their invite, or sign in with Google using that same email.</p>
-            </>
-          ) : (
-            <>
-              <p className="auth-local-note">This browser will keep the shop on this device.</p>
-              <button className="primary" onClick={startLocalCounter}>Open the counter</button>
-            </>
-          )}
-        </div>
+        <div className="auth-glow auth-glow-a" aria-hidden="true" />
+        <div className="auth-glow auth-glow-b" aria-hidden="true" />
+        <div className="auth-glow auth-glow-c" aria-hidden="true" />
+        {loading ? (
+          <p className="auth-loading">Opening AlphaPOS</p>
+        ) : (
+          <div className="auth-layout">
+            <div className="auth-copy">
+              <p className="auth-kicker">AlphaPOS</p>
+              <h1>The counter, ready when the shop opens.</h1>
+              <p>Sell, take payment, and keep the books in one place.</p>
+            </div>
+            <section className="auth-card" aria-label="Sign in">
+              <span className="brand-mark" aria-hidden="true">A</span>
+              <h2>Sign in</h2>
+              <p className="auth-lede">{firebaseApp ? 'Use the Google account for this shop.' : 'This browser keeps the shop on this device.'}</p>
+              {signInNotice && <p className="auth-local-note">{signInNotice}</p>}
+              {firebaseApp ? (
+                <>
+                  <button className="auth-action" type="button" onClick={handleLogin}>Sign in with Google</button>
+                  <p className="auth-fine">Staff open the link in their invite, or sign in with the same email.</p>
+                </>
+              ) : (
+                <button className="auth-action" type="button" onClick={startLocalCounter}>Open the counter</button>
+              )}
+            </section>
+          </div>
+        )}
       </div>
     );
   }
