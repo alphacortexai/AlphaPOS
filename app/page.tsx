@@ -266,6 +266,9 @@ export default function Page() {
   const [productSearchQuery, setProductSearchQuery] = useState('');
   const [productBranchFilter, setProductBranchFilter] = useState('');
   const [productStockFilter, setProductStockFilter] = useState<'all' | 'low' | 'out'>('all');
+  const [productPane, setProductPane] = useState<'shelf' | 'movements'>('shelf');
+  const [expensePane, setExpensePane] = useState<'list' | 'groups'>('list');
+  const [showServiceModal, setShowServiceModal] = useState(false);
 
   const [branchForm, setBranchForm] = useState({ name: '', location: '', id: '' });
   const [productForm, setProductForm] = useState({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0, sku: '', barcode: '', category: '' });
@@ -284,7 +287,6 @@ export default function Page() {
   const [editingExpenseGroupId, setEditingExpenseGroupId] = useState('');
   const [editingExpenseGroupName, setEditingExpenseGroupName] = useState('');
   const [expenseChartRange, setExpenseChartRange] = useState<ExpenseChartRange>('month');
-  const [showExpenseGroupsDetails, setShowExpenseGroupsDetails] = useState(false);
   const [userForm, setUserForm] = useState({ id: '', name: '', email: '', role: 'cashier' as Role, branchId: '' });
   const [shopNameForm, setShopNameForm] = useState('');
   const [settingsTab, setSettingsTab] = useState<'shop' | 'branches' | 'time' | 'backup' | 'tax' | 'receipt' | 'email'>('shop');
@@ -860,23 +862,6 @@ export default function Page() {
     return { mostSold, topRevenue, trendDays, maxRevenue, chartMax, totalRevenue, totalExpense, averageRevenue };
   }, [insightTrendRange, sales, expenses]);
 
-  const shopWeek = useMemo(() => {
-    const today = new Date();
-    const days = Array.from({ length: 7 }, (_, idx) => {
-      const date = new Date(today);
-      date.setHours(12, 0, 0, 0);
-      date.setDate(today.getDate() - (6 - idx));
-      return { key: date.toISOString().slice(0, 10), label: date.toLocaleDateString(undefined, { weekday: 'short' }), revenue: 0 };
-    });
-    const byDay = new Map(days.map((day) => [day.key, day]));
-    sales.forEach((sale) => {
-      const bucket = byDay.get(new Date(sale.createdAt).toISOString().slice(0, 10));
-      if (bucket) bucket.revenue += sale.amount;
-    });
-    const max = days.reduce((peak, day) => Math.max(peak, day.revenue), 0);
-    return { days, max, total: days.reduce((sum, day) => sum + day.revenue, 0) };
-  }, [sales]);
-
   // Filtered products for inventory
   const filteredProducts = useMemo(() => {
     return products.filter(p => {
@@ -1108,6 +1093,7 @@ export default function Page() {
 
     showNotification('Service saved successfully!', 'success');
     setServiceForm({ name: '', branchId: '', amount: 0, serviceType: 'direct_cost', directCost: 0, monthlySharedCost: 0, expenseGroupId: '' });
+    setShowServiceModal(false);
   };
 
   const expenseGroupMap = useMemo(() => Object.fromEntries(expenseGroups.map((g) => [g.id, g.name])), [expenseGroups]);
@@ -2434,162 +2420,63 @@ export default function Page() {
         </header>
 
         {view === 'dashboard' && (
-          <section className="studio">
+          <section className="today-board">
             {(() => {
               const hour = new Date().getHours();
               const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
-              const named = authUser.displayName && authUser.displayName !== 'Counter' ? authUser.displayName.split(' ')[0] : '';
+              const named = authUser.displayName && authUser.displayName !== 'Counter' && authUser.email !== 'counter@this-device' ? authUser.displayName.split(' ')[0] : '';
               const periodNoun = dashboardPeriod === 'daily' ? 'today' : dashboardPeriod === 'weekly' ? 'this week' : dashboardPeriod === 'monthly' ? 'this month' : 'this year';
-              const lowStock = products.filter((product) => product.stock < 10).slice(0, 4);
-              const labelEvery = insightTrendRange <= 7 ? 1 : insightTrendRange <= 14 ? 2 : insightTrendRange <= 30 ? 5 : insightTrendRange <= 60 ? 10 : 14;
-              const barHeight = (value: number) => dashboardInsights.chartMax > 0 && value > 0 ? Math.max(8, (value / dashboardInsights.chartMax) * 100) : 0;
+              const lowStock = products.filter((product) => product.stock < 10).slice(0, 3);
               return (
                 <>
                   <div className="studio-top">
-                    <div>
-                      <h2>{named ? `${greeting}, ${named}` : greeting}</h2>
-                    </div>
+                    <h2>{named ? `${greeting}, ${named}` : greeting}</h2>
                     <div className="studio-controls">
-                      <label>
-                        Period
-                        <select value={dashboardPeriod} onChange={(e) => setDashboardPeriod(e.target.value as DashboardPeriod)}>
-                          <option value="daily">Today</option>
-                          <option value="weekly">This week</option>
-                          <option value="monthly">This month</option>
-                          <option value="yearly">This year</option>
-                        </select>
-                      </label>
-                      <button className="primary" onClick={() => setView('sales')}>Open register</button>
+                      <select aria-label="Period" value={dashboardPeriod} onChange={(e) => setDashboardPeriod(e.target.value as DashboardPeriod)}>
+                        <option value="daily">Today</option>
+                        <option value="weekly">This week</option>
+                        <option value="monthly">This month</option>
+                        <option value="yearly">This year</option>
+                      </select>
+                      <button className="primary" onClick={() => setView('sales')}>Register</button>
                     </div>
                   </div>
-
-                  <div className="studio-layout">
-                    <div>
-                      <div className="stat-grid">
-                        <article className="stat-card">
-                          <header><span className="stat-icon" aria-hidden="true">↗</span><Badge value={dashboardMetrics.sales.change} /></header>
-                          <p>Sales {periodNoun}</p>
-                          <strong>{formatUGX(dashboardMetrics.sales.value)}</strong>
-                          <span className="stat-note">{dashboardMetrics.receipts} receipt{dashboardMetrics.receipts === 1 ? '' : 's'} · avg {formatUGX(dashboardMetrics.receipts > 0 ? dashboardMetrics.sales.value / dashboardMetrics.receipts : 0)}</span>
-                        </article>
-                        <article className="stat-card">
-                          <header><span className="stat-icon" aria-hidden="true">≡</span><Badge value={dashboardMetrics.grossProfit.change} /></header>
-                          <p>Gross profit</p>
-                          <strong className={dashboardMetrics.grossProfit.value >= 0 ? 'is-positive' : 'is-negative'}>{formatUGX(dashboardMetrics.grossProfit.value)}</strong>
-                          <span className="stat-note">{taxSettings.enabled ? `${taxSettings.name} ${formatUGX(dashboardMetrics.tax.value)}` : 'Tax is off'}</span>
-                        </article>
-                        <article className="stat-card">
-                          <header><span className="stat-icon is-soft" aria-hidden="true">−</span><Badge value={dashboardMetrics.expenses.change} /></header>
-                          <p>Expenses {periodNoun}</p>
-                          <strong className="is-negative">{formatUGX(dashboardMetrics.expenses.value)}</strong>
-                          <span className="stat-note">{defaultAccount?.name || 'Cash'} balance {formatUGX(defaultAccount ? (accountBalances.get(defaultAccount.id) || 0) : 0)}</span>
-                        </article>
-                        <article className="stat-card">
-                          <header><span className="stat-icon" aria-hidden="true">◆</span><Badge value={dashboardMetrics.netProfit.change} /></header>
-                          <p>Net {periodNoun}</p>
-                          <strong className={dashboardMetrics.netProfit.value >= 0 ? 'is-positive' : 'is-negative'}>{formatUGX(dashboardMetrics.netProfit.value)}</strong>
-                          <span className="stat-note">After tax, cost, and expenses</span>
-                        </article>
-                      </div>
-
-                      <div className="studio-charts">
-                        <article className="card pair-card">
-                          <div className="insight-header-row">
-                            <div>
-                              <h3>Sales and expenses</h3>
-                              <p className="muted-copy">Same days, side by side</p>
-                            </div>
-                            <label>
-                              Window
-                              <select value={insightTrendRange} onChange={(e) => setInsightTrendRange(Number(e.target.value) as InsightTrendRange)}>
-                                <option value={7}>7 days</option>
-                                <option value={14}>14 days</option>
-                                <option value={30}>30 days</option>
-                                <option value={60}>60 days</option>
-                                <option value={100}>100 days</option>
-                              </select>
-                            </label>
-                          </div>
-                          <div className="pair-legend">
-                            <span><i className="is-sales" />Sales</span>
-                            <span><i className="is-expense" />Expenses</span>
-                          </div>
-                          <div className="pair-chart" role="img" aria-label={`Sales and expenses for the last ${insightTrendRange} days. Sales ${formatUGX(dashboardInsights.totalRevenue)}. Expenses ${formatUGX(dashboardInsights.totalExpense)}.`}>
-                            {dashboardInsights.trendDays.map((day, index) => {
-                              const showLabel = insightTrendRange <= 14 || index % labelEvery === 0 || index === dashboardInsights.trendDays.length - 1;
-                              const axisLabel = insightTrendRange <= 7
-                                ? new Date(`${day.date}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short' })
-                                : insightTrendRange <= 14
-                                  ? new Date(`${day.date}T12:00:00`).toLocaleDateString(undefined, { weekday: 'narrow' })
-                                  : day.date.slice(8);
-                              return (
-                                <div key={day.date} className="pair-col" title={`${day.date}: sales ${formatUGX(day.revenue)}, expenses ${formatUGX(day.expense)}`}>
-                                  <div className="pair-bars">
-                                    <span className="is-sales" style={{ height: `${barHeight(day.revenue)}%` }} />
-                                    <span className="is-expense" style={{ height: `${barHeight(day.expense)}%` }} />
-                                  </div>
-                                  {showLabel ? <em>{axisLabel}</em> : <em aria-hidden="true" />}
-                                </div>
-                              );
-                            })}
-                          </div>
-                          <div className="insight-trend-footer">
-                            <p>Peak sales <strong>{formatUGX(dashboardInsights.maxRevenue)}</strong></p>
-                            <p>Sales <strong>{formatUGX(dashboardInsights.totalRevenue)}</strong></p>
-                            <p>Expenses <strong>{formatUGX(dashboardInsights.totalExpense)}</strong></p>
-                          </div>
-                        </article>
-                      </div>
-                    </div>
-
-                    <aside className="studio-side">
-                      <div className="card drawer-card">
-                        <h3>Cash drawer</h3>
-                        {openCashSession ? (
-                          <>
-                            <p className="drawer-state">Open</p>
-                            <p className="muted-copy">Expected in the till</p>
-                            <strong>{formatUGX(sessionExpectedCash)}</strong>
-                          </>
-                        ) : (
-                          <>
-                            <p className="drawer-state is-closed">Closed</p>
-                            <p className="muted-copy">Open the drawer on the register before the first cash sale.</p>
-                          </>
-                        )}
-                        <button type="button" className="primary" onClick={() => setView('sales')}>{openCashSession ? 'Go to register' : 'Open the register'}</button>
-                      </div>
-                      <div className="card">
-                        <div className="insight-header-row">
-                          <h3>Needs a look</h3>
-                          <button type="button" className="edit-btn" onClick={() => setView('products')}>Products</button>
-                        </div>
-                        {lowStock.length > 0 ? (
-                          <ul className="attention-list">
-                            {lowStock.map((product) => (
-                              <li key={product.id}>
-                                <span>{product.name}</span>
-                                <b className={product.stock === 0 ? 'is-negative' : ''}>{product.stock === 0 ? 'Out' : `${product.stock} left`}</b>
-                              </li>
-                            ))}
-                          </ul>
-                        ) : <p className="muted-copy">Every product has at least 10 on hand.</p>}
-                      </div>
-                      <div className="card">
-                        <h3>Most sold</h3>
-                        {dashboardInsights.mostSold.length > 0 ? (
-                          <ol className="rank-list">
-                            {dashboardInsights.mostSold.map((item, index) => (
-                              <li key={`${item.type}-${item.name}`}>
-                                <span><i>{index + 1}</i><strong>{item.name}</strong><small>{item.type}</small></span>
-                                <b>{item.qty}</b>
-                              </li>
-                            ))}
-                          </ol>
-                        ) : <p className="muted-copy">No sales in the shop yet.</p>}
-                      </div>
-                    </aside>
+                  <div className="today-numbers">
+                    <article className="stat-card">
+                      <p>Sales {periodNoun}</p>
+                      <strong>{formatUGX(dashboardMetrics.sales.value)}</strong>
+                      <span className="stat-note">{dashboardMetrics.receipts} receipt{dashboardMetrics.receipts === 1 ? '' : 's'}</span>
+                    </article>
+                    <article className="stat-card">
+                      <p>Left after costs</p>
+                      <strong className={dashboardMetrics.netProfit.value >= 0 ? 'is-positive' : 'is-negative'}>{formatUGX(dashboardMetrics.netProfit.value)}</strong>
+                      <span className="stat-note">After tax, cost, and expenses</span>
+                    </article>
                   </div>
+                  <div className="today-actions">
+                    <article className="card">
+                      <h3>{openCashSession ? 'Drawer open' : 'Drawer closed'}</h3>
+                      <strong className="today-figure">{openCashSession ? formatUGX(sessionExpectedCash) : '—'}</strong>
+                      <p className="muted-copy">{openCashSession ? 'Expected in the till.' : 'Open the drawer on the register before taking cash.'}</p>
+                    </article>
+                    <article className="card">
+                      <div className="insight-header-row">
+                        <h3>Low stock</h3>
+                        <button type="button" className="edit-btn" onClick={() => { setProductPane('shelf'); setProductStockFilter('low'); setView('products'); }}>Products</button>
+                      </div>
+                      {lowStock.length > 0 ? (
+                        <ul className="attention-list">
+                          {lowStock.map((product) => (
+                            <li key={product.id}>
+                              <span>{product.name}</span>
+                              <b className={product.stock === 0 ? 'is-negative' : ''}>{product.stock === 0 ? 'Out' : `${product.stock} left`}</b>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : <p className="muted-copy">Nothing is running low.</p>}
+                    </article>
+                  </div>
+                  {seesBooks && <button type="button" className="edit-btn today-more" onClick={() => setView('reports')}>Open reports</button>}
                 </>
               );
             })()}
@@ -2598,54 +2485,52 @@ export default function Page() {
 
         {view === 'products' && (
           <section>
-            <div className="page-header">
-              <h2>Product Inventory</h2>
-              <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
-                <button className="edit-btn" disabled={products.length === 0} onClick={() => {
-                  setStockAdjustmentForm({ productId: '', direction: 'add', quantity: 1, reason: 'restock', note: '', supplierName: '', reference: '', unitCost: '' });
-                  setShowStockAdjustmentModal(true);
-                }}>Receive stock</button>
-                <button className="primary" onClick={() => { setProductForm({ id: '', name: '', branchId: branches[0]?.id || '', stock: 0, purchasePrice: 0, salePrice: 0, sku: '', barcode: '', category: '' }); setShowProductModal(true); }}>
-                  + Add Product
-                </button>
+            <div className="page-tools">
+              <div className="pane-switch" role="tablist" aria-label="Products">
+                <button type="button" className={productPane === 'shelf' ? 'active' : ''} onClick={() => setProductPane('shelf')}>Shelf</button>
+                <button type="button" className={productPane === 'movements' ? 'active' : ''} onClick={() => setProductPane('movements')}>Movements</button>
               </div>
+              {productPane === 'shelf' && (
+                <div className="page-tools-actions">
+                  <button className="edit-btn" disabled={products.length === 0} onClick={() => {
+                    setStockAdjustmentForm({ productId: '', direction: 'add', quantity: 1, reason: 'restock', note: '', supplierName: '', reference: '', unitCost: '' });
+                    setShowStockAdjustmentModal(true);
+                  }}>Receive stock</button>
+                  <button className="primary" onClick={() => { setProductForm({ id: '', name: '', branchId: branches[0]?.id || '', stock: 0, purchasePrice: 0, salePrice: 0, sku: '', barcode: '', category: '' }); setShowProductModal(true); }}>
+                    Add product
+                  </button>
+                </div>
+              )}
             </div>
 
-            {/* Inventory Search & Filter */}
+            {productPane === 'shelf' && (
+            <>
             <div className="filter-bar inventory-filter-bar">
               <div className="filter-group">
-                <label>Search Product</label>
-                <input 
-                  type="text" 
-                  placeholder="Search name, category, SKU or barcode..."
+                <label>Search</label>
+                <input
+                  type="text"
+                  placeholder="Name, SKU, or barcode"
                   value={productSearchQuery}
                   onChange={(e) => setProductSearchQuery(e.target.value)}
                 />
               </div>
-              <div className="filter-group">
-                <label>Branch</label>
-                <select 
-                  value={productBranchFilter}
-                  onChange={(e) => setProductBranchFilter(e.target.value)}
-                >
-                  <option value="">All Branches</option>
-                  {branches.map(b => (
-                    <option key={b.id} value={b.id}>{b.name}</option>
-                  ))}
-                </select>
+              {branches.length > 1 && (
+                <div className="filter-group">
+                  <label>Branch</label>
+                  <select value={productBranchFilter} onChange={(e) => setProductBranchFilter(e.target.value)}>
+                    <option value="">All branches</option>
+                    {branches.map(b => (
+                      <option key={b.id} value={b.id}>{b.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              <div className="pane-switch" role="tablist" aria-label="Stock">
+                <button type="button" className={productStockFilter === 'all' ? 'active' : ''} onClick={() => setProductStockFilter('all')}>All</button>
+                <button type="button" className={productStockFilter === 'low' ? 'active' : ''} onClick={() => setProductStockFilter('low')}>Low</button>
+                <button type="button" className={productStockFilter === 'out' ? 'active' : ''} onClick={() => setProductStockFilter('out')}>Out</button>
               </div>
-              <div className="filter-group">
-                <label>Stock Status</label>
-                <select 
-                  value={productStockFilter}
-                  onChange={(e) => setProductStockFilter(e.target.value as 'all' | 'low' | 'out')}
-                >
-                  <option value="all">All Products</option>
-                  <option value="low">Low Stock (1-9)</option>
-                  <option value="out">Out of Stock</option>
-                </select>
-              </div>
-              <button className="edit-btn" onClick={() => { setProductSearchQuery(''); setProductBranchFilter(''); setProductStockFilter('all'); }}>Reset Filters</button>
             </div>
 
             {/* Inventory Table */}
@@ -2706,16 +2591,19 @@ export default function Page() {
                 </tbody>
               </table>
             </div>
-            <div className="card" style={{ marginTop: '1.25rem' }}>
-              <div className="page-header" style={{ marginBottom: '0.85rem' }}>
-                <div>
-                  <h3 style={{ margin: 0 }}>Recent stock activity</h3>
-                  <p style={{ margin: '0.3rem 0 0', color: 'var(--text-muted)', fontSize: '0.78rem' }}>
-                    Shows up to 100 movements from the latest 500 shop activity entries.
-                  </p>
-                </div>
-              </div>
-              <div className="table-wrap">
+            <PaginationControls
+              totalItems={filteredProducts.length}
+              totalPages={productsPagination.totalPages}
+              page={productsPagination.safePage}
+              start={productsPagination.start}
+              end={productsPagination.end}
+              onPrevious={() => setProductsPage((prev) => Math.max(1, prev - 1))}
+              onNext={() => setProductsPage((prev) => Math.min(productsPagination.totalPages, prev + 1))}
+            />
+            </>
+            )}
+            {productPane === 'movements' && (
+            <div className="table-wrap">
                 <table className="data-table">
                   <thead>
                     <tr>
@@ -2766,17 +2654,8 @@ export default function Page() {
                     )}
                   </tbody>
                 </table>
-              </div>
             </div>
-            <PaginationControls
-              totalItems={filteredProducts.length}
-              totalPages={productsPagination.totalPages}
-              page={productsPagination.safePage}
-              start={productsPagination.start}
-              end={productsPagination.end}
-              onPrevious={() => setProductsPage((prev) => Math.max(1, prev - 1))}
-              onNext={() => setProductsPage((prev) => Math.min(productsPagination.totalPages, prev + 1))}
-            />
+            )}
           </section>
         )}
 
@@ -2830,59 +2709,9 @@ export default function Page() {
 
         {view === 'services' && (
           <section>
-            <div className="page-header">
-              <h2>Services</h2>
-            </div>
-            <div className="card" style={{ marginBottom: '1rem' }}>
-              <h3>Add a service</h3>
-              <p className="muted-copy">Photocopy, scanning, lamination, printing, and typing belong here. Sell them from the register. They do not reduce shelf stock.</p>
-              <form onSubmit={saveService} className="office-form">
-                <div className="field">
-                  <label>Service Name</label>
-                  <input type="text" value={serviceForm.name} onChange={(e) => setServiceForm((prev) => ({ ...prev, name: e.target.value }))} placeholder="Photocopy, scan, lamination" />
-                </div>
-                <div className="field">
-                  <label>Branch</label>
-                  <select value={serviceForm.branchId} onChange={(e) => setServiceForm((prev) => ({ ...prev, branchId: e.target.value }))}>
-                    <option value="">Select Branch</option>
-                    {branches.map((b) => (
-                      <option key={b.id} value={b.id}>{b.name}</option>
-                    ))}
-                  </select>
-                </div>
-                <div className="field">
-                  <label>Price</label>
-                  <input type="number" min={0} value={serviceForm.amount} onChange={(e) => setServiceForm((prev) => ({ ...prev, amount: Number(e.target.value) }))} />
-                </div>
-                <div className="field">
-                  <label>Service Type</label>
-                  <select value={serviceForm.serviceType} onChange={(e) => setServiceForm((prev) => ({ ...prev, serviceType: e.target.value as ServiceType }))}>
-                    <option value="direct_cost">Per sale</option>
-                    <option value="shared_cost">Monthly</option>
-                  </select>
-                </div>
-                {serviceForm.serviceType === 'direct_cost' ? (
-                  <div className="field">
-                    <label>Cost per sale</label>
-                    <input type="number" min={0} value={serviceForm.directCost} onChange={(e) => setServiceForm((prev) => ({ ...prev, directCost: Number(e.target.value) }))} />
-                  </div>
-                ) : (
-                  <>
-                    <div className="field">
-                      <label>Monthly Shared Cost</label>
-                      <input type="number" min={0} value={serviceForm.monthlySharedCost} onChange={(e) => setServiceForm((prev) => ({ ...prev, monthlySharedCost: Number(e.target.value) }))} />
-                    </div>
-                    <div className="field">
-                      <label>Expense Group (for auto-added expenses)</label>
-                      <select value={serviceForm.expenseGroupId} onChange={(e) => setServiceForm((prev) => ({ ...prev, expenseGroupId: e.target.value }))}>
-                        <option value="">Ungrouped</option>
-                        {expenseGroups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
-                      </select>
-                    </div>
-                  </>
-                )}
-                <button className="primary" type="submit">Save Service</button>
-              </form>
+            <div className="page-tools">
+              <p className="muted-copy">Photocopy, scanning, lamination, printing, and typing. Sell them from the register. They do not reduce shelf stock.</p>
+              <button className="primary" type="button" onClick={() => { setServiceForm({ name: '', branchId: branches[0]?.id || '', amount: 0, serviceType: 'direct_cost', directCost: 0, monthlySharedCost: 0, expenseGroupId: '' }); setShowServiceModal(true); }}>Add service</button>
             </div>
 
             <div className="table-wrap">
@@ -2906,11 +2735,11 @@ export default function Page() {
                       <td>{formatUGX(service.salePrice)}</td>
                       <td>
                         {service.serviceType === 'direct_cost'
-                          ? `Unit cost: ${formatUGX(service.directCost)}`
-                          : `Monthly: ${formatUGX(service.monthlySharedCost)} | Weekly: ${formatUGX(service.monthlySharedCost / 4)} | Daily: ${formatUGX(service.monthlySharedCost / 30)}`}
+                          ? formatUGX(service.directCost)
+                          : `${formatUGX(service.monthlySharedCost)} / month`}
                       </td>
                       <td>
-                        <button className="edit-btn" onClick={() => setServiceForm({
+                        <button className="edit-btn" onClick={() => { setServiceForm({
                           name: service.name,
                           branchId: service.branchId,
                           amount: service.salePrice,
@@ -2918,8 +2747,7 @@ export default function Page() {
                           directCost: service.directCost || 0,
                           monthlySharedCost: service.monthlySharedCost || 0,
                           expenseGroupId: service.expenseGroupId || ''
-                        })}>Edit</button>
-                        <button className="edit-btn" onClick={() => { addServiceToCart(service.id, true); setView('sales'); }}>Add to register</button>
+                        }); setShowServiceModal(true); }}>Edit</button>
                         <button className="delete-btn" onClick={() => { setServices((prev) => prev.filter((item) => item.id !== service.id)); logActivity('delete_service', `Deleted service "${service.name}"`); }}>Delete</button>
                       </td>
                     </tr>
@@ -2942,6 +2770,70 @@ export default function Page() {
               onPrevious={() => setServicesPage((prev) => Math.max(1, prev - 1))}
               onNext={() => setServicesPage((prev) => Math.min(servicesPagination.totalPages, prev + 1))}
             />
+            {showServiceModal && (
+              <div className="modal-overlay">
+                <div className="modal-content">
+                  <div className="modal-header">
+                    <h3>Service</h3>
+                    <button type="button" className="modal-close" onClick={() => setShowServiceModal(false)}>&times;</button>
+                  </div>
+                  <form onSubmit={saveService}>
+                    <div className="modal-body">
+                      <div className="form">
+                        <label className="field">
+                          <span>Service name</span>
+                          <input type="text" value={serviceForm.name} onChange={(e) => setServiceForm((prev) => ({ ...prev, name: e.target.value }))} placeholder="Photocopy, scan, lamination" required />
+                        </label>
+                        <label className="field">
+                          <span>Branch</span>
+                          <select value={serviceForm.branchId} onChange={(e) => setServiceForm((prev) => ({ ...prev, branchId: e.target.value }))} required>
+                            <option value="">Select branch</option>
+                            {branches.map((b) => (
+                              <option key={b.id} value={b.id}>{b.name}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="field">
+                          <span>Price</span>
+                          <input type="number" min={0} value={serviceForm.amount} onChange={(e) => setServiceForm((prev) => ({ ...prev, amount: Number(e.target.value) }))} required />
+                        </label>
+                        <label className="field">
+                          <span>How cost is counted</span>
+                          <select value={serviceForm.serviceType} onChange={(e) => setServiceForm((prev) => ({ ...prev, serviceType: e.target.value as ServiceType }))}>
+                            <option value="direct_cost">Cost each time it is sold</option>
+                            <option value="shared_cost">One monthly cost</option>
+                          </select>
+                        </label>
+                        {serviceForm.serviceType === 'direct_cost' ? (
+                          <label className="field">
+                            <span>Cost per sale</span>
+                            <input type="number" min={0} value={serviceForm.directCost} onChange={(e) => setServiceForm((prev) => ({ ...prev, directCost: Number(e.target.value) }))} />
+                          </label>
+                        ) : (
+                          <>
+                            <label className="field">
+                              <span>Monthly cost</span>
+                              <input type="number" min={0} value={serviceForm.monthlySharedCost} onChange={(e) => setServiceForm((prev) => ({ ...prev, monthlySharedCost: Number(e.target.value) }))} />
+                            </label>
+                            <label className="field">
+                              <span>Expense group</span>
+                              <select value={serviceForm.expenseGroupId} onChange={(e) => setServiceForm((prev) => ({ ...prev, expenseGroupId: e.target.value }))}>
+                                <option value="">Ungrouped</option>
+                                {expenseGroups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
+                              </select>
+                            </label>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                    <div className="modal-footer">
+                      <button type="button" className="edit-btn" onClick={() => setShowServiceModal(false)}>Cancel</button>
+                      <button className="primary" type="submit">Save service</button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            )}
           </section>
         )}
 
@@ -2984,20 +2876,17 @@ export default function Page() {
 
                 <button className="edit-btn" onClick={() => { const today = new Date().toISOString().split('T')[0]; setSalesDateFilter(today); setSalesRangeStart(today); setSalesRangeEnd(today); setSalesHistoryViewMode('day'); }}>Today</button>
               </div>
-              <div className="kpi-grid cols-3">
-                <article className="kpi">
-                  <p>Receipts</p>
-                  <strong>{groupedSales.length}</strong>
-                </article>
-                <article className="kpi">
-                  <p>Total</p>
-                  <strong>{formatUGX(groupedSales.reduce((sum, sale) => sum + sale.total, 0))}</strong>
-                </article>
-                <article className="kpi">
-                  <p>Margin</p>
-                  <strong className={groupedSales.reduce((sum, sale) => sum + sale.profit, 0) >= 0 ? 'is-positive' : 'is-negative'}>{showRegisterMargin ? formatUGX(groupedSales.reduce((sum, sale) => sum + sale.profit, 0)) : '—'}</strong>
-                </article>
-              </div>
+              <p className="period-summary">
+                {groupedSales.length} receipt{groupedSales.length === 1 ? '' : 's'}
+                <span>·</span>
+                {formatUGX(groupedSales.reduce((sum, sale) => sum + sale.total, 0))}
+                {showRegisterMargin && (
+                  <>
+                    <span>·</span>
+                    margin {formatUGX(groupedSales.reduce((sum, sale) => sum + sale.profit, 0))}
+                  </>
+                )}
+              </p>
 
             <div className="table-wrap">
                 <table className="data-table">
@@ -3066,123 +2955,94 @@ export default function Page() {
 
         {view === 'expenses' && (
           <section>
-            <div className="page-header">
-              <h2>Expenses</h2>
-              <button className="primary" onClick={() => { setExpenseForm({ id: '', title: '', branchId: branches[0]?.id || '', amount: 0, expenseGroupId: '', accountId: defaultAccount?.id || '' }); setShowExpenseModal(true); }}>
-                + Add Expense
-              </button>
-            </div>
-            
-            {/* Expense Summary */}
-            {expenses.length > 0 && (
-              <div className="kpi-grid">
-                <article className="kpi">
-                  <p>Total expenses</p>
-                  <strong className="is-negative">{formatUGX(expenses.reduce((sum, e) => sum + e.amount, 0))}</strong>
-                  <span className="badge badge-danger">All time</span>
-                </article>
-                <article className="kpi">
-                  <p>This month</p>
-                  <strong className="is-negative">{formatUGX(expenses.filter(e => {
-                    const d = new Date(e.createdAt);
-                    const now = new Date();
-                    return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
-                  }).reduce((sum, e) => sum + e.amount, 0))}</strong>
-                  <span className="badge badge-warning">Current month</span>
-                </article>
-                <article className="kpi">
-                  <p>Records</p>
-                  <strong>{expenses.length}</strong>
-                  <span className="badge badge-info">Transactions</span>
-                </article>
+            <div className="page-tools">
+              <div className="pane-switch" role="tablist" aria-label="Expenses">
+                <button type="button" className={expensePane === 'list' ? 'active' : ''} onClick={() => setExpensePane('list')}>Spending</button>
+                <button type="button" className={expensePane === 'groups' ? 'active' : ''} onClick={() => setExpensePane('groups')}>Groups</button>
               </div>
-            )}
-            
-
-            <div className="card" style={{ marginBottom: '1rem' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
-                <h4 style={{ margin: 0 }}>Expense Groups</h4>
-                <button type="button" className="edit-btn" onClick={() => setShowExpenseGroupsDetails((prev) => !prev)}>
-                  {showExpenseGroupsDetails ? 'Hide details ▲' : 'Show details ▼'}
+              {expensePane === 'list' && (
+                <button className="primary" onClick={() => { setExpenseForm({ id: '', title: '', branchId: branches[0]?.id || '', amount: 0, expenseGroupId: '', accountId: defaultAccount?.id || '' }); setShowExpenseModal(true); }}>
+                  Add expense
                 </button>
-              </div>
-              {showExpenseGroupsDetails && (
-                <>
-                  <form onSubmit={createExpenseGroup} style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
-                    <input value={expenseGroupForm.name} onChange={(e) => setExpenseGroupForm({ name: e.target.value })} placeholder="New expense group name" style={{ flex: '1', minWidth: '220px' }} required />
-                    <button type="submit" className="primary">Create Group</button>
+              )}
+            </div>
+
+            {expensePane === 'groups' && (
+              <>
+                <div className="card">
+                  <h3>Groups</h3>
+                  <p className="muted-copy">Name the kinds of spending, then assign each expense to one.</p>
+                  <form onSubmit={createExpenseGroup} className="inline-form">
+                    <input value={expenseGroupForm.name} onChange={(e) => setExpenseGroupForm({ name: e.target.value })} placeholder="Rent, wages, supplies" required />
+                    <button type="submit" className="primary">Create group</button>
                   </form>
-                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
-                    <select value={transferExpenseGroupId} onChange={(e) => setTransferExpenseGroupId(e.target.value)} style={{ minWidth: '240px' }}>
-                      <option value="">Transfer ungrouped expenses to...</option>
+                  {expenseGroups.length > 0 ? (
+                    <div className="group-row">
+                      {expenseGroups.map((group) => (
+                        <div key={group.id} className="group-chip">
+                          {editingExpenseGroupId === group.id ? (
+                            <>
+                              <input value={editingExpenseGroupName} onChange={(e) => setEditingExpenseGroupName(e.target.value)} />
+                              <button type="button" className="primary" onClick={() => saveExpenseGroupEdit(group.id)}>Save</button>
+                              <button type="button" className="edit-btn" onClick={() => { setEditingExpenseGroupId(''); setEditingExpenseGroupName(''); }}>Cancel</button>
+                            </>
+                          ) : (
+                            <>
+                              <span>{group.name}</span>
+                              <button type="button" className="edit-btn" title={`Edit ${group.name}`} aria-label={`Edit ${group.name}`} onClick={() => { setEditingExpenseGroupId(group.id); setEditingExpenseGroupName(group.name); }}>Edit</button>
+                            </>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ) : <p className="muted-copy">No groups yet.</p>}
+                  <div className="inline-form">
+                    <select value={transferExpenseGroupId} onChange={(e) => setTransferExpenseGroupId(e.target.value)} aria-label="Group for ungrouped expenses">
+                      <option value="">Move ungrouped expenses to…</option>
                       {expenseGroups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
                     </select>
-                    <button type="button" className="edit-btn" onClick={transferUngroupedExpenses} disabled={!transferExpenseGroupId}>Transfer Existing Ungrouped</button>
+                    <button type="button" className="edit-btn" onClick={transferUngroupedExpenses} disabled={!transferExpenseGroupId}>Move them</button>
                   </div>
-                </>
-              )}
-              {expenseGroups.length > 0 && (
-                <div style={{ display: 'flex', gap: '0.6rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
-                  {expenseGroups.map((group) => (
-                    <div key={group.id} className="group-chip">
-                      {editingExpenseGroupId === group.id ? (
-                        <>
-                          <input value={editingExpenseGroupName} onChange={(e) => setEditingExpenseGroupName(e.target.value)} style={{ minWidth: '140px' }} />
-                          <button type="button" className="primary" onClick={() => saveExpenseGroupEdit(group.id)}>Save</button>
-                          <button type="button" className="edit-btn" onClick={() => { setEditingExpenseGroupId(''); setEditingExpenseGroupName(''); }}>Cancel</button>
-                        </>
-                      ) : (
-                        <>
-                          <span className="badge badge-info" style={{ fontWeight: 600 }}>{group.name}</span>
-                          <button type="button" className="edit-btn" title={`Edit ${group.name}`} aria-label={`Edit ${group.name}`} onClick={() => { setEditingExpenseGroupId(group.id); setEditingExpenseGroupName(group.name); }}>
-                            Edit
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  ))}
                 </div>
-              )}
-              <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                {expenseGroups.length > 0 ? `${expenseGroups.length} group(s) created.` : 'No expense groups yet. Create one to organize expenses.'}
-              </div>
-            </div>
-            <details className="quiet-fold">
-              <summary>Spending by group</summary>
-              <div className="segmented">
-                {(['day', '7days', '14days', 'month', '3months', '6months', '1year'] as ExpenseChartRange[]).map((range) => (
-                  <button key={range} type="button" className={expenseChartRange === range ? 'primary' : 'edit-btn'} onClick={() => setExpenseChartRange(range)}>
-                    {range === 'day' ? 'Per day' : range === '7days' ? '7 days' : range === '14days' ? '14 days' : range === 'month' ? 'Month' : range === '3months' ? '3 months' : range === '6months' ? '6 months' : '1 year'}
-                  </button>
-                ))}
-              </div>
-              {expenseChartData.total > 0 ? (
-                <div className="expense-chart">
-                  <div style={{ width: 160, height: 160, borderRadius: '50%', background: `conic-gradient(${expenseChartData.segments.map((s, i) => `${s.color} ${expenseChartData.segments.slice(0, i).reduce((a, b) => a + b.percentage, 0)}% ${(expenseChartData.segments.slice(0, i + 1).reduce((a, b) => a + b.percentage, 0))}%`).join(', ')})` }} />
-                  <div style={{ display: 'grid', gap: '0.5rem' }}>
-                    {expenseChartData.segments.map((segment) => (
-                      <div key={segment.name} style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem' }}>
-                        <span><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', background: segment.color, marginRight: 6 }} />{segment.name}</span>
-                        <span style={{ fontWeight: 600 }}>{segment.percentage.toFixed(1)}% ({formatUGX(segment.amount)})</span>
+                <div className="card">
+                  <div className="insight-header-row">
+                    <h3>Spending by group</h3>
+                    <select aria-label="Spending period" value={expenseChartRange} onChange={(e) => setExpenseChartRange(e.target.value as ExpenseChartRange)}>
+                      <option value="day">Today</option>
+                      <option value="7days">7 days</option>
+                      <option value="14days">14 days</option>
+                      <option value="month">This month</option>
+                      <option value="3months">3 months</option>
+                      <option value="6months">6 months</option>
+                      <option value="1year">This year</option>
+                    </select>
+                  </div>
+                  {expenseChartData.total > 0 ? (
+                    <div className="expense-chart">
+                      <div style={{ width: 160, height: 160, borderRadius: '50%', background: `conic-gradient(${expenseChartData.segments.map((s, i) => `${s.color} ${expenseChartData.segments.slice(0, i).reduce((a, b) => a + b.percentage, 0)}% ${(expenseChartData.segments.slice(0, i + 1).reduce((a, b) => a + b.percentage, 0))}%`).join(', ')})` }} />
+                      <div style={{ display: 'grid', gap: '0.5rem' }}>
+                        {expenseChartData.segments.map((segment) => (
+                          <div key={segment.name} style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem' }}>
+                            <span><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', background: segment.color, marginRight: 6 }} />{segment.name}</span>
+                            <span style={{ fontWeight: 600 }}>{segment.percentage.toFixed(1)}% ({formatUGX(segment.amount)})</span>
+                          </div>
+                        ))}
                       </div>
-                    ))}
-                  </div>
+                    </div>
+                  ) : <p className="muted-copy">No expenses in this period.</p>}
                 </div>
-              ) : <div style={{ color: 'var(--text-muted)' }}>No expenses in this period.</div>}
-            </details>
+              </>
+            )}
 
-            <div className="segmented">
-              <button type="button" className={expensesViewMode === 'all' ? 'primary' : 'edit-btn'} onClick={() => setExpensesViewMode('all')}>
-                All expenses
-              </button>
-              <button type="button" className={expensesViewMode === 'day' ? 'primary' : 'edit-btn'} onClick={() => setExpensesViewMode('day')}>
-                Expenses by day
-              </button>
+            {expensePane === 'list' && (
+            <>
+            <div className="filter-bar">
+              <div className="pane-switch" role="tablist" aria-label="Expense list">
+                <button type="button" className={expensesViewMode === 'all' ? 'active' : ''} onClick={() => setExpensesViewMode('all')}>All</button>
+                <button type="button" className={expensesViewMode === 'day' ? 'active' : ''} onClick={() => setExpensesViewMode('day')}>One day</button>
+              </div>
               {expensesViewMode === 'day' && (
-                <label style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                  <span>Day</span>
-                  <input type="date" value={expensesDayFilter} onChange={(e) => setExpensesDayFilter(e.target.value)} />
-                </label>
+                <input type="date" aria-label="Day" value={expensesDayFilter} onChange={(e) => setExpensesDayFilter(e.target.value)} />
               )}
             </div>
 
@@ -3236,6 +3096,8 @@ export default function Page() {
               onPrevious={() => setExpensesPage((prev) => Math.max(1, prev - 1))}
               onNext={() => setExpensesPage((prev) => Math.min(expensesPagination.totalPages, prev + 1))}
             />
+            </>
+            )}
           </section>
         )}
 
@@ -3253,28 +3115,6 @@ export default function Page() {
             {canManageUsers ? (
               <>
                 <p className="muted-copy">Invite by email. They open the link, or sign in with Google using that same address.</p>
-                {/* Staff Summary */}
-                {users.length > 0 && (
-                  <div className="kpi-grid">
-                    <article className="kpi">
-                      <p>Staff</p>
-                      <strong>{users.length}</strong>
-                      <span className="badge badge-info">Members</span>
-                    </article>
-                    <article className="kpi">
-                      <p>Cashiers</p>
-                      <strong>{users.filter(u => u.role === 'cashier').length}</strong>
-                      <span className="badge badge-success">On the counter</span>
-                    </article>
-                    <article className="kpi">
-                      <p>Managers</p>
-                      <strong>{users.filter(u => u.role === 'manager').length}</strong>
-                      <span className="badge badge-warning">Supervisors</span>
-                    </article>
-                  </div>
-                )}
-                
-    
             <div className="table-wrap">
                   <table className="data-table">
                     <thead>
@@ -3342,17 +3182,29 @@ export default function Page() {
             <div className="card trend-card">
               <div className="insight-header-row">
                 <div>
-                  <h3>Last 7 days</h3>
-                  <p className="muted-copy">Register sales and returns, by day</p>
+                  <h3>Sales and expenses</h3>
+                  <p className="muted-copy">{formatUGX(dashboardInsights.totalRevenue)} in · {formatUGX(dashboardInsights.totalExpense)} out</p>
                 </div>
-                <p className="muted-copy">Week total <strong>{formatUGX(shopWeek.total)}</strong></p>
+                <select aria-label="Chart window" value={insightTrendRange} onChange={(e) => setInsightTrendRange(Number(e.target.value) as InsightTrendRange)}>
+                  <option value={7}>7 days</option>
+                  <option value={14}>14 days</option>
+                  <option value={30}>30 days</option>
+                  <option value={60}>60 days</option>
+                  <option value={100}>100 days</option>
+                </select>
               </div>
-              <div className="week-strip" role="img" aria-label="Sales for the last 7 days">
-                {shopWeek.days.map((day) => (
-                  <div key={day.key} className="week-day" title={`${day.label}: ${formatUGX(day.revenue)}`}>
-                    <span style={{ height: `${shopWeek.max > 0 ? Math.max(day.revenue > 0 ? 8 : 0, (day.revenue / shopWeek.max) * 100) : 0}%` }} />
-                    <em>{day.label}</em>
-                    <small>{day.revenue === 0 ? '—' : formatUGX(day.revenue)}</small>
+              <div className="pair-legend">
+                <span><i className="is-sales" />Sales</span>
+                <span><i className="is-expense" />Expenses</span>
+              </div>
+              <div className="pair-chart" role="img" aria-label="Sales and expenses by day">
+                {dashboardInsights.trendDays.map((day) => (
+                  <div key={day.date} className="pair-col" title={`${day.date}: sales ${formatUGX(day.revenue)}, expenses ${formatUGX(day.expense)}`}>
+                    <div className="pair-bars">
+                      <span className="is-sales" style={{ height: `${dashboardInsights.chartMax > 0 ? Math.max(day.revenue > 0 ? 6 : 0, (day.revenue / dashboardInsights.chartMax) * 100) : 0}%` }} />
+                      <span className="is-expense" style={{ height: `${dashboardInsights.chartMax > 0 ? Math.max(day.expense > 0 ? 6 : 0, (day.expense / dashboardInsights.chartMax) * 100) : 0}%` }} />
+                    </div>
+                    {insightTrendRange <= 14 && <em>{new Date(`${day.date}T12:00:00`).toLocaleDateString(undefined, { weekday: 'narrow' })}</em>}
                   </div>
                 ))}
               </div>
@@ -3380,18 +3232,11 @@ export default function Page() {
                 <div className="metric-stack">
                   <div><span>Sales</span><strong>{formatUGX(getMetrics('month', 0).revenue)}</strong></div>
                   <div><span>Expenses</span><strong className="is-negative">{formatUGX(getMetrics('month', 0).expenseTotal)}</strong></div>
-                  <div><span>Gross profit</span><strong className={getMetrics('month', 0).grossProfit >= 0 ? 'is-positive' : 'is-negative'}>{formatUGX(getMetrics('month', 0).grossProfit)}</strong></div>
-                </div>
-              </div>
-              <div className="card">
-                <h4>Inventory</h4>
-                <div className="metric-stack">
-                  <div><span>Products</span><strong>{products.length}</strong></div>
-                  <div><span>Below 10 on hand</span><strong>{products.filter(p => p.stock < 10).length}</strong></div>
-                  <div><span>Stock value</span><strong>{formatUGX(products.reduce((a, p) => a + (p.stock * p.purchasePrice), 0))}</strong></div>
+                  <div><span>Net profit</span><strong className={getMetrics('month', 0).netProfit >= 0 ? 'is-positive' : 'is-negative'}>{formatUGX(getMetrics('month', 0).netProfit)}</strong></div>
                 </div>
               </div>
             </div>
+            <p className="stock-line">Stock on hand is worth {formatUGX(products.reduce((a, p) => a + (p.stock * p.purchasePrice), 0))}. {products.filter(p => p.stock < 10).length} product{products.filter(p => p.stock < 10).length === 1 ? '' : 's'} below 10.</p>
           </section>
         )}
 
@@ -3665,24 +3510,7 @@ export default function Page() {
                 <p style={{ color: 'var(--text-muted)', maxWidth: '760px' }}>
                   Download one backup file with all important POS data: inventory, services, sales, expenses, expense groups, accounts, branches, staff users, activity logs, and shop time settings. If a shop is deleted or data is lost, create/open a new shop with the owner account, then upload this file here to reupload the records.
                 </p>
-                <div className="grid dashboard-metrics-grid" style={{ marginTop: '1rem' }}>
-                  <div className="card dashboard-card">
-                    <h4>Inventory Items</h4>
-                    <div className="card-value">{products.length}</div>
-                  </div>
-                  <div className="card dashboard-card">
-                    <h4>Sales Records</h4>
-                    <div className="card-value">{sales.length}</div>
-                  </div>
-                  <div className="card dashboard-card">
-                    <h4>Expenses</h4>
-                    <div className="card-value">{expenses.length}</div>
-                  </div>
-                  <div className="card dashboard-card">
-                    <h4>Accounts & Staff</h4>
-                    <div className="card-value">{accounts.length + users.length}</div>
-                  </div>
-                </div>
+                <p className="muted-copy">{products.length} products, {sales.length} sales, {expenses.length} expenses, {accounts.length + users.length} accounts and staff.</p>
                 {isShopOwner ? (
                   <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginTop: '1.5rem' }}>
                     <button type="button" className="primary" onClick={downloadShopBackup}>Download Full Backup</button>
@@ -3709,15 +3537,6 @@ export default function Page() {
 
         {view === 'accounts' && (
           <section>
-            <div className="kpi-grid">
-              {accounts.map((account) => (
-                <article className="kpi" key={account.id}>
-                  <p>{account.name}</p>
-                  <strong className={(accountBalances.get(account.id) || 0) >= 0 ? 'is-positive' : 'is-negative'}>{formatUGX(accountBalances.get(account.id) || 0)}</strong>
-                  <span className="badge badge-info">{account.isDefault ? 'Default' : 'Account'}</span>
-                </article>
-              ))}
-            </div>
             <div className="card">
               <h3>Where money sits</h3>
               <p className="muted-copy">Each sale and expense updates one of these balances. Cash in the drawer is counted on the register.</p>

@@ -368,16 +368,22 @@ export default function RegisterDesk({
                 <strong>{formatMoney((settlement.lines.find((line) => line.key === `${item.itemType}:${item.itemId}`)?.amount) || 0)}</strong>
               </div>
               <div className="pos-line-discount">
-                <select value={item.discountMode || 'none'} aria-label={`${item.itemName} discount`} onChange={(event) => onDiscountMode(item.itemId, item.itemType, event.target.value as 'none' | 'price' | 'percent')}>
-                  <option value="none">List {formatMoney(item.unitPrice)}</option>
-                  <option value="price">Special price</option>
-                  <option value="percent">Percent off</option>
-                </select>
-                {item.discountMode === 'price' && (
-                  <input type="number" min={0} max={item.unitPrice} value={item.discountedUnitPrice ?? item.unitPrice} onChange={(event) => onDiscountValue(item.itemId, item.itemType, Number(event.target.value))} />
-                )}
-                {item.discountMode === 'percent' && (
-                  <input type="number" min={0} max={100} value={item.discountPercent ?? 0} onChange={(event) => onDiscountValue(item.itemId, item.itemType, Number(event.target.value))} />
+                {(item.discountMode || 'none') === 'none' ? (
+                  <button type="button" className="edit-btn" onClick={() => onDiscountMode(item.itemId, item.itemType, 'percent')}>Discount</button>
+                ) : (
+                  <>
+                    <select value={item.discountMode || 'none'} aria-label={`${item.itemName} discount`} onChange={(event) => onDiscountMode(item.itemId, item.itemType, event.target.value as 'none' | 'price' | 'percent')}>
+                      <option value="none">List {formatMoney(item.unitPrice)}</option>
+                      <option value="price">Special price</option>
+                      <option value="percent">Percent off</option>
+                    </select>
+                    {item.discountMode === 'price' && (
+                      <input type="number" min={0} max={item.unitPrice} value={item.discountedUnitPrice ?? item.unitPrice} onChange={(event) => onDiscountValue(item.itemId, item.itemType, Number(event.target.value))} />
+                    )}
+                    {item.discountMode === 'percent' && (
+                      <input type="number" min={0} max={100} value={item.discountPercent ?? 0} onChange={(event) => onDiscountValue(item.itemId, item.itemType, Number(event.target.value))} />
+                    )}
+                  </>
                 )}
               </div>
             </article>
@@ -386,13 +392,17 @@ export default function RegisterDesk({
 
         <footer className="pos-ticket-foot">
           <div className="pos-cart-discount">
-            <select value={cartDiscount.mode} onChange={(event) => onCartDiscount({ mode: event.target.value as CartDiscount['mode'], value: cartDiscount.value })}>
-              <option value="none">No sale discount</option>
-              <option value="amount">Amount off</option>
-              <option value="percent">Percent off</option>
-            </select>
-            {cartDiscount.mode !== 'none' && (
-              <input type="number" min={0} max={cartDiscount.mode === 'percent' ? 100 : undefined} value={cartDiscount.value} onChange={(event) => onCartDiscount({ ...cartDiscount, value: Number(event.target.value) })} />
+            {cartDiscount.mode === 'none' ? (
+              <button type="button" className="edit-btn" onClick={() => onCartDiscount({ mode: 'percent', value: 0 })}>Sale discount</button>
+            ) : (
+              <>
+                <select value={cartDiscount.mode} onChange={(event) => onCartDiscount({ mode: event.target.value as CartDiscount['mode'], value: cartDiscount.value })}>
+                  <option value="none">No sale discount</option>
+                  <option value="amount">Amount off</option>
+                  <option value="percent">Percent off</option>
+                </select>
+                <input type="number" min={0} max={cartDiscount.mode === 'percent' ? 100 : undefined} value={cartDiscount.value} onChange={(event) => onCartDiscount({ ...cartDiscount, value: Number(event.target.value) })} />
+              </>
             )}
           </div>
           <div className="pos-total-row"><span>Subtotal</span><span>{formatMoney(settlement.subtotal)}</span></div>
