@@ -3045,6 +3045,106 @@ input:focus, select:focus, textarea:focus { box-shadow: 0 0 0 3px rgba(31, 107, 
   color: rgba(247, 245, 240, 0.78);
   letter-spacing: 0.04em;
 }
+/* One job per page. Light glass stays on the counter; the sign-in scene is unchanged. */
+.card,
+.stat-card,
+.table-wrap {
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+.today-board {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  max-width: 860px;
+}
+.today-board .studio-top { justify-content: flex-start !important; align-items: center; gap: 0.85rem; width: 100%; }
+.today-board .studio-controls { flex: 0 0 auto; align-items: center; }
+.today-board .studio-controls select,
+.insight-header-row select {
+  width: auto;
+  min-width: 8.5rem;
+  flex: 0 0 auto;
+}
+.today-numbers,
+.today-board .today-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.8rem;
+}
+.today-board .today-actions { align-items: stretch; }
+.today-figure {
+  display: block;
+  margin: 0.35rem 0 0.15rem;
+  font-size: 1.65rem;
+  letter-spacing: -0.04em;
+  color: #1c1917;
+}
+.today-more { align-self: flex-start; }
+.page-tools {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.9rem;
+}
+.page-tools .muted-copy { margin: 0; max-width: 46rem; }
+.page-tools-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.pane-switch {
+  display: inline-flex;
+  gap: 0.2rem;
+  padding: 0.2rem;
+  background: rgba(255, 255, 255, 0.62);
+  border: 1px solid #e7e5e4;
+  border-radius: 12px;
+}
+.pane-switch button {
+  border: 0;
+  background: transparent;
+  color: #57534e;
+  border-radius: 9px;
+  padding: 0.42rem 0.8rem;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.pane-switch button.active {
+  background: #fff;
+  color: #1c1917;
+  box-shadow: 0 1px 2px rgba(28, 25, 23, 0.06);
+}
+.period-summary,
+.stock-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  align-items: center;
+  margin: 0 0 0.85rem;
+  color: #78716c;
+  font-size: 0.92rem;
+}
+.period-summary span { color: #d6d3d1; }
+.inline-form,
+.group-row {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 0.85rem;
+}
+.inline-form input,
+.inline-form select { flex: 1; min-width: 180px; }
+.group-chip span { font-weight: 600; }
+@media (max-width: 720px) {
+  .today-numbers,
+  .today-board .today-actions { grid-template-columns: 1fr; }
+  .page-tools .primary,
+  .page-tools-actions { width: 100%; }
+  .page-tools .primary { width: 100%; }
+}
+
 @media (max-width: 800px) {
   .auth-layout { grid-template-columns: 1fr; gap: 1.4rem; }
   .auth-copy h1 { max-width: 14ch; font-size: 2.55rem; }
