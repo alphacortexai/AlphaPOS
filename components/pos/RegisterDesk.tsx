@@ -313,7 +313,7 @@ export default function RegisterDesk({
         <header className="pos-ticket-head">
           <div>
             <p>Current sale</p>
-            <h2>{cart.length === 0 ? 'Empty ticket' : `${cart.length} item${cart.length === 1 ? '' : 's'}`}</h2>
+            <h2>{cart.length === 0 ? 'Nothing yet' : `${cart.length} item${cart.length === 1 ? '' : 's'}`}</h2>
           </div>
           <button type="button" className="edit-btn" onClick={() => setHeldOpen(true)}>Held ({heldTickets.length})</button>
         </header>
@@ -368,16 +368,22 @@ export default function RegisterDesk({
                 <strong>{formatMoney((settlement.lines.find((line) => line.key === `${item.itemType}:${item.itemId}`)?.amount) || 0)}</strong>
               </div>
               <div className="pos-line-discount">
-                <select value={item.discountMode || 'none'} aria-label={`${item.itemName} discount`} onChange={(event) => onDiscountMode(item.itemId, item.itemType, event.target.value as 'none' | 'price' | 'percent')}>
-                  <option value="none">List {formatMoney(item.unitPrice)}</option>
-                  <option value="price">Special price</option>
-                  <option value="percent">Percent off</option>
-                </select>
-                {item.discountMode === 'price' && (
-                  <input type="number" min={0} max={item.unitPrice} value={item.discountedUnitPrice ?? item.unitPrice} onChange={(event) => onDiscountValue(item.itemId, item.itemType, Number(event.target.value))} />
-                )}
-                {item.discountMode === 'percent' && (
-                  <input type="number" min={0} max={100} value={item.discountPercent ?? 0} onChange={(event) => onDiscountValue(item.itemId, item.itemType, Number(event.target.value))} />
+                {(item.discountMode || 'none') === 'none' ? (
+                  <button type="button" className="edit-btn" onClick={() => onDiscountMode(item.itemId, item.itemType, 'percent')}>Discount</button>
+                ) : (
+                  <>
+                    <select value={item.discountMode || 'none'} aria-label={`${item.itemName} discount`} onChange={(event) => onDiscountMode(item.itemId, item.itemType, event.target.value as 'none' | 'price' | 'percent')}>
+                      <option value="none">List {formatMoney(item.unitPrice)}</option>
+                      <option value="price">Special price</option>
+                      <option value="percent">Percent off</option>
+                    </select>
+                    {item.discountMode === 'price' && (
+                      <input type="number" min={0} max={item.unitPrice} value={item.discountedUnitPrice ?? item.unitPrice} onChange={(event) => onDiscountValue(item.itemId, item.itemType, Number(event.target.value))} />
+                    )}
+                    {item.discountMode === 'percent' && (
+                      <input type="number" min={0} max={100} value={item.discountPercent ?? 0} onChange={(event) => onDiscountValue(item.itemId, item.itemType, Number(event.target.value))} />
+                    )}
+                  </>
                 )}
               </div>
             </article>
@@ -386,17 +392,21 @@ export default function RegisterDesk({
 
         <footer className="pos-ticket-foot">
           <div className="pos-cart-discount">
-            <select value={cartDiscount.mode} onChange={(event) => onCartDiscount({ mode: event.target.value as CartDiscount['mode'], value: cartDiscount.value })}>
-              <option value="none">No ticket discount</option>
-              <option value="amount">Ticket amount off</option>
-              <option value="percent">Ticket percent off</option>
-            </select>
-            {cartDiscount.mode !== 'none' && (
-              <input type="number" min={0} max={cartDiscount.mode === 'percent' ? 100 : undefined} value={cartDiscount.value} onChange={(event) => onCartDiscount({ ...cartDiscount, value: Number(event.target.value) })} />
+            {cartDiscount.mode === 'none' ? (
+              <button type="button" className="edit-btn" onClick={() => onCartDiscount({ mode: 'percent', value: 0 })}>Sale discount</button>
+            ) : (
+              <>
+                <select value={cartDiscount.mode} onChange={(event) => onCartDiscount({ mode: event.target.value as CartDiscount['mode'], value: cartDiscount.value })}>
+                  <option value="none">No sale discount</option>
+                  <option value="amount">Amount off</option>
+                  <option value="percent">Percent off</option>
+                </select>
+                <input type="number" min={0} max={cartDiscount.mode === 'percent' ? 100 : undefined} value={cartDiscount.value} onChange={(event) => onCartDiscount({ ...cartDiscount, value: Number(event.target.value) })} />
+              </>
             )}
           </div>
           <div className="pos-total-row"><span>Subtotal</span><span>{formatMoney(settlement.subtotal)}</span></div>
-          {settlement.discount > 0 && <div className="pos-total-row"><span>Ticket discount</span><span>− {formatMoney(settlement.discount)}</span></div>}
+          {settlement.discount > 0 && <div className="pos-total-row"><span>Discount</span><span>− {formatMoney(settlement.discount)}</span></div>}
           <div className="pos-total-row"><span>{taxLabel}</span><span>{formatMoney(settlement.tax)}</span></div>
           {showMargin && <div className="pos-total-row is-muted"><span>Margin after tax</span><span>{formatMoney(settlement.total - settlement.tax - settlement.lines.reduce((sum, line) => sum + line.cost, 0))}</span></div>}
           <div className="pos-total-row is-due"><span>Total due</span><strong>{formatMoney(settlement.total)}</strong></div>
