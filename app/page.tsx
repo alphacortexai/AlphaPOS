@@ -183,6 +183,25 @@ const removeUndefinedDeep = <T,>(value: T): T => {
 
 const emptyCheckout = { customerName: '', customerPhone: '', paymentMethod: 'cash' as PaymentMethod, paymentReference: '' };
 const roleLabels: Record<Role, string> = { shop_owner: 'Owner', admin: 'Admin', manager: 'Manager', cashier: 'Cashier', stock: 'Stock' };
+const OPENED_SHOP_KEY = 'alphapos.openedShop';
+
+const readOpenedShop = (uid: string) => {
+  if (typeof window === 'undefined') return '';
+  try {
+    const parsed = JSON.parse(window.sessionStorage.getItem(OPENED_SHOP_KEY) || '') as { uid?: string; ownerUid?: string };
+    return parsed.uid === uid && parsed.ownerUid ? parsed.ownerUid : '';
+  } catch {
+    return '';
+  }
+};
+
+const writeOpenedShop = (uid: string, ownerUid: string) => {
+  window.sessionStorage.setItem(OPENED_SHOP_KEY, JSON.stringify({ uid, ownerUid }));
+};
+
+const clearOpenedShop = () => {
+  window.sessionStorage.removeItem(OPENED_SHOP_KEY);
+};
 
 const normalizeHeldTickets = (value: unknown): HeldTicket[] => {
   if (!Array.isArray(value)) return [];
@@ -210,6 +229,9 @@ export default function Page() {
   const [role, setRole] = useState<Role>('shop_owner');
   const [activeShopOwnerUid, setActiveShopOwnerUid] = useState('');
   const [availableShops, setAvailableShops] = useState<ShopMembership[]>([]);
+  const [awaitingShopChoice, setAwaitingShopChoice] = useState(false);
+  const [shopsResolved, setShopsResolved] = useState(false);
+  const [shopSwitchTarget, setShopSwitchTarget] = useState('');
   const [view, setView] = useState<View>('sales');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [status, setStatus] = useState('Welcome to AlphaPOS Pro.');
@@ -340,7 +362,6 @@ export default function Page() {
     if (!authUser) return;
     if (!canOpenView(view)) setView(role === 'stock' ? 'products' : 'sales');
   }, [authUser, canOpenView, role, view]);
-  const truncateShopName = (name: string, maxLength: number = 15) => name.length > maxLength ? name.substring(0, maxLength) + '...' : name;
 
   const showNotification = (message: string, type: 'success' | 'error' | 'info' = 'info', duration: number = 3000) => {
     if (notificationTimeoutRef.current) clearTimeout(notificationTimeoutRef.current);
@@ -381,6 +402,10 @@ export default function Page() {
       setLoading(false);
       hasLoadedUserDataRef.current = false;
       if (!user) {
+        clearOpenedShop();
+        setAwaitingShopChoice(false);
+        setShopsResolved(false);
+        setShopSwitchTarget('');
         setActiveShopOwnerUid('');
         setAvailableShops([]);
         setBranches([]);
@@ -452,16 +477,22 @@ export default function Page() {
             applyRetailCollections(data);
           }
           setRole('shop_owner');
+          setAwaitingShopChoice(false);
+          setShopsResolved(true);
           hasLoadedUserDataRef.current = true;
           isSwitchingShopRef.current = false;
           setStatus(`Counter ready at ${shopName}. Records stay on this device.`);
           return true;
         } catch (error) {
+          setShopsResolved(true);
           setStatus(`Could not open the on-device counter: ${error instanceof Error ? error.message : 'Unknown error'}`);
           return false;
         }
       }
-      if (!db) return false;
+      if (!db) {
+        setShopsResolved(true);
+        return false;
+      }
       try {
         const normalizedEmail = authUser.email?.toLowerCase().trim();
         const memberships: ShopMembership[] = [{ ownerUid: authUser.uid, shopName: 'My Shop', role: 'shop_owner' }];
@@ -479,11 +510,31 @@ export default function Page() {
             }
           });
         }
-        setAvailableShops(memberships);
         const invitedShop = takeInvitedShopId();
-        const selectedShopOwnerUid = (invitedShop && memberships.some((shop) => shop.ownerUid === invitedShop) ? invitedShop : '') || activeShopOwnerUid || memberships[0].ownerUid;
+        const namedMemberships = memberships.length > 1 ? await Promise.all(memberships.map(async (shop) => {
+          try {
+            const nameSnap = await getDoc(doc(db, 'users', shop.ownerUid, 'pos', 'data'));
+            const storedName = nameSnap.exists() && typeof nameSnap.data().shopName === 'string' ? nameSnap.data().shopName.trim() : '';
+            return storedName ? { ...shop, shopName: storedName } : shop;
+          } catch {
+            return shop;
+          }
+        })) : memberships;
+        setAvailableShops(namedMemberships);
+        const rememberedShop = readOpenedShop(authUser.uid);
+        const remembered = rememberedShop && namedMemberships.some((shop) => shop.ownerUid === rememberedShop) ? rememberedShop : '';
+        if (namedMemberships.length > 1 && !invitedShop && !remembered && !activeShopOwnerUid) {
+          setAwaitingShopChoice(true);
+          setShopsResolved(true);
+          hasLoadedUserDataRef.current = false;
+          isSwitchingShopRef.current = false;
+          return true;
+        }
+        setAwaitingShopChoice(false);
+        setShopsResolved(true);
+        const selectedShopOwnerUid = (invitedShop && namedMemberships.some((shop) => shop.ownerUid === invitedShop) ? invitedShop : '') || remembered || activeShopOwnerUid || namedMemberships[0].ownerUid;
         if (!activeShopOwnerUid) setActiveShopOwnerUid(selectedShopOwnerUid);
-        const selectedShop = memberships.find((s) => s.ownerUid === selectedShopOwnerUid);
+        const selectedShop = namedMemberships.find((s) => s.ownerUid === selectedShopOwnerUid);
         const userDataRef = doc(db, 'users', selectedShopOwnerUid, 'pos', 'data');
         const snap = await getDoc(userDataRef);
         if (!snap.exists()) {
@@ -519,14 +570,14 @@ export default function Page() {
         applyRetailCollections(data as Record<string, unknown>);
         const storedShopName = typeof data.shopName === 'string' ? data.shopName.trim() : '';
         if (storedShopName && selectedShopOwnerUid === authUser.uid) {
-          memberships[0] = { ...memberships[0], shopName: storedShopName };
-          setAvailableShops([...memberships]);
+          setAvailableShops(namedMemberships.map((shop) => shop.ownerUid === authUser.uid ? { ...shop, shopName: storedShopName } : shop));
         }
         hasLoadedUserDataRef.current = true;
         isSwitchingShopRef.current = false;
         setStatus(`Viewing ${selectedShop?.shopName || 'selected shop'} as ${roleLabels[selectedShop?.role || role]}.`);
         return true;
       } catch (error) {
+        setShopsResolved(true);
         setStatus(`Failed to load your data: ${error instanceof Error ? error.message : 'Unknown error'}`);
         return false;
       }
@@ -600,6 +651,10 @@ export default function Page() {
   };
 
   const handleLogout = async () => {
+    clearOpenedShop();
+    setAwaitingShopChoice(false);
+    setShopsResolved(false);
+    setShopSwitchTarget('');
     if (authUser?.uid === LOCAL_OPERATOR_ID) {
       hasLoadedUserDataRef.current = false;
       setAuthUser(null);
@@ -651,8 +706,18 @@ export default function Page() {
     isSwitchingShopRef.current = true;
     hasLoadedUserDataRef.current = false;
     resetShopScopedState();
+    setShopSwitchTarget('');
     setActiveShopOwnerUid(nextOwnerUid);
     setStatus('Switching shop...');
+  };
+
+  const openChosenShop = (ownerUid: string) => {
+    if (!authUser || !ownerUid) return;
+    writeOpenedShop(authUser.uid, ownerUid);
+    setAwaitingShopChoice(false);
+    setShopSwitchTarget('');
+    if (ownerUid !== activeShopOwnerUid) handleShopSwitch(ownerUid);
+    setView('sales');
   };
 
   // Enhanced Metric Calculation Utilities
@@ -2368,22 +2433,93 @@ export default function Page() {
     );
   }
 
+  if (authUser && authUser.uid !== LOCAL_OPERATOR_ID && !shopsResolved) {
+    return (
+      <div className="auth-container">
+        <div className="auth-glow auth-glow-a" aria-hidden="true" />
+        <div className="auth-glow auth-glow-b" aria-hidden="true" />
+        <div className="auth-glow auth-glow-c" aria-hidden="true" />
+        <p className="auth-loading">Opening AlphaPOS</p>
+      </div>
+    );
+  }
+
+  if (awaitingShopChoice) {
+    return (
+      <div className="auth-container">
+        <div className="auth-glow auth-glow-a" aria-hidden="true" />
+        <div className="auth-glow auth-glow-b" aria-hidden="true" />
+        <div className="auth-glow auth-glow-c" aria-hidden="true" />
+        <div className="auth-layout">
+          <div className="auth-copy">
+            <p className="auth-kicker">AlphaPOS</p>
+            <h1>Which shop are you opening?</h1>
+            <p>Sales, stock, and expenses stay in the shop you choose. You can change it later from your profile or from Settings.</p>
+          </div>
+          <section className="auth-card" aria-label="Choose a shop">
+            <span className="brand-mark" aria-hidden="true">A</span>
+            <h2>Your shops</h2>
+            <p className="auth-lede">Open one shop. The next sale is recorded there.</p>
+            <div className="shop-choice-list">
+              {availableShops.map((shop) => (
+                <button key={shop.ownerUid} type="button" className="shop-choice" onClick={() => openChosenShop(shop.ownerUid)}>
+                  <strong>{shop.shopName}</strong>
+                  <span>{roleLabels[shop.role]}</span>
+                </button>
+              ))}
+            </div>
+            <button type="button" className="shop-choice-leave" onClick={handleLogout}>Sign out</button>
+          </section>
+        </div>
+      </div>
+    );
+  }
+
+  const targetShop = availableShops.find((shop) => shop.ownerUid === shopSwitchTarget);
+  const shopSwitchPanel = availableShops.length > 1 ? (
+    <div className="shop-switch">
+      <h3>Open a different shop</h3>
+      <p className="muted-copy">You are in {currentShop?.shopName || 'this shop'} as {roleLabels[role]}. Choosing another shop is a separate step, so a sale is not recorded in the wrong place.</p>
+      <div className="shop-switch-list">
+        {availableShops.map((shop) => {
+          const open = shop.ownerUid === activeShopOwnerUid;
+          return (
+            <div key={shop.ownerUid} className={`shop-switch-row${open ? ' is-open' : ''}`}>
+              <div>
+                <strong>{shop.shopName}</strong>
+                <span>{roleLabels[shop.role]}</span>
+              </div>
+              {open ? <em>Open now</em> : (
+                <button type="button" className="edit-btn" onClick={() => setShopSwitchTarget(shop.ownerUid)}>Switch</button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {targetShop && (
+        <div className="shop-confirm">
+          <p>Leave {currentShop?.shopName || 'this shop'} and open {targetShop.shopName}?{cart.length > 0 ? ' The items on this register will be cleared.' : ''}</p>
+          <div className="shop-confirm-actions">
+            <button type="button" className="edit-btn" onClick={() => setShopSwitchTarget('')}>Stay here</button>
+            <button type="button" className="primary" onClick={() => openChosenShop(targetShop.ownerUid)}>Open {targetShop.shopName}</button>
+          </div>
+        </div>
+      )}
+    </div>
+  ) : null;
+
   return (
     <div className="app">
       <div className={`sidebar-overlay ${isSidebarOpen ? 'show' : ''}`} onClick={() => setIsSidebarOpen(false)}></div>
       <aside className={`sidebar ${isSidebarOpen ? 'open' : ''}`}>
         <div className="sidebar-header">
           <h2><span className="brand-mark" aria-hidden="true">A</span> AlphaPOS</h2>
-          {availableShops.length > 1 ? (
-            <select className="role-select" aria-label="Active shop" value={activeShopOwnerUid} onChange={(e) => handleShopSwitch(e.target.value)}>
-              {availableShops.map((s) => (
-                <option key={s.ownerUid} value={s.ownerUid}>
-                  {truncateShopName(s.shopName, 22)} · {roleLabels[s.role]}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <p className="rail-shop">{currentShop?.shopName || 'My Shop'}</p>
+          <p className="rail-shop">
+            <strong>{currentShop?.shopName || 'My Shop'}</strong>
+            <span>{roleLabels[role]}</span>
+          </p>
+          {availableShops.length > 1 && (
+            <button type="button" className="rail-change" onClick={() => { setView('profile'); setIsSidebarOpen(false); }}>Change shop</button>
           )}
         </div>
 
@@ -2467,7 +2603,7 @@ export default function Page() {
                  view === 'settings' ? 'Settings' :
                  'Profile'}
               </h1>
-              <p className="header-kicker">{currentShop?.shopName || 'My Shop'} · {roleLabels[role]}</p>
+              <p className="header-kicker"><strong>{currentShop?.shopName || 'My Shop'}</strong> · {roleLabels[role]}</p>
             </div>
           </div>
           {status && /fail|error|could not/i.test(status) && (
@@ -3406,6 +3542,7 @@ export default function Page() {
                 {isShopOwner && (
                   <button className="primary" onClick={() => { setShopNameForm(currentShop?.shopName || ''); setShowSettingsModal(true); }}>Edit shop name</button>
                 )}
+                {shopSwitchPanel}
               </div>
             )}
 
@@ -3661,6 +3798,7 @@ export default function Page() {
                 <div><span>Role</span><strong>{roleLabels[role]}</strong></div>
                 <div><span>Shop</span><strong>{currentShop?.shopName || 'My Shop'}</strong></div>
               </div>
+              {shopSwitchPanel}
             </div>
           </section>
         )}
