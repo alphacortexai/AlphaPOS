@@ -3159,3 +3159,68 @@ input:focus, select:focus, textarea:focus { box-shadow: 0 0 0 3px rgba(31, 107, 
   .sidebar { background: #f4f3f0; transform: translateX(-105%); }
   .sidebar.open { transform: translateX(0); box-shadow: 0 16px 40px rgba(28, 25, 23, 0.16); }
 }
+
+.header-kicker strong { color: #1c1917; font-weight: 700; }
+.rail-shop { display: flex; flex-direction: column; gap: 0.05rem; margin: 0.45rem 0 0; }
+.rail-shop strong { color: #1c1917; font-size: 0.95rem; font-weight: 700; letter-spacing: -0.02em; }
+.rail-shop span { color: #78716c; font-size: 0.75rem; }
+.rail-change {
+  margin-top: 0.4rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #1f6b45;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  text-align: left;
+}
+.shop-choice-list { display: flex; flex-direction: column; gap: 0.55rem; margin-top: 1rem; }
+.shop-choice {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.9rem 0.95rem;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+.shop-choice strong { font-size: 1.05rem; }
+.shop-choice span { color: rgba(247, 245, 240, 0.74); font-size: 0.82rem; }
+.shop-choice:hover { background: rgba(255, 255, 255, 0.2); }
+.shop-choice-leave {
+  margin-top: 0.9rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: rgba(247, 245, 240, 0.74);
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+.shop-switch { margin-top: 1.1rem; }
+.shop-switch h3 { margin-bottom: 0.3rem; }
+.shop-switch-list { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.75rem; }
+.shop-switch-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid #e7e5e4;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.72);
+}
+.shop-switch-row.is-open { border-color: #1f6b45; }
+.shop-switch-row strong, .shop-switch-row span, .shop-switch-row em { display: block; }
+.shop-switch-row span, .shop-switch-row em { color: #78716c; font-size: 0.8rem; font-style: normal; }
+.shop-confirm { margin-top: 0.75rem; padding: 0.85rem; border-radius: 12px; background: #f4f3f0; }
+.shop-confirm p { margin: 0 0 0.75rem; }
+.shop-confirm-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
