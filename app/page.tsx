@@ -3789,7 +3789,7 @@ export default function Page() {
         )}
 
         {view === 'profile' && (
-          <section>
+          <section className="profile-stack">
             <div className="card profile-card">
               <h3>Your profile</h3>
               <div className="fact-list">
@@ -3798,8 +3798,8 @@ export default function Page() {
                 <div><span>Role</span><strong>{roleLabels[role]}</strong></div>
                 <div><span>Shop</span><strong>{currentShop?.shopName || 'My Shop'}</strong></div>
               </div>
-              {shopSwitchPanel}
             </div>
+            {shopSwitchPanel && <div className="card profile-card">{shopSwitchPanel}</div>}
           </section>
         )}
 
