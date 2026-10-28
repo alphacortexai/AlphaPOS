@@ -64,7 +64,7 @@ const readWithOpenAI = async (apiKey: string, model: string, prompt: string, mim
 };
 
 export async function POST(request: Request) {
-  let body: { mode?: unknown; mimeType?: unknown; image?: unknown; productNames?: unknown; idToken?: unknown; shopOwnerUid?: unknown; localCounter?: unknown };
+  let body: { mode?: unknown; mimeType?: unknown; image?: unknown; productNames?: unknown; idToken?: unknown; shopOwnerUid?: unknown; localCounter?: unknown; geminiKey?: unknown };
   try {
     body = await request.json();
   } catch {
@@ -89,13 +89,15 @@ export async function POST(request: Request) {
     }
   }
 
-  const geminiKey = process.env.GEMINI_API_KEY?.trim() || '';
+  const pasted = typeof body.geminiKey === 'string' ? body.geminiKey.trim() : '';
+  const ownerKey = pasted.length >= 20 && pasted.length <= 200 && !/\s/.test(pasted) ? pasted : '';
+  const geminiKey = ownerKey || process.env.GEMINI_API_KEY?.trim() || '';
   const openaiKey = process.env.OPENAI_API_KEY?.trim() || '';
   const requested = process.env.CATALOG_ASSISTANT_PROVIDER?.trim().toLowerCase();
-  const useOpenAI = requested === 'openai' || (!requested && !geminiKey && Boolean(openaiKey));
+  const useOpenAI = !ownerKey && (requested === 'openai' || (!requested && !geminiKey && Boolean(openaiKey)));
   const apiKey = useOpenAI ? openaiKey : geminiKey;
   if (!apiKey) {
-    return NextResponse.json({ ok: false, error: 'The product assistant is not switched on yet. Add a Gemini or OpenAI key on the server.' }, { status: 503 });
+    return NextResponse.json({ ok: false, error: 'Paste a Gemini API key in Settings, under Assistant.' }, { status: 503 });
   }
 
   const productNames = Array.isArray(body.productNames)
