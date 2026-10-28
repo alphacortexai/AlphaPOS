@@ -4,11 +4,13 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, ty
 import { firebaseApp } from '../lib.firebase';
 import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
 import { collection, deleteDoc, doc, getDoc, getDocs, getFirestore, query, runTransaction, serverTimestamp, setDoc, where } from 'firebase/firestore';
+import CatalogAssistant, { type CatalogCreateRow, type CatalogPriceRow } from '../components/pos/CatalogAssistant';
 import RegisterDesk from '../components/pos/RegisterDesk';
 import ReceiptDialog from '../components/pos/ReceiptDialog';
 import ReturnDialog, { type ReturnableLine } from '../components/pos/ReturnDialog';
 import { ACTIVITY_KEEP, readLocalActivity, trimActivity, writeLocalActivity } from '../lib/pos/activityLog';
 import { computeAccountBalances, DEFAULT_REORDER_POINT, normalizeCustomerPayments, normalizeSuppliers, paymentMatchesCustomer, sessionCashAdjustments, stockIsLow, withTenderAccounts, type CustomerPaymentRecord, type SupplierRecord } from '../lib/pos/books';
+import { parseCatalogReading, type CatalogMode } from '../lib/catalog/reading';
 import { LOCAL_OPERATOR_ID, readLocalShop, writeLocalShop } from '../lib/pos/localShop';
 import { nextSku, reservedProductCodes } from '../lib/pos/sku';
 import { attachProductImages, compressProductPhoto, imageMapChars, isProductImage, PRODUCT_IMAGE_DOC_MAX_CHARS, readLocalProductImages, splitProductImages, writeLocalProductImages } from '../lib/pos/productImage';
@@ -43,7 +45,7 @@ import {
 
 type SessionUser = { uid: string; email: string | null; displayName: string | null };
 type Role = 'shop_owner' | 'admin' | 'manager' | 'cashier' | 'stock';
-type View = 'dashboard' | 'sales_history' | 'products' | 'sales' | 'services' | 'expenses' | 'users' | 'branches' | 'reports' | 'settings' | 'accounts' | 'profile' | 'activity_logs' | 'customers';
+type View = 'dashboard' | 'sales_history' | 'products' | 'sales' | 'services' | 'expenses' | 'users' | 'branches' | 'reports' | 'settings' | 'accounts' | 'profile' | 'activity_logs' | 'customers' | 'assistant';
 type DashboardPeriod = 'daily' | 'weekly' | 'monthly' | 'yearly';
 type InsightTrendRange = 7 | 14 | 30 | 60 | 100;
 type ExpenseChartRange = 'day' | '7days' | '14days' | 'month' | '3months' | '6months' | '1year';
@@ -394,7 +396,7 @@ export default function Page() {
     if (next === 'sales_history' || next === 'customers') return role !== 'stock';
     if (next === 'expenses' || next === 'reports' || next === 'accounts') return seesBooks;
     if (next === 'users' || next === 'activity_logs') return seesBooks;
-    if (next === 'settings' || next === 'branches') return isShopOwner;
+    if (next === 'settings' || next === 'branches' || next === 'assistant') return isShopOwner;
     return false;
   }, [isShopOwner, role, seesBooks]);
   useEffect(() => {
@@ -2154,6 +2156,85 @@ export default function Page() {
     setSuppliers((prev) => [...prev, { id: crypto.randomUUID(), name: trimmed }]);
   };
 
+  const readCatalogPhoto = async (mode: CatalogMode, photo: { mimeType: string; base64: string }) => {
+    if (!isShopOwner) throw new Error('Only the shop owner can use the product assistant.');
+    const idToken = firebaseApp && authUser?.uid !== LOCAL_OPERATOR_ID ? await getAuth(firebaseApp).currentUser?.getIdToken() : '';
+    const response = await fetch('/api/catalog/read', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mode,
+        mimeType: photo.mimeType,
+        image: photo.base64,
+        productNames: products.map((product) => product.name).slice(0, 200),
+        shopOwnerUid: activeShopOwnerUid,
+        ...(idToken ? { idToken } : { localCounter: true }),
+      }),
+    });
+    const payload = await response.json() as { ok?: boolean; error?: string };
+    if (!response.ok || !payload.ok) throw new Error(payload.error || 'The photo could not be read.');
+    return parseCatalogReading(payload);
+  };
+
+  const addProductsFromAssistant = (rows: CatalogCreateRow[]) => {
+    if (!isShopOwner) return false;
+    const branchIds = new Set(branches.map((branch) => branch.id));
+    const created: Product[] = [];
+    const taken = reservedProductCodes(products);
+    rows.forEach((row) => {
+      const name = row.name.trim().slice(0, 80);
+      if (!name || !branchIds.has(row.branchId)) return;
+      if ([row.stock, row.purchasePrice, row.salePrice].some((value) => !Number.isFinite(value) || value < 0)) return;
+      const duplicate = products.concat(created).some((product) => product.branchId === row.branchId && product.name.trim().toLowerCase() === name.toLowerCase());
+      if (duplicate) return;
+      const categoryName = row.category.trim().slice(0, 40);
+      const category = productCategories.find((item) => item.toLowerCase() === categoryName.toLowerCase()) || categoryName || undefined;
+      const sku = nextSku(name, taken);
+      taken.push(sku);
+      created.push({
+        id: crypto.randomUUID(),
+        name,
+        branchId: row.branchId,
+        stock: row.stock,
+        purchasePrice: roundMoney(row.purchasePrice),
+        salePrice: roundMoney(row.salePrice),
+        sku,
+        ...(category ? { category } : {}),
+        reorderPoint: DEFAULT_REORDER_POINT,
+        ...currentAuditStamp(),
+      });
+    });
+    if (created.length === 0) {
+      showNotification('Nothing new was added.', 'info');
+      return false;
+    }
+    setProducts((prev) => [...prev, ...created]);
+    created.forEach((product) => {
+      if (product.stock > 0) logStockMovement(product, product.stock, 'opening_stock', 'Added from a photo');
+    });
+    logActivity('catalog_create', `Added ${created.length} product(s) from a photo.`);
+    showNotification(`${created.length} product${created.length === 1 ? '' : 's'} added.`, 'success');
+    return true;
+  };
+
+  const updatePurchasePricesFromAssistant = (rows: CatalogPriceRow[], supplierName: string) => {
+    if (!isShopOwner) return false;
+    const updates = rows.filter((row) => products.some((product) => product.id === row.productId) && Number.isFinite(row.purchasePrice) && row.purchasePrice >= 0);
+    if (updates.length === 0) {
+      showNotification('No purchase prices were changed.', 'info');
+      return false;
+    }
+    const byId = new Map(updates.map((row) => [row.productId, roundMoney(row.purchasePrice)]));
+    setProducts((prev) => prev.map((product) => {
+      const purchasePrice = byId.get(product.id);
+      return purchasePrice === undefined ? product : { ...product, purchasePrice, ...updatedAuditStamp() };
+    }));
+    rememberSupplier(supplierName);
+    logActivity('catalog_cost', `Updated purchase prices for ${updates.length} product(s) from a receipt.`);
+    showNotification(`Purchase prices updated for ${updates.length} product${updates.length === 1 ? '' : 's'}.`, 'success');
+    return true;
+  };
+
   const saveStockAdjustment = (e: React.FormEvent) => {
     e.preventDefault();
     const supplierName = stockAdjustmentForm.supplierName.trim();
@@ -2856,6 +2937,7 @@ export default function Page() {
               <div className="nav-group-label">Shop</div>
               {seesBooks && <button className={`nav-button ${view === 'users' ? 'active' : ''}`} onClick={() => { setView('users'); setIsSidebarOpen(false); }}>Staff</button>}
               {seesBooks && <button className={`nav-button ${view === 'activity_logs' ? 'active' : ''}`} onClick={() => { setView('activity_logs'); setIsSidebarOpen(false); }}>Activity</button>}
+              {isShopOwner && <button className={`nav-button ${view === 'assistant' ? 'active' : ''}`} onClick={() => { setView('assistant'); setIsSidebarOpen(false); }}>Assistant</button>}
               {isShopOwner && <button className={`nav-button ${view === 'settings' ? 'active' : ''}`} onClick={() => { setView('settings'); setIsSidebarOpen(false); }}>Settings</button>}
             </div>
           )}
@@ -2901,6 +2983,7 @@ export default function Page() {
                  view === 'reports' ? 'Reports' :
                  view === 'accounts' ? 'Balances' :
                  view === 'settings' ? 'Settings' :
+                 view === 'assistant' ? 'Assistant' :
                  'Profile'}
               </h1>
               <p className="header-kicker"><strong>{currentShop?.shopName || 'My Shop'}</strong> · {roleLabels[role]}</p>
@@ -2988,6 +3071,16 @@ export default function Page() {
               );
             })()}
           </section>
+        )}
+
+        {view === 'assistant' && isShopOwner && (
+          <CatalogAssistant
+            products={products}
+            branches={branches}
+            onCreate={addProductsFromAssistant}
+            onUpdatePrices={updatePurchasePricesFromAssistant}
+            requestReading={readCatalogPhoto}
+          />
         )}
 
         {view === 'products' && (
