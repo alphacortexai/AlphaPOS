@@ -3,10 +3,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type Dispatch, type SetStateAction } from 'react';
 import { firebaseApp } from '../lib.firebase';
 import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
-import { collection, deleteDoc, doc, getDoc, getDocs, getFirestore, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
+import { collection, deleteDoc, doc, getDoc, getDocs, getFirestore, query, runTransaction, serverTimestamp, setDoc, where } from 'firebase/firestore';
 import RegisterDesk from '../components/pos/RegisterDesk';
 import ReceiptDialog from '../components/pos/ReceiptDialog';
 import ReturnDialog, { type ReturnableLine } from '../components/pos/ReturnDialog';
+import { ACTIVITY_KEEP, readLocalActivity, trimActivity, writeLocalActivity } from '../lib/pos/activityLog';
+import { computeAccountBalances, DEFAULT_REORDER_POINT, normalizeCustomerPayments, normalizeSuppliers, paymentMatchesCustomer, sessionCashAdjustments, stockIsLow, withTenderAccounts, type CustomerPaymentRecord, type SupplierRecord } from '../lib/pos/books';
 import { LOCAL_OPERATOR_ID, readLocalShop, writeLocalShop } from '../lib/pos/localShop';
 import { nextSku, reservedProductCodes } from '../lib/pos/sku';
 import { attachProductImages, compressProductPhoto, imageMapChars, isProductImage, PRODUCT_IMAGE_DOC_MAX_CHARS, readLocalProductImages, splitProductImages, writeLocalProductImages } from '../lib/pos/productImage';
@@ -58,7 +60,7 @@ type AuditStamp = {
   updatedByEmail?: string;
 };
 
-type Product = { id: string; name: string; branchId: string; stock: number; purchasePrice: number; salePrice: number; sku?: string; barcode?: string; category?: string; image?: string } & AuditStamp;
+type Product = { id: string; name: string; branchId: string; stock: number; purchasePrice: number; salePrice: number; sku?: string; barcode?: string; category?: string; image?: string; reorderPoint?: number } & AuditStamp;
 type ServiceType = 'direct_cost' | 'shared_cost';
 type Service = { id: string; name: string; branchId: string; salePrice: number; serviceType: ServiceType; directCost: number; monthlySharedCost: number; expenseGroupId?: string } & AuditStamp;
 type Sale = {
@@ -84,7 +86,9 @@ type Sale = {
   cashSessionId?: string;
 } & AuditStamp;
 type ExpenseGroup = { id: string; name: string } & AuditStamp;
-type Expense = { id: string; title: string; branchId: string; amount: number; expenseGroupId?: string; accountId?: string } & AuditStamp;
+type Expense = { id: string; title: string; branchId: string; amount: number; expenseGroupId?: string; accountId?: string; cashSessionId?: string } & AuditStamp;
+type Supplier = SupplierRecord;
+type CustomerPayment = CustomerPaymentRecord;
 type StaffUser = { id: string; name: string; email: string; role: Role; branchId: string } & AuditStamp;
 type ShopMembership = { ownerUid: string; shopName: string; role: Role };
 type HeldTicket = {
@@ -115,6 +119,8 @@ type ShopBackupPayload = {
     shopTimeSettings: ShopTimeSettings;
     accounts: Account[];
     customers?: Customer[];
+    suppliers?: Supplier[];
+    customerPayments?: CustomerPayment[];
     heldTickets?: HeldTicket[];
     cashSessions?: CashSession[];
     taxSettings?: TaxSettings;
@@ -179,6 +185,21 @@ const blankProductForm = (branchId = '') => ({
   barcode: '',
   category: '',
   image: '',
+  reorderPoint: DEFAULT_REORDER_POINT,
+});
+
+type StockReceiptLine = { productId: string; quantity: string; unitCost: string };
+
+const emptyStockForm = () => ({
+  productId: '',
+  direction: 'add' as 'add' | 'remove',
+  quantity: 1,
+  reason: 'restock' as Exclude<StockMovementReason, 'sale' | 'opening_stock' | 'branch_transfer' | 'product_removed'>,
+  note: '',
+  supplierName: '',
+  reference: '',
+  unitCost: '',
+  lines: null as StockReceiptLine[] | null,
 });
 
 const removeUndefinedDeep = <T,>(value: T): T => {
@@ -253,6 +274,7 @@ export default function Page() {
   const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
   const hasLoadedUserDataRef = useRef(false);
   const isSwitchingShopRef = useRef(false);
+  const shopRevisionRef = useRef(0);
   const notificationTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const backupFileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -266,6 +288,10 @@ export default function Page() {
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [customerPayments, setCustomerPayments] = useState<CustomerPayment[]>([]);
+  const [paymentCustomer, setPaymentCustomer] = useState<Customer | null>(null);
+  const [paymentDraft, setPaymentDraft] = useState({ amount: '', method: 'cash' as CustomerPayment['method'] });
   const [heldTickets, setHeldTickets] = useState<HeldTicket[]>([]);
   const [cashSessions, setCashSessions] = useState<CashSession[]>([]);
   const [taxSettings, setTaxSettings] = useState<TaxSettings>(defaultTaxSettings);
@@ -313,7 +339,7 @@ export default function Page() {
   const [newCategoryOpen, setNewCategoryOpen] = useState(false);
   const [skuManual, setSkuManual] = useState(false);
   const productPhotoRef = useRef<HTMLInputElement>(null);
-  const [stockAdjustmentForm, setStockAdjustmentForm] = useState({ productId: '', direction: 'add' as 'add' | 'remove', quantity: 1, reason: 'restock' as Exclude<StockMovementReason, 'sale' | 'opening_stock' | 'branch_transfer'>, note: '', supplierName: '', reference: '', unitCost: '' });
+  const [stockAdjustmentForm, setStockAdjustmentForm] = useState(emptyStockForm);
   const [serviceForm, setServiceForm] = useState({ name: '', branchId: '', amount: 0, serviceType: 'direct_cost' as ServiceType, directCost: 0, monthlySharedCost: 0, expenseGroupId: '' });
   const [saleForm, setSaleForm] = useState({ productId: '', qty: 1 });
   const [checkoutDetails, setCheckoutDetails] = useState({ customerName: '', customerPhone: '', paymentMethod: 'cash' as PaymentMethod, paymentReference: '' });
@@ -352,23 +378,17 @@ export default function Page() {
   }, []);
   const db = firebaseApp ? getFirestore(firebaseApp) : null;
   const formatUGX = (value: number) => `UGX ${new Intl.NumberFormat('en-UG', { maximumFractionDigits: 0 }).format(Math.round(value))}`;
-  const ensureDefaultCashAccount = useCallback((existingAccounts: Account[]) => {
-    const normalized = existingAccounts.map((account) => ({ ...account, openingBalance: Number.isFinite(account.openingBalance) ? account.openingBalance : 0 }));
-    const existingCash = normalized.find((account) => account.name.trim().toLowerCase() === 'cash');
-    if (existingCash) {
-      return normalized.map((account) => ({ ...account, isDefault: account.id === existingCash.id }));
-    }
-    return [{
-      id: crypto.randomUUID(),
-      name: 'CASH',
-      openingBalance: 0,
-      isDefault: true,
-      ...currentAuditStamp(),
-    }, ...normalized];
-  }, []);
+  const ensureDefaultCashAccount = useCallback((existingAccounts: Account[]) => (
+    withTenderAccounts(existingAccounts, () => ({
+      createdAt: new Date().toISOString(),
+      createdByUid: authUser?.uid || 'unknown',
+      createdByEmail: authUser?.email || 'unknown',
+    }))
+  ), [authUser]);
   const currentShop = availableShops.find((s) => s.ownerUid === activeShopOwnerUid);
   const isShopOwner = activeShopOwnerUid === authUser?.uid;
   const seesBooks = role === 'shop_owner' || role === 'admin' || role === 'manager';
+  const seesCost = seesBooks || role === 'stock';
   const canOpenView = useCallback((next: View) => {
     if (next === 'profile' || next === 'sales' || next === 'dashboard' || next === 'products' || next === 'services') return true;
     if (next === 'sales_history' || next === 'customers') return role !== 'stock';
@@ -435,6 +455,8 @@ export default function Page() {
         setAccounts([]);
         setUsers([]);
         setCustomers([]);
+        setSuppliers([]);
+        setCustomerPayments([]);
         setHeldTickets([]);
         setCashSessions([]);
         setTaxSettings(defaultTaxSettings);
@@ -474,6 +496,9 @@ export default function Page() {
             setExpenseGroups([]);
             setUsers([]);
             setActivityLogs([]);
+            setSuppliers([]);
+            setCustomerPayments([]);
+            shopRevisionRef.current = 0;
             setAccounts(ensureDefaultCashAccount([]));
             setShopTimeSettings({ timezoneOffsetMinutes: 0, dayStartTime: '00:00' });
             applyRetailCollections();
@@ -486,7 +511,11 @@ export default function Page() {
             setExpenses(Array.isArray(data.expenses) ? data.expenses as Expense[] : []);
             setExpenseGroups(Array.isArray(data.expenseGroups) ? data.expenseGroups as ExpenseGroup[] : []);
             setUsers(Array.isArray(data.users) ? data.users as StaffUser[] : []);
-            setActivityLogs(Array.isArray(data.activityLogs) ? data.activityLogs as ActivityLog[] : []);
+            const localActivity = readLocalActivity();
+            setActivityLogs(trimActivity(Array.isArray(localActivity) ? localActivity as ActivityLog[] : (Array.isArray(data.activityLogs) ? data.activityLogs as ActivityLog[] : [])));
+            setSuppliers(normalizeSuppliers(data.suppliers));
+            setCustomerPayments(normalizeCustomerPayments(data.customerPayments));
+            shopRevisionRef.current = Number(data.revision) || 0;
             setAccounts(ensureDefaultCashAccount(Array.isArray(data.accounts) ? data.accounts as Account[] : []));
             const time = data.shopTimeSettings as Partial<ShopTimeSettings> | undefined;
             setShopTimeSettings({
@@ -556,7 +585,8 @@ export default function Page() {
         const selectedShop = namedMemberships.find((s) => s.ownerUid === selectedShopOwnerUid);
         const userDataRef = doc(db, 'users', selectedShopOwnerUid, 'pos', 'data');
         const imageRef = doc(db, 'users', selectedShopOwnerUid, 'pos', 'images');
-        const [snap, imageSnap] = await Promise.all([getDoc(userDataRef), getDoc(imageRef)]);
+        const activityRef = doc(db, 'users', selectedShopOwnerUid, 'pos', 'activity');
+        const [snap, imageSnap, activitySnap] = await Promise.all([getDoc(userDataRef), getDoc(imageRef), getDoc(activityRef)]);
         if (!snap.exists()) {
           const defaultBranch = { id: crypto.randomUUID(), name: 'Main Branch', location: 'HQ', createdAt: new Date().toISOString() };
           setBranches([defaultBranch]);
@@ -565,6 +595,9 @@ export default function Page() {
           setExpenseGroups([]);
           setUsers([]);
           setActivityLogs([]);
+          setSuppliers([]);
+          setCustomerPayments([]);
+          shopRevisionRef.current = 0;
           applyRetailCollections();
           setRole(selectedShop?.role || 'shop_owner');
           hasLoadedUserDataRef.current = true;
@@ -581,12 +614,19 @@ export default function Page() {
         setAccounts(ensureDefaultCashAccount(Array.isArray(data.accounts) ? data.accounts : []));
         setExpenseGroups(Array.isArray(data.expenseGroups) ? data.expenseGroups : []);
         setUsers(Array.isArray(data.users) ? data.users : []);
+        setSuppliers(normalizeSuppliers(data.suppliers));
+        setCustomerPayments(normalizeCustomerPayments(data.customerPayments));
+        shopRevisionRef.current = Number(data.revision) || 0;
         setRole(selectedShop?.role || (data.role as Role) || 'shop_owner');
         setShopTimeSettings({
           timezoneOffsetMinutes: typeof data?.shopTimeSettings?.timezoneOffsetMinutes === 'number' ? data.shopTimeSettings.timezoneOffsetMinutes : 0,
           dayStartTime: typeof data?.shopTimeSettings?.dayStartTime === 'string' ? data.shopTimeSettings.dayStartTime : '00:00',
         });
-        setActivityLogs(Array.isArray(data.activityLogs) ? data.activityLogs : []);
+        const inlineLogs = Array.isArray(data.activityLogs) ? data.activityLogs as ActivityLog[] : [];
+        const sideLogs = activitySnap.exists()
+          ? (Array.isArray(activitySnap.data().activityLogs) ? activitySnap.data().activityLogs as ActivityLog[] : [])
+          : null;
+        setActivityLogs(trimActivity(sideLogs ?? inlineLogs));
         applyRetailCollections(data as Record<string, unknown>);
         const storedShopName = typeof data.shopName === 'string' ? data.shopName.trim() : '';
         if (storedShopName && selectedShopOwnerUid === authUser.uid) {
@@ -617,6 +657,7 @@ export default function Page() {
           setStatus('Product photos are too large to save. Remove a photo and try again.');
           return;
         }
+        const trimmedLogs = trimActivity(activityLogs);
         const shopPayload = {
           role,
           shopName: currentShop?.shopName || 'My Shop',
@@ -627,10 +668,12 @@ export default function Page() {
           expenses,
           expenseGroups,
           users,
-          activityLogs,
+          activityLogs: [] as ActivityLog[],
           shopTimeSettings,
           accounts,
           customers,
+          suppliers,
+          customerPayments,
           heldTickets,
           cashSessions,
           taxSettings,
@@ -638,26 +681,48 @@ export default function Page() {
           salesEmailSettings,
         };
         if (authUser.uid === LOCAL_OPERATOR_ID) {
-          writeLocalShop(removeUndefinedDeep(shopPayload));
+          const nextRevision = (shopRevisionRef.current || 0) + 1;
+          writeLocalActivity(trimmedLogs);
+          writeLocalShop(removeUndefinedDeep({ ...shopPayload, revision: nextRevision }));
           writeLocalProductImages(stored.images);
+          shopRevisionRef.current = nextRevision;
           return;
         }
         if (!db) return;
         const userDataRef = doc(db, 'users', activeShopOwnerUid, 'pos', 'data');
-        await setDoc(userDataRef, removeUndefinedDeep({
-          ...shopPayload,
-          updatedAt: serverTimestamp(),
-        }), { merge: true });
+        const activityDocRef = doc(db, 'users', activeShopOwnerUid, 'pos', 'activity');
+        let nextRevision = shopRevisionRef.current;
+        await runTransaction(db, async (transaction) => {
+          const snap = await transaction.get(userDataRef);
+          const remoteRevision = snap.exists() ? Number(snap.data().revision) || 0 : 0;
+          if (snap.exists() && remoteRevision !== shopRevisionRef.current) throw new Error('SHOP_CONFLICT');
+          nextRevision = remoteRevision + 1;
+          transaction.set(userDataRef, {
+            ...removeUndefinedDeep({ ...shopPayload, revision: nextRevision }),
+            updatedAt: serverTimestamp(),
+          }, { merge: true });
+          transaction.set(activityDocRef, {
+            activityLogs: removeUndefinedDeep(trimmedLogs),
+            updatedAt: serverTimestamp(),
+          });
+        });
+        shopRevisionRef.current = nextRevision;
         await setDoc(doc(db, 'users', activeShopOwnerUid, 'pos', 'images'), {
           images: stored.images,
           updatedAt: serverTimestamp(),
         });
       } catch (error) {
+        if (error instanceof Error && error.message === 'SHOP_CONFLICT') {
+          hasLoadedUserDataRef.current = false;
+          showNotificationRef.current('Another till saved this shop. Reloading so nothing is overwritten.', 'info', 6000);
+          void loadUserData();
+          return;
+        }
         setStatus(`Failed to auto-save your data: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }
     };
     void saveUserData();
-  }, [activeShopOwnerUid, authUser, db, role, branches, products, services, sales, expenses, expenseGroups, users, activityLogs, shopTimeSettings, accounts, customers, heldTickets, cashSessions, taxSettings, receiptSettings, salesEmailSettings, currentShop?.shopName]);
+  }, [activeShopOwnerUid, authUser, customerPayments, db, loadUserData, role, branches, products, services, sales, expenses, expenseGroups, users, activityLogs, shopTimeSettings, accounts, customers, suppliers, heldTickets, cashSessions, taxSettings, receiptSettings, salesEmailSettings, currentShop?.shopName]);
 
   const startLocalCounter = () => {
     hasLoadedUserDataRef.current = false;
@@ -712,6 +777,9 @@ export default function Page() {
     setExpenseGroups([]);
     setUsers([]);
     setActivityLogs([]);
+    setSuppliers([]);
+    setCustomerPayments([]);
+    shopRevisionRef.current = 0;
     setCustomers([]);
     setHeldTickets([]);
     setCashSessions([]);
@@ -720,7 +788,7 @@ export default function Page() {
     setCartDiscount({ mode: 'none', value: 0 });
     setBranchForm({ name: '', location: '', id: '' });
     setProductForm(blankProductForm());
-    setStockAdjustmentForm({ productId: '', direction: 'add', quantity: 1, reason: 'restock', note: '', supplierName: '', reference: '', unitCost: '' });
+    setStockAdjustmentForm(emptyStockForm());
     setShowStockAdjustmentModal(false);
     setServiceForm({ name: '', branchId: '', amount: 0, serviceType: 'direct_cost', directCost: 0, monthlySharedCost: 0, expenseGroupId: '' });
     setSaleForm({ productId: '', qty: 1 });
@@ -975,7 +1043,7 @@ export default function Page() {
       const matchesBranch = !productBranchFilter || p.branchId === productBranchFilter;
       const matchesStock = 
         productStockFilter === 'all' ? true :
-        productStockFilter === 'low' ? p.stock < 10 && p.stock > 0 :
+        productStockFilter === 'low' ? stockIsLow(p) :
         p.stock === 0;
       return matchesSearch && matchesBranch && matchesStock;
     });
@@ -989,7 +1057,7 @@ export default function Page() {
   const recentStockMovements = useMemo(() => activityLogs
     .filter((log): log is ActivityLog & { stockMovement: StockMovementAudit } => Boolean(log.stockMovement))
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-    .slice(0, 100), [activityLogs]);
+    .slice(0, 400), [activityLogs]);
 
   const currentAuditStamp = () => ({
     createdAt: new Date().toISOString(),
@@ -1044,7 +1112,7 @@ export default function Page() {
       userEmail: authUser?.email || 'unknown',
       createdAt: new Date().toISOString(),
       ...(stockMovement ? { stockMovement } : {}),
-    }, ...prev].slice(0, 500));
+    }, ...prev].slice(0, ACTIVITY_KEEP));
   };
 
   const logStockMovement = (
@@ -1185,7 +1253,11 @@ export default function Page() {
     const image = isProductImage(productForm.image) ? productForm.image : undefined;
     const typedCategory = productForm.category.trim().slice(0, 40);
     const category = productCategories.find((item) => item.toLowerCase() === typedCategory.toLowerCase()) || typedCategory || undefined;
-    const productDetails = { ...productForm, name, sku: sku || undefined, barcode: barcode || undefined, category, image };
+    const purchasePrice = !seesCost && previousProduct ? previousProduct.purchasePrice : productForm.purchasePrice;
+    const reorderPoint = !seesCost && previousProduct
+      ? (previousProduct.reorderPoint ?? DEFAULT_REORDER_POINT)
+      : (Number.isFinite(productForm.reorderPoint) && productForm.reorderPoint >= 0 ? productForm.reorderPoint : DEFAULT_REORDER_POINT);
+    const productDetails = { ...productForm, name, sku: sku || undefined, barcode: barcode || undefined, category, image, purchasePrice, reorderPoint };
     if (productForm.id) {
       setProducts((prev) => prev.map((p) => (p.id === productForm.id ? { ...p, ...productDetails, ...updatedAuditStamp() } : p)));
       if (previousProduct) {
@@ -1258,23 +1330,54 @@ export default function Page() {
     return defaultAccount?.id;
   }, [accounts, defaultAccount?.id, saleAccountId]);
   const accountMap = useMemo(() => Object.fromEntries(accounts.map((account) => [account.id, account.name])), [accounts]);
-  const accountBalances = useMemo(() => {
-    const balances = new Map<string, number>();
-    accounts.forEach((account) => balances.set(account.id, account.openingBalance || 0));
-    sales.forEach((sale) => {
-      const accountId = sale.accountId || defaultAccount?.id;
-      if (!accountId) return;
-      balances.set(accountId, (balances.get(accountId) || 0) + sale.amount);
-    });
-    expenses.forEach((expense) => {
-      const accountId = expense.accountId || defaultAccount?.id;
-      if (!accountId) return;
-      balances.set(accountId, (balances.get(accountId) || 0) - expense.amount);
-    });
-    return balances;
-  }, [accounts, defaultAccount?.id, expenses, sales]);
+  const accountBalances = useMemo(
+    () => computeAccountBalances(accounts, sales, expenses, customerPayments),
+    [accounts, customerPayments, expenses, sales],
+  );
   const openCashSession = useMemo(() => cashSessions.find((session) => session.status === 'open') || null, [cashSessions]);
-  const sessionExpectedCash = openCashSession ? openCashSession.openingFloat + sessionCashTaken(sales, openCashSession.id) : 0;
+  const sessionExpectedCash = openCashSession
+    ? openCashSession.openingFloat + sessionCashTaken(sales, openCashSession.id) + sessionCashAdjustments(expenses, customerPayments, openCashSession.id)
+    : 0;
+  const suggestedFloat = useMemo(() => {
+    const latestClose = cashSessions
+      .filter((session) => session.status === 'closed' && typeof session.countedCash === 'number')
+      .sort((a, b) => new Date(b.closedAt || 0).getTime() - new Date(a.closedAt || 0).getTime())[0];
+    return latestClose?.countedCash || 0;
+  }, [cashSessions]);
+  const recentClosedShifts = useMemo(() => cashSessions
+    .filter((session) => session.status === 'closed')
+    .sort((a, b) => new Date(b.closedAt || 0).getTime() - new Date(a.closedAt || 0).getTime())
+    .slice(0, 5), [cashSessions]);
+  const customerBalance = (name: string, phone?: string) => (
+    customerAccountBalance(sales, name, phone) - customerPayments.filter((payment) => paymentMatchesCustomer(payment, name, phone)).reduce((sum, payment) => sum + payment.amount, 0)
+  );
+  const recordCustomerPayment = (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!paymentCustomer) return;
+    const amount = roundMoney(Number(paymentDraft.amount));
+    const owed = customerBalance(paymentCustomer.name, paymentCustomer.phone);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      showNotification('Enter an amount greater than zero.', 'error');
+      return;
+    }
+    if (amount > owed) {
+      showNotification('That is more than this customer owes.', 'error');
+      return;
+    }
+    const payment: CustomerPayment = {
+      id: crypto.randomUUID(),
+      customerName: paymentCustomer.name,
+      ...(paymentCustomer.phone ? { customerPhone: paymentCustomer.phone } : {}),
+      amount,
+      method: paymentDraft.method,
+      createdAt: new Date().toISOString(),
+      ...(paymentDraft.method === 'cash' && openCashSession ? { cashSessionId: openCashSession.id } : {}),
+    };
+    setCustomerPayments((prev) => [payment, ...prev]);
+    logActivity('customer_payment', `${paymentCustomer.name} paid ${formatUGX(amount)} by ${PAYMENT_METHOD_LABELS[payment.method]}.`);
+    showNotification('Payment recorded.', 'success');
+    setPaymentCustomer(null);
+  };
   const showRegisterMargin = role === 'shop_owner' || role === 'admin' || role === 'manager';
 
   const createExpenseGroup = (e: React.FormEvent) => {
@@ -1426,7 +1529,8 @@ export default function Page() {
       setStatus('Expense updated.');
       logActivity('edit_expense', `Updated expense "${expenseForm.title}"`);
     } else {
-      setExpenses((prev) => [...prev, { ...expenseForm, accountId: selectedAccountId, id: crypto.randomUUID(), ...currentAuditStamp() }]);
+      const cashSessionId = selectedAccountId === defaultAccount?.id && openCashSession ? openCashSession.id : undefined;
+      setExpenses((prev) => [...prev, { ...expenseForm, accountId: selectedAccountId, ...(cashSessionId ? { cashSessionId } : {}), id: crypto.randomUUID(), ...currentAuditStamp() }]);
       setStatus('Expense recorded.');
       logActivity('add_expense', `Added expense "${expenseForm.title}"`);
     }
@@ -2040,12 +2144,65 @@ export default function Page() {
       showNotification('Product not found', 'error');
       return;
     }
-    setStockAdjustmentForm({ productId, direction: 'add', quantity: 1, reason: 'restock', note: '', supplierName: '', reference: '', unitCost: '' });
+    setStockAdjustmentForm({ ...emptyStockForm(), productId, lines: null });
     setShowStockAdjustmentModal(true);
+  };
+
+  const rememberSupplier = (name: string) => {
+    const trimmed = name.trim().slice(0, 80);
+    if (!trimmed || suppliers.some((supplier) => supplier.name.toLowerCase() === trimmed.toLowerCase())) return;
+    setSuppliers((prev) => [...prev, { id: crypto.randomUUID(), name: trimmed }]);
   };
 
   const saveStockAdjustment = (e: React.FormEvent) => {
     e.preventDefault();
+    const supplierName = stockAdjustmentForm.supplierName.trim();
+    const reference = stockAdjustmentForm.reference.trim();
+    if (stockAdjustmentForm.lines) {
+      const prepared = stockAdjustmentForm.lines.map((line) => ({
+        productId: line.productId,
+        quantity: Number(line.quantity),
+        unitCost: line.unitCost.trim() ? Number(line.unitCost) : undefined,
+      })).filter((line) => line.productId);
+      if (prepared.length === 0 || prepared.some((line) => !Number.isFinite(line.quantity) || line.quantity <= 0)) {
+        showNotification('Choose a product and enter a quantity greater than zero on each line.', 'error');
+        return;
+      }
+      if (prepared.some((line) => line.unitCost !== undefined && (!Number.isFinite(line.unitCost) || line.unitCost < 0))) {
+        showNotification('Enter a valid non-negative unit cost.', 'error');
+        return;
+      }
+      const grouped = new Map<string, { qty: number; unitCost?: number }>();
+      prepared.forEach((line) => {
+        const current = grouped.get(line.productId) || { qty: 0 };
+        grouped.set(line.productId, { qty: current.qty + line.quantity, unitCost: line.unitCost !== undefined ? line.unitCost : current.unitCost });
+      });
+      if ([...grouped.keys()].some((productId) => !products.some((product) => product.id === productId))) {
+        showNotification('One of those products is no longer on the shelf.', 'error');
+        return;
+      }
+      setProducts((prev) => prev.map((item) => {
+        const change = grouped.get(item.id);
+        if (!change) return item;
+        return { ...item, stock: item.stock + change.qty, ...(change.unitCost !== undefined ? { purchasePrice: change.unitCost } : {}), ...updatedAuditStamp() };
+      }));
+      prepared.forEach((line) => {
+        const product = products.find((item) => item.id === line.productId);
+        if (!product) return;
+        const receiptNote = [supplierName ? `Supplier: ${supplierName}` : '', reference ? `Reference: ${reference}` : '', line.unitCost !== undefined ? `Unit cost: ${formatUGX(line.unitCost)}` : ''].filter(Boolean).join(' · ');
+        logStockMovement(product, line.quantity, 'restock', [stockAdjustmentForm.note.trim(), receiptNote].filter(Boolean).join(' | '), undefined, {
+          ...(supplierName ? { supplierName } : {}),
+          ...(reference ? { reference } : {}),
+          ...(line.unitCost !== undefined ? { unitCost: line.unitCost } : {}),
+        });
+      });
+      rememberSupplier(supplierName);
+      setStatus(`Received ${prepared.length} line${prepared.length === 1 ? '' : 's'}.`);
+      showNotification('Stock received.', 'success');
+      setShowStockAdjustmentModal(false);
+      setStockAdjustmentForm(emptyStockForm());
+      return;
+    }
     const product = products.find((item) => item.id === stockAdjustmentForm.productId);
     const quantity = Number(stockAdjustmentForm.quantity);
     const unitCostInput = stockAdjustmentForm.unitCost.trim();
@@ -2076,13 +2233,13 @@ export default function Page() {
       return;
     }
     const receiptMetadata: Pick<StockMovementAudit, 'supplierName' | 'reference' | 'unitCost'> | undefined = stockAdjustmentForm.reason === 'restock' ? {
-      ...(stockAdjustmentForm.supplierName.trim() ? { supplierName: stockAdjustmentForm.supplierName.trim() } : {}),
-      ...(stockAdjustmentForm.reference.trim() ? { reference: stockAdjustmentForm.reference.trim() } : {}),
+      ...(supplierName ? { supplierName } : {}),
+      ...(reference ? { reference } : {}),
       ...(unitCost !== undefined ? { unitCost } : {}),
     } : undefined;
     const receiptNote = stockAdjustmentForm.reason === 'restock' ? [
-      stockAdjustmentForm.supplierName.trim() ? `Supplier: ${stockAdjustmentForm.supplierName.trim()}` : '',
-      stockAdjustmentForm.reference.trim() ? `Reference: ${stockAdjustmentForm.reference.trim()}` : '',
+      supplierName ? `Supplier: ${supplierName}` : '',
+      reference ? `Reference: ${reference}` : '',
       unitCost !== undefined ? `Unit cost: ${formatUGX(unitCost)}` : '',
     ].filter(Boolean).join(' · ') : '';
     const movementNote = [stockAdjustmentForm.note.trim(), receiptNote].filter(Boolean).join(' | ');
@@ -2092,11 +2249,12 @@ export default function Page() {
       ...(stockAdjustmentForm.reason === 'restock' && unitCost !== undefined ? { purchasePrice: unitCost } : {}),
       ...updatedAuditStamp(),
     } : item));
+    if (stockAdjustmentForm.reason === 'restock') rememberSupplier(supplierName);
     logStockMovement(product, quantityDelta, stockAdjustmentForm.reason, movementNote, undefined, receiptMetadata);
     setStatus(`Stock adjusted for ${product.name}.`);
     showNotification(`${product.name}: ${quantityDelta > 0 ? '+' : ''}${quantityDelta} units recorded.`, 'success');
     setShowStockAdjustmentModal(false);
-    setStockAdjustmentForm({ productId: '', direction: 'add', quantity: 1, reason: 'restock', note: '', supplierName: '', reference: '', unitCost: '' });
+    setStockAdjustmentForm(emptyStockForm());
   };
 
   const filteredSales = useMemo(() => {
@@ -2227,9 +2385,44 @@ export default function Page() {
       setStatus('Only the shop owner or admin can delete sales.');
       return;
     }
+    const lines = sales.filter((sale) => ids.includes(sale.id));
+    if (lines.length === 0) return;
+    if (!window.confirm('Delete this receipt? Stock from its product lines will be reversed.')) return;
+    const deltas = new Map<string, number>();
+    const missing: string[] = [];
+    lines.forEach((line) => {
+      if (line.type !== 'product') return;
+      const product = products.find((item) => item.branchId === line.branchId && item.name === line.itemName);
+      if (!product) {
+        if (!missing.includes(line.itemName)) missing.push(line.itemName);
+        return;
+      }
+      deltas.set(product.id, (deltas.get(product.id) || 0) + line.qty);
+    });
+    const short = [...deltas.entries()].find(([productId, delta]) => {
+      const product = products.find((item) => item.id === productId);
+      return Boolean(product && product.stock + delta < 0);
+    });
+    if (short) {
+      showNotification('Not enough stock to reverse a return on this receipt.', 'error');
+      return;
+    }
+    setProducts((prev) => prev.map((product) => {
+      const delta = deltas.get(product.id);
+      return delta ? { ...product, stock: product.stock + delta, ...updatedAuditStamp() } : product;
+    }));
+    deltas.forEach((delta, productId) => {
+      const product = products.find((item) => item.id === productId);
+      if (product && delta !== 0) logStockMovement(product, delta, 'count_correction', 'Receipt deleted');
+    });
     setSales((prev) => prev.filter((sale) => !ids.includes(sale.id)));
-    logActivity('delete_sale', `Deleted ${ids.length} line(s) from a receipt. Stock was not changed.`);
-    showNotification('Receipt deleted. Stock was not changed.', 'success');
+    const missingNote = missing.length > 0 ? ` Could not find ${missing.join(', ')}.` : '';
+    logActivity('delete_sale', `Deleted a receipt and reversed its stock.${missingNote}`);
+    showNotification(
+      missing.length > 0 ? `Receipt deleted. Stock was put back, except ${missing.join(', ')}.` : 'Receipt deleted. Stock was put back.',
+      missing.length > 0 ? 'info' : 'success',
+      missing.length > 0 ? 5000 : 3000,
+    );
   };
 
   const editExpense = (expense: Expense) => {
@@ -2335,6 +2528,8 @@ export default function Page() {
       shopTimeSettings,
       accounts,
       customers,
+      suppliers,
+      customerPayments,
       heldTickets,
       cashSessions,
       taxSettings,
@@ -2388,7 +2583,9 @@ export default function Page() {
       const restoredExpenses = Array.isArray(parsed.data.expenses) ? parsed.data.expenses : [];
       const restoredExpenseGroups = Array.isArray(parsed.data.expenseGroups) ? parsed.data.expenseGroups : [];
       const restoredUsers = Array.isArray(parsed.data.users) ? parsed.data.users : [];
-      const restoredActivityLogs = Array.isArray(parsed.data.activityLogs) ? parsed.data.activityLogs : [];
+      const restoredActivityLogs = Array.isArray(parsed.data.activityLogs) ? parsed.data.activityLogs as ActivityLog[] : [];
+      const restoredSuppliers = normalizeSuppliers(parsed.data.suppliers);
+      const restoredCustomerPayments = normalizeCustomerPayments(parsed.data.customerPayments);
       const restoredShopTimeSettings = parsed.data.shopTimeSettings && typeof parsed.data.shopTimeSettings.dayStartTime === 'string'
         ? parsed.data.shopTimeSettings
         : { timezoneOffsetMinutes: 0, dayStartTime: '00:00' };
@@ -2409,35 +2606,46 @@ export default function Page() {
         userEmail: authUser.email || 'Unknown user',
         createdAt: new Date().toISOString(),
       };
-      const nextActivityLogs = [restoredLog, ...restoredActivityLogs].slice(0, 100);
+      const nextActivityLogs = trimActivity([restoredLog, ...restoredActivityLogs]);
+      const nextRevision = (shopRevisionRef.current || 0) + 1;
       const userDataRef = doc(db, 'users', activeShopOwnerUid, 'pos', 'data');
 
-      await setDoc(userDataRef, removeUndefinedDeep({
-        role: 'shop_owner' as Role,
-        shopName: restoredShopName,
-        branches: restoredBranches,
-        products: restoredSplit.products,
-        services: restoredServices,
-        sales: restoredSales,
-        expenses: restoredExpenses,
-        expenseGroups: restoredExpenseGroups,
-        users: restoredUsers,
-        activityLogs: nextActivityLogs,
-        shopTimeSettings: restoredShopTimeSettings,
-        accounts: restoredAccounts,
-        customers: restoredCustomers,
-        heldTickets: restoredHeldTickets,
-        cashSessions: restoredCashSessions,
-        taxSettings: restoredTaxSettings,
-        receiptSettings: restoredReceiptSettings,
-        salesEmailSettings: restoredSalesEmailSettings,
+      await setDoc(userDataRef, {
+        ...removeUndefinedDeep({
+          role: 'shop_owner' as Role,
+          shopName: restoredShopName,
+          branches: restoredBranches,
+          products: restoredSplit.products,
+          services: restoredServices,
+          sales: restoredSales,
+          expenses: restoredExpenses,
+          expenseGroups: restoredExpenseGroups,
+          users: restoredUsers,
+          activityLogs: [] as ActivityLog[],
+          shopTimeSettings: restoredShopTimeSettings,
+          accounts: restoredAccounts,
+          customers: restoredCustomers,
+          suppliers: restoredSuppliers,
+          customerPayments: restoredCustomerPayments,
+          revision: nextRevision,
+          heldTickets: restoredHeldTickets,
+          cashSessions: restoredCashSessions,
+          taxSettings: restoredTaxSettings,
+          receiptSettings: restoredReceiptSettings,
+          salesEmailSettings: restoredSalesEmailSettings,
+        }),
         restoredFromBackupAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
-      }), { merge: true });
+      }, { merge: true });
+      await setDoc(doc(db, 'users', activeShopOwnerUid, 'pos', 'activity'), {
+        activityLogs: removeUndefinedDeep(nextActivityLogs),
+        updatedAt: serverTimestamp(),
+      });
       await setDoc(doc(db, 'users', activeShopOwnerUid, 'pos', 'images'), {
         images: restoredSplit.images,
         updatedAt: serverTimestamp(),
       });
+      shopRevisionRef.current = nextRevision;
 
       await Promise.all(restoredUsers.map((staffUser) => {
         const normalizedEmail = staffUser.email?.toLowerCase().trim();
@@ -2463,6 +2671,8 @@ export default function Page() {
       setShopTimeSettings(restoredShopTimeSettings);
       setAccounts(restoredAccounts);
       setCustomers(restoredCustomers);
+      setSuppliers(restoredSuppliers);
+      setCustomerPayments(restoredCustomerPayments);
       setHeldTickets(restoredHeldTickets);
       setCashSessions(restoredCashSessions);
       setTaxSettings(restoredTaxSettings);
@@ -2710,7 +2920,7 @@ export default function Page() {
               const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
               const named = authUser.displayName && authUser.displayName !== 'Counter' && authUser.email !== 'counter@this-device' ? authUser.displayName.split(' ')[0] : '';
               const periodNoun = dashboardPeriod === 'daily' ? 'today' : dashboardPeriod === 'weekly' ? 'this week' : dashboardPeriod === 'monthly' ? 'this month' : 'this year';
-              const lowStock = products.filter((product) => product.stock < 10).slice(0, 3);
+              const lowStock = products.filter((product) => stockIsLow(product)).sort((a, b) => a.stock - b.stock).slice(0, 3);
               return (
                 <>
                   <div className="studio-top">
@@ -2759,6 +2969,19 @@ export default function Page() {
                         </ul>
                       ) : <p className="muted-copy">Nothing is running low.</p>}
                     </article>
+                    {recentClosedShifts.length > 0 && (
+                      <article className="card today-shifts">
+                        <h3>Closed shifts</h3>
+                        <ul className="shift-list">
+                          {recentClosedShifts.map((session) => (
+                            <li key={session.id}>
+                              <strong>{session.closedAt ? new Date(session.closedAt).toLocaleString() : 'Closed shift'}</strong>
+                              <span>Expected {formatUGX(session.expectedCash || 0)} · Counted {formatUGX(session.countedCash || 0)} · Variance {formatUGX(session.variance || 0)}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </article>
+                    )}
                   </div>
                   {seesBooks && <button type="button" className="edit-btn today-more" onClick={() => setView('reports')}>Open reports</button>}
                 </>
@@ -2777,7 +3000,7 @@ export default function Page() {
               {productPane === 'shelf' && (
                 <div className="page-tools-actions">
                   <button className="edit-btn" disabled={products.length === 0} onClick={() => {
-                    setStockAdjustmentForm({ productId: '', direction: 'add', quantity: 1, reason: 'restock', note: '', supplierName: '', reference: '', unitCost: '' });
+                    setStockAdjustmentForm({ ...emptyStockForm(), lines: [{ productId: '', quantity: '', unitCost: '' }] });
                     setShowStockAdjustmentModal(true);
                   }}>Receive stock</button>
                   <button className="primary" onClick={() => openProductForm(blankProductForm(branches[0]?.id || ''))}>
@@ -2829,17 +3052,17 @@ export default function Page() {
                     <div className="shelf-body">
                       <div className="shelf-title">
                         <h3>{p.name}</h3>
-                        <span className={`badge ${p.stock === 0 ? 'badge-danger' : p.stock < 10 ? 'badge-warning' : 'badge-success'}`}>
-                          {p.stock === 0 ? 'Out' : p.stock < 10 ? `Low · ${p.stock}` : p.stock}
+                        <span className={`badge ${p.stock === 0 ? 'badge-danger' : stockIsLow(p) ? 'badge-warning' : 'badge-success'}`}>
+                          {p.stock === 0 ? 'Out' : stockIsLow(p) ? `Low · ${p.stock}` : p.stock}
                         </span>
                       </div>
                       {shelfDetails && <p className="shelf-meta">{shelfDetails}</p>}
                       <div className="shelf-prices">
                         <strong>{formatUGX(p.salePrice)}</strong>
-                        <span>Cost {formatUGX(p.purchasePrice)}</span>
+                        {seesCost && <span>Cost {formatUGX(p.purchasePrice)}</span>}
                       </div>
                       <div className="shelf-actions">
-                        <button className="edit-btn" onClick={() => openProductForm({ ...blankProductForm(p.branchId), ...p, sku: p.sku || '', barcode: p.barcode || '', category: p.category || '', image: p.image || '' })}>Edit</button>
+                        <button className="edit-btn" onClick={() => openProductForm({ ...blankProductForm(p.branchId), ...p, sku: p.sku || '', barcode: p.barcode || '', category: p.category || '', image: p.image || '', reorderPoint: p.reorderPoint ?? DEFAULT_REORDER_POINT })}>Edit</button>
                         <button className="edit-btn" onClick={() => restockProduct(p.id)}>Adjust stock</button>
                         <button className="delete-btn" onClick={() => {
                           if (p.stock > 0) logStockMovement(p, -p.stock, 'product_removed', 'Product removed from inventory');
@@ -2953,6 +3176,7 @@ export default function Page() {
             customerPhone={checkoutDetails.customerPhone}
             cashSession={openCashSession}
             sessionExpected={sessionExpectedCash}
+            suggestedFloat={suggestedFloat}
             showMargin={showRegisterMargin}
             formatMoney={formatUGX}
             onAddProduct={(productId) => addProductToCart(productId, true)}
@@ -3503,7 +3727,7 @@ export default function Page() {
                 </div>
               </div>
             </div>
-            <p className="stock-line">Stock on hand is worth {formatUGX(products.reduce((a, p) => a + (p.stock * p.purchasePrice), 0))}. {products.filter(p => p.stock < 10).length} product{products.filter(p => p.stock < 10).length === 1 ? '' : 's'} below 10.</p>
+            <p className="stock-line">Stock on hand is worth {formatUGX(products.reduce((a, p) => a + (p.stock * p.purchasePrice), 0))}. {products.filter((product) => stockIsLow(product)).length} product{products.filter((product) => stockIsLow(product)).length === 1 ? '' : 's'} below their reorder level.</p>
           </section>
         )}
 
@@ -3562,22 +3786,27 @@ export default function Page() {
                     <th>Phone</th>
                     <th>On account</th>
                     <th>Notes</th>
+                    <th></th>
                   </tr>
                 </thead>
                 <tbody>
                   {customers.filter((customer) => {
                     const needle = customerQuery.trim().toLowerCase();
                     return !needle || customer.name.toLowerCase().includes(needle) || customer.phone?.toLowerCase().includes(needle);
-                  }).map((customer) => (
+                  }).map((customer) => {
+                    const owed = customerBalance(customer.name, customer.phone);
+                    return (
                     <tr key={customer.id}>
                       <td style={{ fontWeight: 700 }}>{customer.name}</td>
                       <td>{customer.phone || '—'}</td>
-                      <td>{formatUGX(customerAccountBalance(sales, customer.name, customer.phone))}</td>
+                      <td>{formatUGX(owed)}</td>
                       <td>{customer.notes || '—'}</td>
+                      <td>{owed > 0 && <button type="button" className="edit-btn" onClick={() => { setPaymentCustomer(customer); setPaymentDraft({ amount: String(owed), method: 'cash' }); }}>Record payment</button>}</td>
                     </tr>
-                  ))}
+                    );
+                  })}
                   {customers.length === 0 && (
-                    <tr><td colSpan={4} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>Customers appear here after a named sale.</td></tr>
+                    <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>Customers appear here after a named sale.</td></tr>
                   )}
                 </tbody>
               </table>
@@ -4035,10 +4264,18 @@ export default function Page() {
                       <span>{productForm.id ? 'Stock on hand' : 'Opening stock'}</span>
                       <input type="number" min="0" step="0.01" value={productForm.stock} onChange={(e) => setProductForm({ ...productForm, stock: Number(e.target.value) })} required />
                     </label>
-                    <label className="field">
-                      <span>Purchase Price (UGX)</span>
-                      <input type="number" min="0" step="0.01" value={productForm.purchasePrice} onChange={(e) => setProductForm({ ...productForm, purchasePrice: Number(e.target.value) })} required />
-                    </label>
+                    {seesCost && (
+                      <label className="field">
+                        <span>Reorder when below</span>
+                        <input type="number" min="0" step="1" value={productForm.reorderPoint} onChange={(e) => setProductForm({ ...productForm, reorderPoint: Number(e.target.value) })} required />
+                      </label>
+                    )}
+                    {seesCost && (
+                      <label className="field">
+                        <span>Purchase Price (UGX)</span>
+                        <input type="number" min="0" step="0.01" value={productForm.purchasePrice} onChange={(e) => setProductForm({ ...productForm, purchasePrice: Number(e.target.value) })} required />
+                      </label>
+                    )}
                     <label className="field">
                       <span>Selling Price (UGX)</span>
                       <input type="number" min="0" step="0.01" value={productForm.salePrice} onChange={(e) => setProductForm({ ...productForm, salePrice: Number(e.target.value) })} required />
@@ -4059,8 +4296,8 @@ export default function Page() {
             <div className="modal-content" role="dialog" aria-modal="true" aria-labelledby="stock-adjustment-title">
               <div className="modal-header">
                 <div>
-                  <h3 id="stock-adjustment-title">Receive or adjust stock</h3>
-                  {products.find((product) => product.id === stockAdjustmentForm.productId) && (
+                  <h3 id="stock-adjustment-title">{stockAdjustmentForm.lines ? 'Receive stock' : 'Adjust stock'}</h3>
+                  {!stockAdjustmentForm.lines && products.find((product) => product.id === stockAdjustmentForm.productId) && (
                     <p style={{ margin: '0.3rem 0 0', color: 'var(--text-muted)', fontSize: '0.78rem' }}>
                       On hand: {products.find((product) => product.id === stockAdjustmentForm.productId)?.stock}
                     </p>
@@ -4071,59 +4308,94 @@ export default function Page() {
               <form onSubmit={saveStockAdjustment}>
                 <div className="modal-body">
                   <div className="form">
-                    <label className="field">
-                      <span>Product</span>
-                      <select value={stockAdjustmentForm.productId} onChange={(e) => setStockAdjustmentForm((prev) => ({ ...prev, productId: e.target.value }))} required>
-                        <option value="">Select product</option>
-                        {products.map((product) => (
-                          <option key={product.id} value={product.id}>{product.name} · {product.stock} on hand</option>
+                    {stockAdjustmentForm.lines ? (
+                      <div className="receipt-lines form-span">
+                        {stockAdjustmentForm.lines.map((line, index) => (
+                          <div className="receipt-line" key={`${index}-${line.productId}`}>
+                            <label className="field receipt-product">
+                              <span>Product</span>
+                              <select value={line.productId} onChange={(event) => setStockAdjustmentForm((prev) => ({ ...prev, lines: prev.lines?.map((item, itemIndex) => itemIndex === index ? { ...item, productId: event.target.value } : item) || null }))} required>
+                                <option value="">Select product</option>
+                                {products.map((product) => <option key={product.id} value={product.id}>{product.name} · {product.stock} on hand</option>)}
+                              </select>
+                            </label>
+                            <label className="field">
+                              <span>Quantity</span>
+                              <input type="number" min="0.01" step="0.01" value={line.quantity} onChange={(event) => setStockAdjustmentForm((prev) => ({ ...prev, lines: prev.lines?.map((item, itemIndex) => itemIndex === index ? { ...item, quantity: event.target.value } : item) || null }))} required />
+                            </label>
+                            <label className="field">
+                              <span>Unit cost</span>
+                              <input type="number" min="0" step="0.01" value={line.unitCost} placeholder="Keep" onChange={(event) => setStockAdjustmentForm((prev) => ({ ...prev, lines: prev.lines?.map((item, itemIndex) => itemIndex === index ? { ...item, unitCost: event.target.value } : item) || null }))} />
+                            </label>
+                            {stockAdjustmentForm.lines && stockAdjustmentForm.lines.length > 1 && (
+                              <button type="button" className="delete-btn" onClick={() => setStockAdjustmentForm((prev) => ({ ...prev, lines: prev.lines?.filter((_, itemIndex) => itemIndex !== index) || null }))}>Remove</button>
+                            )}
+                          </div>
                         ))}
-                      </select>
-                    </label>
-                    <label className="field">
-                      <span>Change</span>
-                      <select value={stockAdjustmentForm.direction} onChange={(e) => setStockAdjustmentForm((prev) => ({ ...prev, direction: e.target.value as 'add' | 'remove' }))}>
-                        <option value="add">Add stock</option>
-                        <option value="remove">Remove stock</option>
-                      </select>
-                    </label>
-                    <label className="field">
-                      <span>Quantity</span>
-                      <input type="number" min="0.01" step="0.01" value={stockAdjustmentForm.quantity} onChange={(e) => setStockAdjustmentForm((prev) => ({ ...prev, quantity: Number(e.target.value) }))} required />
-                    </label>
-                    <label className="field">
-                      <span>Reason</span>
-                      <select
-                        value={stockAdjustmentForm.reason}
-                        onChange={(e) => {
-                          const reason = e.target.value as typeof stockAdjustmentForm.reason;
-                          setStockAdjustmentForm((prev) => ({
-                            ...prev,
-                            reason,
-                            direction: reason === 'damaged' ? 'remove' : reason === 'customer_return' ? 'add' : prev.direction,
-                          }));
-                        }}
-                      >
-                        <option value="restock">Supplier receipt / restock</option>
-                        <option value="count_correction">Count correction</option>
-                        <option value="damaged">Damaged / expired</option>
-                        <option value="customer_return">Customer return</option>
-                      </select>
-                    </label>
-                    {stockAdjustmentForm.reason === 'restock' && (
+                        <button type="button" className="edit-btn" onClick={() => setStockAdjustmentForm((prev) => ({ ...prev, lines: [...(prev.lines || []), { productId: '', quantity: '', unitCost: '' }] }))}>Add another product</button>
+                      </div>
+                    ) : (
+                      <>
+                        <label className="field">
+                          <span>Product</span>
+                          <select value={stockAdjustmentForm.productId} onChange={(e) => setStockAdjustmentForm((prev) => ({ ...prev, productId: e.target.value }))} required>
+                            <option value="">Select product</option>
+                            {products.map((product) => (
+                              <option key={product.id} value={product.id}>{product.name} · {product.stock} on hand</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="field">
+                          <span>Change</span>
+                          <select value={stockAdjustmentForm.direction} onChange={(e) => setStockAdjustmentForm((prev) => ({ ...prev, direction: e.target.value as 'add' | 'remove' }))}>
+                            <option value="add">Add stock</option>
+                            <option value="remove">Remove stock</option>
+                          </select>
+                        </label>
+                        <label className="field">
+                          <span>Quantity</span>
+                          <input type="number" min="0.01" step="0.01" value={stockAdjustmentForm.quantity} onChange={(e) => setStockAdjustmentForm((prev) => ({ ...prev, quantity: Number(e.target.value) }))} required />
+                        </label>
+                        <label className="field">
+                          <span>Reason</span>
+                          <select
+                            value={stockAdjustmentForm.reason}
+                            onChange={(e) => {
+                              const reason = e.target.value as typeof stockAdjustmentForm.reason;
+                              setStockAdjustmentForm((prev) => ({
+                                ...prev,
+                                reason,
+                                direction: reason === 'damaged' ? 'remove' : reason === 'customer_return' ? 'add' : prev.direction,
+                              }));
+                            }}
+                          >
+                            <option value="restock">Supplier receipt / restock</option>
+                            <option value="count_correction">Count correction</option>
+                            <option value="damaged">Damaged / expired</option>
+                            <option value="customer_return">Customer return</option>
+                          </select>
+                        </label>
+                      </>
+                    )}
+                    {(stockAdjustmentForm.lines || stockAdjustmentForm.reason === 'restock') && (
                       <>
                         <label className="field">
                           <span>Supplier (optional)</span>
-                          <input value={stockAdjustmentForm.supplierName} onChange={(e) => setStockAdjustmentForm((prev) => ({ ...prev, supplierName: e.target.value }))} maxLength={80} placeholder="Supplier name" />
+                          <input list="supplier-names" value={stockAdjustmentForm.supplierName} onChange={(e) => setStockAdjustmentForm((prev) => ({ ...prev, supplierName: e.target.value }))} maxLength={80} placeholder="Supplier name" />
+                          <datalist id="supplier-names">
+                            {suppliers.map((supplier) => <option key={supplier.id} value={supplier.name} />)}
+                          </datalist>
                         </label>
                         <label className="field">
                           <span>Invoice / reference (optional)</span>
                           <input value={stockAdjustmentForm.reference} onChange={(e) => setStockAdjustmentForm((prev) => ({ ...prev, reference: e.target.value }))} maxLength={80} placeholder="Supplier invoice number" />
                         </label>
-                        <label className="field">
-                          <span>Latest unit cost (UGX, optional)</span>
-                          <input type="number" min="0" step="0.01" value={stockAdjustmentForm.unitCost} onChange={(e) => setStockAdjustmentForm((prev) => ({ ...prev, unitCost: e.target.value }))} placeholder="Leave blank to keep current cost" />
-                        </label>
+                        {!stockAdjustmentForm.lines && (
+                          <label className="field">
+                            <span>Latest unit cost (UGX, optional)</span>
+                            <input type="number" min="0" step="0.01" value={stockAdjustmentForm.unitCost} onChange={(e) => setStockAdjustmentForm((prev) => ({ ...prev, unitCost: e.target.value }))} placeholder="Leave blank to keep current cost" />
+                          </label>
+                        )}
                       </>
                     )}
                     <label className="field">
@@ -4134,7 +4406,42 @@ export default function Page() {
                 </div>
                 <div className="modal-footer">
                   <button type="button" className="edit-btn" onClick={() => setShowStockAdjustmentModal(false)}>Cancel</button>
-                  <button type="submit" className="primary">{stockAdjustmentForm.reason === 'restock' ? 'Receive stock' : 'Save adjustment'}</button>
+                  <button type="submit" className="primary">{stockAdjustmentForm.lines || stockAdjustmentForm.reason === 'restock' ? 'Receive stock' : 'Save adjustment'}</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {paymentCustomer && (
+          <div className="modal-overlay">
+            <div className="modal-content" role="dialog" aria-modal="true" aria-labelledby="customer-payment-title">
+              <div className="modal-header">
+                <h3 id="customer-payment-title">Payment from {paymentCustomer.name}</h3>
+                <button type="button" className="modal-close" onClick={() => setPaymentCustomer(null)} aria-label="Close payment">&times;</button>
+              </div>
+              <form onSubmit={recordCustomerPayment}>
+                <div className="modal-body">
+                  <div className="form">
+                    <label className="field">
+                      <span>Amount (UGX)</span>
+                      <input type="number" min="1" step="1" value={paymentDraft.amount} onChange={(event) => setPaymentDraft((prev) => ({ ...prev, amount: event.target.value }))} required />
+                    </label>
+                    <label className="field">
+                      <span>Method</span>
+                      <select value={paymentDraft.method} onChange={(event) => setPaymentDraft((prev) => ({ ...prev, method: event.target.value as CustomerPayment['method'] }))}>
+                        <option value="cash">Cash</option>
+                        <option value="mobile_money">Mobile money</option>
+                        <option value="card_terminal">Card</option>
+                        <option value="bank_transfer">Bank</option>
+                      </select>
+                    </label>
+                    <p className="muted-copy form-span">Owes {formatUGX(customerBalance(paymentCustomer.name, paymentCustomer.phone))}. {paymentDraft.method === 'cash' && openCashSession ? 'Cash is added to the open drawer.' : paymentDraft.method === 'cash' ? 'The drawer is closed, so this cash is recorded on the cash account only.' : 'This is recorded on that account. AlphaPOS does not collect the money.'}</p>
+                  </div>
+                </div>
+                <div className="modal-footer">
+                  <button type="button" className="edit-btn" onClick={() => setPaymentCustomer(null)}>Cancel</button>
+                  <button type="submit" className="primary">Record payment</button>
                 </div>
               </form>
             </div>
@@ -4181,6 +4488,9 @@ export default function Page() {
                       <span>Amount (UGX)</span>
                       <input type="number" value={expenseForm.amount} onChange={(e) => setExpenseForm({ ...expenseForm, amount: Number(e.target.value) })} required />
                     </label>
+                    {!expenseForm.id && openCashSession && (expenseForm.accountId || defaultAccount?.id) === defaultAccount?.id && (
+                      <p className="muted-copy form-span">Cash taken from the open drawer is deducted from the expected till.</p>
+                    )}
                   </div>
                 </div>
                 <div className="modal-footer">

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { reorderLevel } from '../../lib/pos/books';
 import type { CartDiscount, CashSession, Customer, PaymentMethod, Settlement, Tender } from '../../lib/pos/retail';
 import { PAYMENT_METHOD_LABELS } from '../../lib/pos/retail';
 
@@ -14,6 +15,7 @@ export type RegisterProduct = {
   barcode?: string;
   category?: string;
   image?: string;
+  reorderPoint?: number;
 };
 
 export type RegisterService = {
@@ -76,6 +78,7 @@ export default function RegisterDesk({
   customerPhone,
   cashSession,
   sessionExpected,
+  suggestedFloat,
   showMargin,
   formatMoney,
   onAddProduct,
@@ -108,6 +111,7 @@ export default function RegisterDesk({
   customerPhone: string;
   cashSession: CashSession | null;
   sessionExpected: number;
+  suggestedFloat: number;
   showMargin: boolean;
   formatMoney: (value: number) => string;
   onAddProduct: (productId: string) => void;
@@ -201,7 +205,7 @@ export default function RegisterDesk({
   const openPay = () => {
     if (cart.length === 0 || settlement.total < 0) return;
     if (!cashSession) {
-      setFloatAmount('0');
+      setFloatAmount(String(suggestedFloat || 0));
       setPendingPay(true);
       setDrawerMode('open');
       return;
@@ -265,7 +269,7 @@ export default function RegisterDesk({
             ) : (
               <>
                 <strong>Drawer closed</strong>
-                <button type="button" className="primary" onClick={() => { setFloatAmount('0'); setPendingPay(false); setDrawerMode('open'); }}>Open drawer</button>
+                <button type="button" className="primary" onClick={() => { setFloatAmount(String(suggestedFloat || 0)); setPendingPay(false); setDrawerMode('open'); }}>Open drawer</button>
               </>
             )}
           </div>
@@ -279,7 +283,7 @@ export default function RegisterDesk({
         <div className="pos-grid">
           {visibleProducts.map((product) => {
             const out = product.stock <= 0;
-            const low = product.stock > 0 && product.stock < 10;
+            const low = product.stock > 0 && product.stock < reorderLevel(product);
             const onTicket = cart.find((item) => item.itemType === 'product' && item.itemId === product.id)?.qty || 0;
             return (
               <button key={product.id} type="button" className={`pos-tile ${out ? 'is-out' : ''} ${onTicket ? 'is-in-cart' : ''}`} disabled={out} onClick={() => onAddProduct(product.id)}>
@@ -541,10 +545,13 @@ export default function RegisterDesk({
               <button type="button" className="modal-close" onClick={() => { setDrawerMode(null); setPendingPay(false); }} aria-label="Close drawer dialog">×</button>
             </header>
             {drawerMode === 'open' ? (
-              <label>
-                Opening float
-                <input type="number" min={0} value={floatAmount} onChange={(event) => setFloatAmount(event.target.value)} />
-              </label>
+              <>
+                <label>
+                  Opening float
+                  <input type="number" min={0} value={floatAmount} onChange={(event) => setFloatAmount(event.target.value)} />
+                </label>
+                {suggestedFloat > 0 && <p className="pos-pay-note">Filled from the last close. Change it if the till is different.</p>}
+              </>
             ) : (
               <>
                 <div className="pos-close-stats">
@@ -559,7 +566,7 @@ export default function RegisterDesk({
                   Note
                   <input value={drawerNote} maxLength={160} onChange={(event) => setDrawerNote(event.target.value)} />
                 </label>
-                <p className="pos-pay-note">Expected cash is the opening float plus cash taken on this shift, minus cash refunds. Expenses are not deducted here.</p>
+                <p className="pos-pay-note">Expected is the opening float, plus cash taken and cash paid onto customer accounts, minus cash refunds and cash expenses on this shift.</p>
               </>
             )}
             <button type="submit" className="primary pos-charge">{drawerMode === 'open' ? 'Open drawer' : 'Close and save'}</button>
