@@ -1946,11 +1946,13 @@ button.primary:hover, .dashboard-refresh-btn:hover:not(:disabled) { background: 
 .shelf-prices strong {
   color: #176e4e;
   font-size: 1.02rem;
+  white-space: nowrap;
 }
 
 .shelf-prices span {
   color: var(--text-muted);
   font-size: 0.75rem;
+  white-space: nowrap;
 }
 
 .shelf-actions {
@@ -2325,6 +2327,8 @@ button.primary:hover, .dashboard-refresh-btn:hover:not(:disabled) { background: 
 }
 
 @media (max-width: 640px) {
+  .pos-toolbar { flex-direction: column; align-items: stretch; }
+  .pos-session { width: 100%; }
   .pos-methods, .pos-quick-cash { grid-template-columns: repeat(2, 1fr); }
   .pos-customer, .pos-split, .pos-actions { grid-template-columns: 1fr; display: grid; }
   .pos-pay { width: 100%; }

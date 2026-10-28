@@ -2783,7 +2783,9 @@ export default function Page() {
 
             {filteredProducts.length > 0 ? (
               <div className="shelf-grid">
-                {productsPagination.rows.map((p) => (
+                {productsPagination.rows.map((p) => {
+                  const shelfDetails = [p.category, p.sku, p.barcode, branches.length > 1 ? branchMap[p.branchId] : ''].filter(Boolean).join(' · ');
+                  return (
                   <article key={p.id} className={`shelf-card${p.stock === 0 ? ' is-out' : ''}`}>
                     <div className="shelf-photo" aria-hidden="true">
                       {p.image ? <img src={p.image} alt="" /> : <span>{p.name.slice(0, 1).toUpperCase()}</span>}
@@ -2795,9 +2797,7 @@ export default function Page() {
                           {p.stock === 0 ? 'Out' : p.stock < 10 ? `Low · ${p.stock}` : p.stock}
                         </span>
                       </div>
-                      <p className="shelf-meta">
-                        {[p.category, p.sku, p.barcode, branches.length > 1 ? branchMap[p.branchId] : ''].filter(Boolean).join(' · ') || 'No SKU yet'}
-                      </p>
+                      {shelfDetails && <p className="shelf-meta">{shelfDetails}</p>}
                       <div className="shelf-prices">
                         <strong>{formatUGX(p.salePrice)}</strong>
                         <span>Cost {formatUGX(p.purchasePrice)}</span>
@@ -2813,7 +2813,8 @@ export default function Page() {
                       </div>
                     </div>
                   </article>
-                ))}
+                  );
+                })}
               </div>
             ) : (
               <div className="shelf-empty">
