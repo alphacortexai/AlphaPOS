@@ -309,6 +309,7 @@ export default function Page() {
   const [branchForm, setBranchForm] = useState({ name: '', location: '', id: '' });
   const [productForm, setProductForm] = useState(blankProductForm());
   const [productPhotoBusy, setProductPhotoBusy] = useState(false);
+  const [newCategoryOpen, setNewCategoryOpen] = useState(false);
   const productPhotoRef = useRef<HTMLInputElement>(null);
   const [stockAdjustmentForm, setStockAdjustmentForm] = useState({ productId: '', direction: 'add' as 'add' | 'remove', quantity: 1, reason: 'restock' as Exclude<StockMovementReason, 'sale' | 'opening_stock' | 'branch_transfer'>, note: '', supplierName: '', reference: '', unitCost: '' });
   const [serviceForm, setServiceForm] = useState({ name: '', branchId: '', amount: 0, serviceType: 'direct_cost' as ServiceType, directCost: 0, monthlySharedCost: 0, expenseGroupId: '' });
@@ -978,6 +979,11 @@ export default function Page() {
     });
   }, [products, productSearchQuery, productBranchFilter, productStockFilter]);
 
+  const productCategories = useMemo(() => {
+    const names = new Set(products.map((product) => product.category?.trim()).filter((value): value is string => Boolean(value)));
+    return Array.from(names).sort((a, b) => a.localeCompare(b));
+  }, [products]);
+
   const recentStockMovements = useMemo(() => activityLogs
     .filter((log): log is ActivityLog & { stockMovement: StockMovementAudit } => Boolean(log.stockMovement))
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
@@ -1136,6 +1142,14 @@ export default function Page() {
     }
   };
 
+  const openProductForm = (form: ReturnType<typeof blankProductForm>) => {
+    const typed = form.category.trim();
+    const known = productCategories.some((name) => name.toLowerCase() === typed.toLowerCase());
+    setProductForm(form);
+    setNewCategoryOpen(typed ? !known : productCategories.length === 0);
+    setShowProductModal(true);
+  };
+
   const saveProduct = (e: React.FormEvent) => {
     e.preventDefault();
     const name = productForm.name.trim();
@@ -1153,7 +1167,9 @@ export default function Page() {
       return;
     }
     const image = isProductImage(productForm.image) ? productForm.image : undefined;
-    const productDetails = { ...productForm, name, sku: sku || undefined, barcode: barcode || undefined, category: productForm.category.trim() || undefined, image };
+    const typedCategory = productForm.category.trim().slice(0, 40);
+    const category = productCategories.find((item) => item.toLowerCase() === typedCategory.toLowerCase()) || typedCategory || undefined;
+    const productDetails = { ...productForm, name, sku: sku || undefined, barcode: barcode || undefined, category, image };
     if (productForm.id) {
       const previousProduct = products.find((product) => product.id === productForm.id);
       setProducts((prev) => prev.map((p) => (p.id === productForm.id ? { ...p, ...productDetails, ...updatedAuditStamp() } : p)));
@@ -2749,7 +2765,7 @@ export default function Page() {
                     setStockAdjustmentForm({ productId: '', direction: 'add', quantity: 1, reason: 'restock', note: '', supplierName: '', reference: '', unitCost: '' });
                     setShowStockAdjustmentModal(true);
                   }}>Receive stock</button>
-                  <button className="primary" onClick={() => { setProductForm(blankProductForm(branches[0]?.id || '')); setShowProductModal(true); }}>
+                  <button className="primary" onClick={() => openProductForm(blankProductForm(branches[0]?.id || ''))}>
                     Add product
                   </button>
                 </div>
@@ -2808,7 +2824,7 @@ export default function Page() {
                         <span>Cost {formatUGX(p.purchasePrice)}</span>
                       </div>
                       <div className="shelf-actions">
-                        <button className="edit-btn" onClick={() => { setProductForm({ ...blankProductForm(p.branchId), ...p, sku: p.sku || '', barcode: p.barcode || '', category: p.category || '', image: p.image || '' }); setShowProductModal(true); }}>Edit</button>
+                        <button className="edit-btn" onClick={() => openProductForm({ ...blankProductForm(p.branchId), ...p, sku: p.sku || '', barcode: p.barcode || '', category: p.category || '', image: p.image || '' })}>Edit</button>
                         <button className="edit-btn" onClick={() => restockProduct(p.id)}>Adjust stock</button>
                         <button className="delete-btn" onClick={() => {
                           if (p.stock > 0) logStockMovement(p, -p.stock, 'product_removed', 'Product removed from inventory');
@@ -2939,7 +2955,7 @@ export default function Page() {
             onCloseDrawer={closeDrawer}
             onClear={() => { if (cart.length === 0 || window.confirm('Clear this sale?')) clearRegister(); }}
             onPay={completeRegisterSale}
-            onCreateProduct={() => { setProductForm(blankProductForm(branches[0]?.id || '')); setShowProductModal(true); }}
+            onCreateProduct={() => openProductForm(blankProductForm(branches[0]?.id || ''))}
           />
         )}
 
@@ -3957,10 +3973,19 @@ export default function Page() {
                       <span>Product Name</span>
                       <input value={productForm.name} onChange={(e) => setProductForm({ ...productForm, name: e.target.value })} required />
                     </label>
-                    <label className="field">
+                    <div className="field form-span">
                       <span>Category</span>
-                      <input value={productForm.category} onChange={(e) => setProductForm({ ...productForm, category: e.target.value })} placeholder="e.g. Beverages" />
-                    </label>
+                      <div className="category-choices" role="group" aria-label="Category">
+                        <button type="button" className={!newCategoryOpen && !productForm.category ? 'active' : ''} onClick={() => { setNewCategoryOpen(false); setProductForm({ ...productForm, category: '' }); }}>None</button>
+                        {productCategories.map((name) => (
+                          <button type="button" key={name} className={!newCategoryOpen && productForm.category === name ? 'active' : ''} onClick={() => { setNewCategoryOpen(false); setProductForm({ ...productForm, category: name }); }}>{name}</button>
+                        ))}
+                        <button type="button" className={newCategoryOpen ? 'active' : ''} onClick={() => { setNewCategoryOpen(true); setProductForm({ ...productForm, category: '' }); }}>New category</button>
+                      </div>
+                      {newCategoryOpen && (
+                        <input value={productForm.category} onChange={(e) => setProductForm({ ...productForm, category: e.target.value.slice(0, 40) })} placeholder="Category name" maxLength={40} autoFocus />
+                      )}
+                    </div>
                     <label className="field">
                       <span>SKU</span>
                       <input value={productForm.sku} onChange={(e) => setProductForm({ ...productForm, sku: e.target.value })} autoCapitalize="characters" />

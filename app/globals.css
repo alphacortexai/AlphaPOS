@@ -2001,6 +2001,30 @@ button.primary:hover, .dashboard-refresh-btn:hover:not(:disabled) { background: 
   line-height: 1.4;
 }
 
+.category-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.category-choices button {
+  font: inherit;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: #fff;
+  color: #3e5648;
+  border-radius: 999px;
+  padding: 0.38rem 0.75rem;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.category-choices button.active {
+  background: #173728;
+  border-color: #173728;
+  color: #f4fbf6;
+}
+
 .pos-empty {
   grid-column: 1 / -1;
   padding: 2.5rem 1rem;
