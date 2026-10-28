@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useState } from 'react';
-import { matchCatalogProduct, type CatalogMode, type CatalogReading } from '../../lib/catalog/reading';
+import { catalogCategory, matchCatalogProduct, type CatalogMode, type CatalogReading } from '../../lib/catalog/reading';
 import { prepareCatalogPhoto } from '../../lib/catalog/preparePhoto';
 
 type ShelfProduct = { id: string; name: string; branchId: string };
@@ -29,7 +29,7 @@ type DraftRow = {
   productId: string;
 };
 
-const moneyText = (value: number | null) => (value === null ? '' : String(value));
+const moneyText = (value: number | null, blank = '') => (value === null ? blank : String(value));
 
 const rowsFromReading = (mode: CatalogMode, reading: CatalogReading, products: ShelfProduct[]): DraftRow[] => (
   reading.lines.map((line, index) => {
@@ -40,8 +40,8 @@ const rowsFromReading = (mode: CatalogMode, reading: CatalogReading, products: S
       include: mode === 'prices' ? Boolean(productId) : !already,
       name: line.name,
       quantity: moneyText(line.quantity),
-      purchasePrice: moneyText(line.purchasePrice),
-      salePrice: moneyText(line.salePrice),
+      purchasePrice: moneyText(line.purchasePrice, '0'),
+      salePrice: moneyText(line.salePrice, '0'),
       category: line.category || '',
       productId,
     };
@@ -137,10 +137,6 @@ export default function CatalogAssistant({
         setNotice('Every new product needs a name.');
         return;
       }
-      if (salePrice === null) {
-        setNotice(`Enter a selling price for ${row.name}. Use 0 only when it is free.`);
-        return;
-      }
       if (quantity === null && row.quantity.trim()) {
         setNotice(`Enter a valid quantity for ${row.name}.`);
         return;
@@ -149,8 +145,8 @@ export default function CatalogAssistant({
         name: row.name.trim(),
         stock: quantity ?? 0,
         purchasePrice: purchasePrice ?? 0,
-        salePrice,
-        category: row.category.trim(),
+        salePrice: salePrice ?? 0,
+        category: catalogCategory(row.category),
         branchId: selectedBranch,
       });
     }
@@ -175,7 +171,7 @@ export default function CatalogAssistant({
       </div>
       <p className="muted-copy assistant-lead">
         {mode === 'create'
-          ? 'Photograph a list of names and quantities, or upload one. Review the rows, then add them.'
+          ? 'Photograph a list of names and quantities, or upload one. A price that is not on the photo stays 0. A missing category stays none.'
           : 'Upload a supplier receipt. Matched products can take the printed purchase price. Stock is not changed.'}
       </p>
       <div className="assistant-actions">
@@ -249,7 +245,7 @@ export default function CatalogAssistant({
                         </td>
                       )}
                       {mode === 'create' && (
-                        <td><input value={row.category} aria-label={`Category for ${row.name}`} onChange={(event) => updateRow(row.key, { category: event.target.value })} /></td>
+                        <td><input value={row.category} placeholder="None" aria-label={`Category for ${row.name}`} onChange={(event) => updateRow(row.key, { category: event.target.value })} /></td>
                       )}
                     </tr>
                   );
@@ -258,7 +254,7 @@ export default function CatalogAssistant({
             </table>
           </div>
           {mode === 'prices' && rows.some((row) => !row.productId) && (
-            <p className="muted-copy">A receipt line set to “Add as a new product” needs a selling price. Its quantity becomes opening stock.</p>
+            <p className="muted-copy">A receipt line set to “Add as a new product” can keep a missing price at 0. Its quantity becomes opening stock.</p>
           )}
           <button type="button" className="primary" onClick={confirm}>{mode === 'create' ? 'Add these products' : 'Save purchase prices'}</button>
         </div>

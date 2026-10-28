@@ -32,7 +32,7 @@ Staff invites email a sign-in link. In Firebase Authentication, open Sign-in met
 
 Sales emails (daily, weekly, or monthly) are sent with [Resend](https://resend.com) when `RESEND_API_KEY` and `EMAIL_FROM` are set. AlphaPOS sends the previous completed period the next time an owner or admin opens the shop. It does not send while the app is closed.
 
-The product assistant is on the Assistant page, and only the shop owner can open it. A photo of names and quantities, or a supplier receipt, is read into a list the owner confirms. Confirming adds products or updates purchase prices. It does not record a sale. The owner pastes a Gemini API key in Settings → Assistant. That key is stored for the owner, separate from the shop backup. `GEMINI_API_KEY` or `OPENAI_API_KEY` on the server is used only when Settings is empty. `CATALOG_ASSISTANT_ALLOW_LOCAL=false` refuses the on-device counter.
+The product assistant is on the Assistant page, and only the shop owner can open it. A photo of names and quantities, or a supplier receipt, is read into a list the owner confirms. Confirming adds products or updates purchase prices. A price that is not on the photo is saved as 0, and a missing category is left blank. It does not record a sale. The owner pastes a Gemini API key in Settings → Assistant. That key is stored for the owner, separate from the shop backup. `GEMINI_API_KEY` or `OPENAI_API_KEY` on the server is used only when Settings is empty. `CATALOG_ASSISTANT_ALLOW_LOCAL=false` refuses the on-device counter.
 
 ## Run locally
 ```bash
