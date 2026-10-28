@@ -103,7 +103,10 @@ export async function POST(request: Request) {
   const productNames = Array.isArray(body.productNames)
     ? body.productNames.flatMap((name) => (typeof name === 'string' && name.trim() ? [name.trim().slice(0, 80)] : [])).slice(0, 200)
     : [];
-  const model = process.env.CATALOG_ASSISTANT_MODEL?.trim() || (useOpenAI ? 'gpt-4o-mini' : 'gemini-2.5-flash');
+  const configuredModel = (process.env.CATALOG_ASSISTANT_MODEL?.trim() || '').replace(/^models\//, '');
+  const model = !configuredModel || configuredModel === 'gemini-2.5-flash'
+    ? (useOpenAI ? 'gpt-4o-mini' : 'gemini-3.8-flash')
+    : configuredModel;
 
   try {
     const raw = useOpenAI
