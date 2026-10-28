@@ -294,10 +294,9 @@ export default function RegisterDesk({
                 </span>
                 <span className="pos-tile-copy">
                   <span className="pos-tile-name">{product.name}</span>
-                  {product.category && <span className="pos-tile-meta">{product.category}</span>}
                   <span className="pos-tile-foot">
                     <strong>{formatMoney(product.salePrice)}</strong>
-                    <em className={low ? 'is-low' : ''}>{out ? 'Out' : `${product.stock} left`}</em>
+                    <em className={low ? 'is-low' : ''}>{out ? 'Out' : product.stock}</em>
                   </span>
                   {Object.keys(branchNames).length > 1 && <span className="pos-tile-meta">{branchNames[product.branchId]}</span>}
                 </span>
