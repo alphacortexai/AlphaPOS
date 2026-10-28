@@ -2187,6 +2187,7 @@ button.primary:hover, .dashboard-refresh-btn:hover:not(:disabled) { background: 
 
 .pos-total-row { margin-top: 0.28rem; }
 .pos-total-row.is-muted { font-size: 0.75rem; }
+.pos-total-row.is-negative span:last-child { color: var(--danger); font-weight: 750; }
 .pos-total-row.is-due {
   margin: 0.45rem 0 0.7rem;
   color: var(--text);
@@ -3331,6 +3332,7 @@ input:focus, select:focus, textarea:focus { box-shadow: 0 0 0 3px rgba(31, 107, 
   font-size: 0.92rem;
 }
 .period-summary span { color: #d6d3d1; }
+.period-summary span.is-negative { color: var(--danger); font-weight: 750; }
 .inline-form,
 .group-row {
   display: flex;

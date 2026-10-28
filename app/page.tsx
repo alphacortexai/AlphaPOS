@@ -1883,10 +1883,15 @@ export default function Page() {
       if (product) logStockMovement(product, -item.qty, 'sale', `Receipt ${receiptNumber}`);
     });
     rememberCustomer(customerName, customerPhone);
+    const saleMargin = roundMoney(registerQuote.total - registerQuote.tax - registerQuote.lines.reduce((sum, line) => sum + line.cost, 0));
     logActivity('sale', `Completed ${receiptNumber} for ${formatUGX(registerQuote.total)} (${cart.length} item(s)).`);
     setActiveReceipt(receiptFromSaleLines(newSales, 'sale'));
     clearRegister();
-    showNotification(`${receiptNumber} completed.`, 'success');
+    if (showRegisterMargin && saleMargin < 0) {
+      showNotification(`${receiptNumber} is below cost. Margin ${formatUGX(saleMargin)}.`, 'error', 6000);
+    } else {
+      showNotification(`${receiptNumber} completed.`, 'success');
+    }
   };
 
   const issueReturn = (quantities: Record<string, number>, method: PaymentMethod, reference: string) => {
@@ -3114,7 +3119,7 @@ export default function Page() {
                 {showRegisterMargin && (
                   <>
                     <span>·</span>
-                    margin {formatUGX(groupedSales.reduce((sum, sale) => sum + sale.profit, 0))}
+                    <span className={groupedSales.reduce((sum, sale) => sum + sale.profit, 0) < 0 ? 'is-negative' : ''}>margin {formatUGX(groupedSales.reduce((sum, sale) => sum + sale.profit, 0))}</span>
                   </>
                 )}
               </p>

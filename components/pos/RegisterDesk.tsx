@@ -212,6 +212,7 @@ export default function RegisterDesk({
 
   const cashNumbers = ['1000', '2000', '5000', '10000', '20000', '50000'];
   const total = settlement.total;
+  const marginAfterTax = total - settlement.tax - settlement.lines.reduce((sum, line) => sum + line.cost, 0);
   const secondValue = Number(payment.secondAmount);
   const primaryAmount = payment.split ? total - (Number.isFinite(secondValue) ? Math.round(secondValue) : 0) : total;
   const cashTendered = Math.round(Number(payment.cashTendered) || 0);
@@ -430,7 +431,7 @@ export default function RegisterDesk({
           <div className="pos-total-row"><span>Subtotal</span><span>{formatMoney(settlement.subtotal)}</span></div>
           {settlement.discount > 0 && <div className="pos-total-row"><span>Discount</span><span>− {formatMoney(settlement.discount)}</span></div>}
           <div className="pos-total-row"><span>{taxLabel}</span><span>{formatMoney(settlement.tax)}</span></div>
-          {showMargin && <div className="pos-total-row is-muted"><span>Margin after tax</span><span>{formatMoney(settlement.total - settlement.tax - settlement.lines.reduce((sum, line) => sum + line.cost, 0))}</span></div>}
+          {showMargin && <div className={`pos-total-row is-muted${marginAfterTax < 0 ? ' is-negative' : ''}`}><span>Margin after tax</span><span>{formatMoney(marginAfterTax)}</span></div>}
           <div className="pos-total-row is-due"><span>Total due</span><strong>{formatMoney(settlement.total)}</strong></div>
           <div className="pos-actions">
             <button type="button" className="edit-btn" disabled={cart.length === 0} onClick={onClear}>Clear</button>
