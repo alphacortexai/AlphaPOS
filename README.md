@@ -32,6 +32,8 @@ Staff invites email a sign-in link. In Firebase Authentication, open Sign-in met
 
 Sales emails (daily, weekly, or monthly) are sent with [Resend](https://resend.com) when `RESEND_API_KEY` and `EMAIL_FROM` are set. AlphaPOS sends the previous completed period the next time an owner or admin opens the shop. It does not send while the app is closed.
 
+The product assistant is on the Assistant page, and only the shop owner can open it. A photo of names and quantities, or a supplier receipt, is read into a list the owner confirms. Confirming adds products or updates purchase prices. It does not record a sale. Set `GEMINI_API_KEY` or `OPENAI_API_KEY` on the server. `CATALOG_ASSISTANT_ALLOW_LOCAL=false` refuses the on-device counter.
+
 ## Run locally
 ```bash
 npm ci
@@ -46,7 +48,7 @@ For reproducible installs, use `npm ci`. Copy `.env.example` to `.env.local` and
 
 Enable the Google sign-in provider in Firebase Authentication and configure Firestore security rules for shop data before connecting a real store. The app defaults to UGX and preserves the existing Firestore data shape. Existing product records can omit the optional category, SKU, and barcode fields.
 
-Stock receipts currently update one product at a time; they can record optional supplier/invoice details and update that product's latest unit cost, but there is not yet a supplier directory or multi-line purchase-order workflow. Inventory history is a structured view over shop activity logs: the application retains the most recent 500 activity entries and displays up to 100 stock movements from those entries. A separately stored long-retention inventory ledger remains future work. Payment method choices, including split tender and cash change, are transaction records only; they do not initiate or confirm card, mobile-money, or bank payments. Tax is calculated from the shop's own rate and is not filed with a revenue authority. Older documentation claimed demo users with a shared password; the application does not provide those accounts, so do not use those credentials. External card processing, fiscal connections, hardware integrations, and offline synchronization across devices are not implied by the current interface. Deleting a receipt removes the record and does not put stock back; use Return for that.
+Stock receipts can cover several products, remember a supplier name, and update the latest unit cost. Inventory history keeps the latest 2,000 events in a side record and shows the latest 400 movements. Payment method choices, including split tender and cash change, are transaction records only; they do not initiate or confirm card, mobile-money, or bank payments. Tax is calculated from the shop's own rate and is not filed with a revenue authority. Older documentation claimed demo users with a shared password; the application does not provide those accounts, so do not use those credentials. External card processing, fiscal connections, hardware integrations, and offline synchronization across devices are not implied by the current interface. Deleting a receipt asks for confirmation and reverses the stock on its product lines. Use Return when the original receipt should stay.
 
 ## Checks
 
