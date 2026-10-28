@@ -21,6 +21,13 @@ const text = (value: unknown, max: number) => (
   typeof value === 'string' && value.trim() ? value.trim().slice(0, max) : null
 );
 
+const blankCategory = /^(none|n\/a|na|nil|uncategorized|no category|-|—)$/i;
+
+export const catalogCategory = (value: string) => {
+  const name = value.trim().slice(0, 40);
+  return name && !blankCategory.test(name) ? name : '';
+};
+
 const amount = (value: unknown) => {
   if (value === null || value === undefined || value === '') return null;
   if (typeof value === 'string') {
@@ -45,7 +52,7 @@ export const parseCatalogReading = (value: unknown): CatalogReading => {
       quantity: amount(line.quantity),
       purchasePrice: amount(line.purchasePrice),
       salePrice: amount(line.salePrice),
-      category: text(line.category, 40),
+      category: catalogCategory(text(line.category, 40) || '') || null,
     }];
   });
   return { supplier: text(record?.supplier, 80), lines };
@@ -68,7 +75,7 @@ export const catalogPrompt = (mode: CatalogMode, productNames: string[]) => {
     : 'This shop has no product names to match yet.';
   const task = mode === 'prices'
     ? 'The photo is a supplier purchase receipt. Read each product that was bought. purchasePrice is the unit cost when it is printed; if only a line total and a quantity are printed, use the line total divided by the quantity. salePrice stays null.'
-    : 'The photo is a shelf, list, or note of products to add. Read each product name. quantity is the count written beside it. purchasePrice and salePrice stay null unless that price is actually printed. category is a short group only when the photo groups the items.';
+    : 'The photo is a shelf, list, or note of products to add. Read each product name. quantity is the count written beside it. purchasePrice and salePrice stay null unless that price is actually printed. category stays null unless the photo groups the items. Do not invent a category such as None or General.';
   return [
     'You help a shop owner build a product list. You do not record sales, payments, or customers.',
     task,
