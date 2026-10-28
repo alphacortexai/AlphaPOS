@@ -3304,6 +3304,7 @@ input:focus, select:focus, textarea:focus { box-shadow: 0 0 0 3px rgba(31, 107, 
   gap: 0.8rem;
 }
 .today-board .today-actions { align-items: stretch; }
+.today-shifts { grid-column: 1 / -1; }
 .today-figure {
   display: block;
   margin: 0.35rem 0 0.15rem;
@@ -3344,6 +3345,16 @@ input:focus, select:focus, textarea:focus { box-shadow: 0 0 0 3px rgba(31, 107, 
   background: #fff;
   color: #1c1917;
   box-shadow: 0 1px 2px rgba(28, 25, 23, 0.06);
+}
+.shift-list { list-style: none; margin: 0.85rem 0 0; padding: 0; display: flex; flex-direction: column; gap: 0.7rem; }
+.shift-list li { display: grid; gap: 0.15rem; }
+.shift-list strong { font-size: 0.88rem; }
+.shift-list span { color: var(--text-muted); font-size: 0.78rem; }
+.receipt-lines { display: flex; flex-direction: column; gap: 0.7rem; }
+.receipt-line { display: grid; grid-template-columns: minmax(0, 1.5fr) 6.2rem 7rem auto; gap: 0.45rem; align-items: end; }
+@media (max-width: 640px) {
+  .receipt-line { grid-template-columns: 1fr 1fr; }
+  .receipt-line .receipt-product { grid-column: 1 / -1; }
 }
 .period-summary,
 .stock-line {

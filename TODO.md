@@ -26,8 +26,8 @@
 - [x] Record and display structured stock changes for opening stock, checkout sales, restocks, count corrections, damaged/expired goods, customer returns, product removal, and product branch changes; identify product, branch, quantity, reason, time, and staff member.
 - [x] Make receiving and stock adjustments usable from a dedicated form that validates available stock and records a reason/note.
 - [x] Capture optional supplier, invoice/reference, and unit cost for a one-product receipt; record that metadata and update the product's latest purchase cost when provided.
-- [x] Preserve the current activity-log retention boundary (latest 500 shop events; inventory view shows up to 100 movement events) until a versioned, separately stored movement ledger can be deployed safely.
-- [ ] Add a supplier directory, multi-line purchasing workflow, and durable long-term inventory movement history in a later compatible storage increment.
+- [x] Keep the latest 2,000 shop events in a side activity record so the main shop document is not filled by the movement log. The shelf shows the latest 400 movements.
+- [x] Remember supplier names and receive several products on one supplier receipt, including optional invoice and unit cost.
 
 ## 5. Checkout transaction details — in progress
 
@@ -38,4 +38,4 @@
 - [x] Add grouped printable receipts and explicit returns that restore stock without rewriting the original sale.
 - [x] Add shop tax settings (name, rate, included or added at checkout) and show tax on the receipt and dashboard. This is a shop calculation, not a filing integration.
 - [x] Remember named customers and an on-account balance. Offer an on-device counter when Firebase is not configured.
-- [ ] Add reliable Firestore transaction-level stock and tender persistence before treating checkout as production-hardened. The shop is still saved as one document.
+- [ ] Add reliable Firestore transaction-level stock and tender persistence before treating checkout as production-hardened. The shop is still one document. A revision check now reloads the shop when another till saved first, instead of overwriting it.
