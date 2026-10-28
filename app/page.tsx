@@ -3199,33 +3199,30 @@ export default function Page() {
             {filteredProducts.length > 0 ? (
               <div className="shelf-grid">
                 {productsPagination.rows.map((p) => {
-                  const shelfDetails = [p.category, p.sku, p.barcode, branches.length > 1 ? branchMap[p.branchId] : ''].filter(Boolean).join(' · ');
                   return (
                   <article key={p.id} className={`shelf-card${p.stock === 0 ? ' is-out' : ''}`}>
                     <div className="shelf-photo" aria-hidden="true">
                       {p.image ? <img src={p.image} alt="" /> : <span>{p.name.slice(0, 1).toUpperCase()}</span>}
+                      {p.stock === 0 && <em className="shelf-flag">Out</em>}
+                      {stockIsLow(p) && <em className="shelf-flag is-low">Low</em>}
                     </div>
                     <div className="shelf-body">
-                      <div className="shelf-title">
-                        <h3>{p.name}</h3>
-                        <span className={`badge ${p.stock === 0 ? 'badge-danger' : stockIsLow(p) ? 'badge-warning' : 'badge-success'}`}>
-                          {p.stock === 0 ? 'Out' : stockIsLow(p) ? `Low · ${p.stock}` : p.stock}
-                        </span>
-                      </div>
-                      {shelfDetails && <p className="shelf-meta">{shelfDetails}</p>}
+                      <h3>{p.name}</h3>
+                      {p.category && <p className="shelf-meta">{p.category}</p>}
                       <div className="shelf-prices">
                         <strong>{formatUGX(p.salePrice)}</strong>
-                        {seesCost && <span>Cost {formatUGX(p.purchasePrice)}</span>}
+                        <span>{p.stock === 0 ? 'Out' : p.stock}</span>
                       </div>
-                      <div className="shelf-actions">
-                        <button className="edit-btn" onClick={() => openProductForm({ ...blankProductForm(p.branchId), ...p, sku: p.sku || '', barcode: p.barcode || '', category: p.category || '', image: p.image || '', reorderPoint: p.reorderPoint ?? DEFAULT_REORDER_POINT })}>Edit</button>
-                        <button className="edit-btn" onClick={() => restockProduct(p.id)}>Adjust stock</button>
-                        <button className="delete-btn" onClick={() => {
-                          if (p.stock > 0) logStockMovement(p, -p.stock, 'product_removed', 'Product removed from inventory');
-                          setProducts(prev => prev.filter(x => x.id !== p.id));
-                          logActivity('delete_inventory', `Deleted product "${p.name}"`);
-                        }}>Delete</button>
-                      </div>
+                      {seesCost && p.purchasePrice > 0 && <p className="shelf-cost">Cost {formatUGX(p.purchasePrice)}</p>}
+                    </div>
+                    <div className="shelf-actions">
+                      <button className="edit-btn" onClick={() => openProductForm({ ...blankProductForm(p.branchId), ...p, sku: p.sku || '', barcode: p.barcode || '', category: p.category || '', image: p.image || '', reorderPoint: p.reorderPoint ?? DEFAULT_REORDER_POINT })}>Edit</button>
+                      <button className="edit-btn" onClick={() => restockProduct(p.id)}>Stock</button>
+                      <button className="delete-btn" onClick={() => {
+                        if (p.stock > 0) logStockMovement(p, -p.stock, 'product_removed', 'Product removed from inventory');
+                        setProducts(prev => prev.filter(x => x.id !== p.id));
+                        logActivity('delete_inventory', `Deleted product "${p.name}"`);
+                      }}>Delete</button>
                     </div>
                   </article>
                   );
