@@ -13,6 +13,7 @@ export type RegisterProduct = {
   sku?: string;
   barcode?: string;
   category?: string;
+  image?: string;
 };
 
 export type RegisterService = {
@@ -278,27 +279,42 @@ export default function RegisterDesk({
           {visibleProducts.map((product) => {
             const out = product.stock <= 0;
             const low = product.stock > 0 && product.stock < 10;
+            const onTicket = cart.find((item) => item.itemType === 'product' && item.itemId === product.id)?.qty || 0;
             return (
-              <button key={product.id} type="button" className={`pos-tile ${out ? 'is-out' : ''}`} disabled={out} onClick={() => onAddProduct(product.id)}>
-                <span className="pos-avatar" aria-hidden="true">{product.name.slice(0, 1).toUpperCase()}</span>
-                <span className="pos-tile-name">{product.name}</span>
-                {product.category && <span className="pos-tile-meta">{product.category}</span>}
-                <span className="pos-tile-foot">
-                  <strong>{formatMoney(product.salePrice)}</strong>
-                  <em className={low ? 'is-low' : ''}>{out ? 'Out' : `${product.stock} left`}</em>
+              <button key={product.id} type="button" className={`pos-tile ${out ? 'is-out' : ''} ${onTicket ? 'is-in-cart' : ''}`} disabled={out} onClick={() => onAddProduct(product.id)}>
+                <span className="pos-photo" aria-hidden="true">
+                  {product.image ? <img src={product.image} alt="" /> : <span>{product.name.slice(0, 1).toUpperCase()}</span>}
+                  {onTicket > 0 && <em className="pos-photo-qty">{onTicket}</em>}
+                  {(out || low) && <em className={`pos-photo-flag${low ? ' is-low' : ''}`}>{out ? 'Out' : 'Low'}</em>}
                 </span>
-                {Object.keys(branchNames).length > 1 && <span className="pos-tile-meta">{branchNames[product.branchId]}</span>}
+                <span className="pos-tile-copy">
+                  <span className="pos-tile-name">{product.name}</span>
+                  {product.category && <span className="pos-tile-meta">{product.category}</span>}
+                  <span className="pos-tile-foot">
+                    <strong>{formatMoney(product.salePrice)}</strong>
+                    <em className={low ? 'is-low' : ''}>{out ? 'Out' : `${product.stock} left`}</em>
+                  </span>
+                  {Object.keys(branchNames).length > 1 && <span className="pos-tile-meta">{branchNames[product.branchId]}</span>}
+                </span>
               </button>
             );
           })}
-          {visibleServices.map((service) => (
-            <button key={service.id} type="button" className="pos-tile is-service" onClick={() => onAddService(service.id)}>
-              <span className="pos-avatar" aria-hidden="true">S</span>
-              <span className="pos-tile-name">{service.name}</span>
-              <span className="pos-tile-meta">Service</span>
-              <span className="pos-tile-foot"><strong>{formatMoney(service.salePrice)}</strong></span>
-            </button>
-          ))}
+          {visibleServices.map((service) => {
+            const onTicket = cart.find((item) => item.itemType === 'service' && item.itemId === service.id)?.qty || 0;
+            return (
+              <button key={service.id} type="button" className={`pos-tile is-service ${onTicket ? 'is-in-cart' : ''}`} onClick={() => onAddService(service.id)}>
+                <span className="pos-photo" aria-hidden="true">
+                  <span>S</span>
+                  {onTicket > 0 && <em className="pos-photo-qty">{onTicket}</em>}
+                </span>
+                <span className="pos-tile-copy">
+                  <span className="pos-tile-name">{service.name}</span>
+                  <span className="pos-tile-meta">Service</span>
+                  <span className="pos-tile-foot"><strong>{formatMoney(service.salePrice)}</strong></span>
+                </span>
+              </button>
+            );
+          })}
           {visibleProducts.length === 0 && visibleServices.length === 0 && (
             <div className="pos-empty">
               <h3>{products.length === 0 ? 'No products yet' : 'Nothing matches'}</h3>
@@ -350,9 +366,14 @@ export default function RegisterDesk({
             <div className="pos-ticket-empty">
               <p>Scan a barcode or tap a product to start a sale.</p>
             </div>
-          ) : cart.map((item) => (
+          ) : cart.map((item) => {
+            const lineImage = item.itemType === 'product' ? products.find((product) => product.id === item.itemId)?.image : undefined;
+            return (
             <article key={`${item.itemType}-${item.itemId}`} className="pos-line">
               <div className="pos-line-top">
+                <span className="pos-line-thumb" aria-hidden="true">
+                  {lineImage ? <img src={lineImage} alt="" /> : <span>{item.itemType === 'service' ? 'S' : item.itemName.slice(0, 1).toUpperCase()}</span>}
+                </span>
                 <div>
                   <strong>{item.itemName}</strong>
                   <span>{item.itemType === 'service' ? 'Service' : branchNames[item.branchId] || 'Product'}</span>
@@ -387,7 +408,8 @@ export default function RegisterDesk({
                 )}
               </div>
             </article>
-          ))}
+            );
+          })}
         </div>
 
         <footer className="pos-ticket-foot">

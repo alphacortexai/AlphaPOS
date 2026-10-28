@@ -8,6 +8,7 @@ import RegisterDesk from '../components/pos/RegisterDesk';
 import ReceiptDialog from '../components/pos/ReceiptDialog';
 import ReturnDialog, { type ReturnableLine } from '../components/pos/ReturnDialog';
 import { LOCAL_OPERATOR_ID, readLocalShop, writeLocalShop } from '../lib/pos/localShop';
+import { attachProductImages, compressProductPhoto, imageMapChars, isProductImage, PRODUCT_IMAGE_DOC_MAX_CHARS, readLocalProductImages, splitProductImages, writeLocalProductImages } from '../lib/pos/productImage';
 import { beginSalesEmailSend, buildSalesDigest, defaultSalesEmailSettings, finishSalesEmailSend, normalizeSalesEmailSettings, previousSalesPeriod, type SalesDigest, type SalesEmailSettings } from '../lib/pos/salesEmail';
 import { completeEmailLinkSignIn, createStaffInviteLink, rememberInviteFromUrl, staffSignInError, takeInvitedShopId } from '../lib/pos/staffInvite';
 import {
@@ -56,7 +57,7 @@ type AuditStamp = {
   updatedByEmail?: string;
 };
 
-type Product = { id: string; name: string; branchId: string; stock: number; purchasePrice: number; salePrice: number; sku?: string; barcode?: string; category?: string } & AuditStamp;
+type Product = { id: string; name: string; branchId: string; stock: number; purchasePrice: number; salePrice: number; sku?: string; barcode?: string; category?: string; image?: string } & AuditStamp;
 type ServiceType = 'direct_cost' | 'shared_cost';
 type Service = { id: string; name: string; branchId: string; salePrice: number; serviceType: ServiceType; directCost: number; monthlySharedCost: number; expenseGroupId?: string } & AuditStamp;
 type Sale = {
@@ -165,6 +166,19 @@ const periodStart = (period: 'day' | 'week' | 'month' | 'year', date: Date = new
   if (period === 'month') return new Date(d.getFullYear(), d.getMonth(), 1);
   return new Date(d.getFullYear(), 0, 1);
 };
+
+const blankProductForm = (branchId = '') => ({
+  id: '',
+  name: '',
+  branchId,
+  stock: 0,
+  purchasePrice: 0,
+  salePrice: 0,
+  sku: '',
+  barcode: '',
+  category: '',
+  image: '',
+});
 
 const removeUndefinedDeep = <T,>(value: T): T => {
   if (Array.isArray(value)) {
@@ -293,7 +307,9 @@ export default function Page() {
   const [showServiceModal, setShowServiceModal] = useState(false);
 
   const [branchForm, setBranchForm] = useState({ name: '', location: '', id: '' });
-  const [productForm, setProductForm] = useState({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0, sku: '', barcode: '', category: '' });
+  const [productForm, setProductForm] = useState(blankProductForm());
+  const [productPhotoBusy, setProductPhotoBusy] = useState(false);
+  const productPhotoRef = useRef<HTMLInputElement>(null);
   const [stockAdjustmentForm, setStockAdjustmentForm] = useState({ productId: '', direction: 'add' as 'add' | 'remove', quantity: 1, reason: 'restock' as Exclude<StockMovementReason, 'sale' | 'opening_stock' | 'branch_transfer'>, note: '', supplierName: '', reference: '', unitCost: '' });
   const [serviceForm, setServiceForm] = useState({ name: '', branchId: '', amount: 0, serviceType: 'direct_cost' as ServiceType, directCost: 0, monthlySharedCost: 0, expenseGroupId: '' });
   const [saleForm, setSaleForm] = useState({ productId: '', qty: 1 });
@@ -461,7 +477,7 @@ export default function Page() {
             setSalesEmailSettings(defaultSalesEmailSettings);
           } else {
             setBranches(Array.isArray(data.branches) ? data.branches as Branch[] : []);
-            setProducts(Array.isArray(data.products) ? data.products as Product[] : []);
+            setProducts(attachProductImages(Array.isArray(data.products) ? data.products as Product[] : [], readLocalProductImages()));
             setServices(Array.isArray(data.services) ? data.services as Service[] : []);
             setSales(Array.isArray(data.sales) ? data.sales as Sale[] : []);
             setExpenses(Array.isArray(data.expenses) ? data.expenses as Expense[] : []);
@@ -536,7 +552,8 @@ export default function Page() {
         if (!activeShopOwnerUid) setActiveShopOwnerUid(selectedShopOwnerUid);
         const selectedShop = namedMemberships.find((s) => s.ownerUid === selectedShopOwnerUid);
         const userDataRef = doc(db, 'users', selectedShopOwnerUid, 'pos', 'data');
-        const snap = await getDoc(userDataRef);
+        const imageRef = doc(db, 'users', selectedShopOwnerUid, 'pos', 'images');
+        const [snap, imageSnap] = await Promise.all([getDoc(userDataRef), getDoc(imageRef)]);
         if (!snap.exists()) {
           const defaultBranch = { id: crypto.randomUUID(), name: 'Main Branch', location: 'HQ', createdAt: new Date().toISOString() };
           setBranches([defaultBranch]);
@@ -554,7 +571,7 @@ export default function Page() {
         }
         const data = snap.data();
         setBranches(Array.isArray(data.branches) ? data.branches : []);
-        setProducts(Array.isArray(data.products) ? data.products : []);
+        setProducts(attachProductImages(Array.isArray(data.products) ? data.products : [], imageSnap.exists() ? imageSnap.data().images : {}));
         setServices(Array.isArray(data.services) ? data.services : []);
         setSales(Array.isArray(data.sales) ? data.sales : []);
         setExpenses(Array.isArray(data.expenses) ? data.expenses : []);
@@ -592,11 +609,16 @@ export default function Page() {
       if (!authUser || !hasLoadedUserDataRef.current || !activeShopOwnerUid || isSwitchingShopRef.current) return;
       if (authUser.uid !== LOCAL_OPERATOR_ID && !db) return;
       try {
+        const stored = splitProductImages(products);
+        if (imageMapChars(stored.images) > PRODUCT_IMAGE_DOC_MAX_CHARS) {
+          setStatus('Product photos are too large to save. Remove a photo and try again.');
+          return;
+        }
         const shopPayload = {
           role,
           shopName: currentShop?.shopName || 'My Shop',
           branches,
-          products,
+          products: stored.products,
           services,
           sales,
           expenses,
@@ -614,6 +636,7 @@ export default function Page() {
         };
         if (authUser.uid === LOCAL_OPERATOR_ID) {
           writeLocalShop(removeUndefinedDeep(shopPayload));
+          writeLocalProductImages(stored.images);
           return;
         }
         if (!db) return;
@@ -622,6 +645,10 @@ export default function Page() {
           ...shopPayload,
           updatedAt: serverTimestamp(),
         }), { merge: true });
+        await setDoc(doc(db, 'users', activeShopOwnerUid, 'pos', 'images'), {
+          images: stored.images,
+          updatedAt: serverTimestamp(),
+        });
       } catch (error) {
         setStatus(`Failed to auto-save your data: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }
@@ -689,7 +716,7 @@ export default function Page() {
     setReceiptSettings(defaultReceiptSettings);
     setCartDiscount({ mode: 'none', value: 0 });
     setBranchForm({ name: '', location: '', id: '' });
-    setProductForm({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0, sku: '', barcode: '', category: '' });
+    setProductForm(blankProductForm());
     setStockAdjustmentForm({ productId: '', direction: 'add', quantity: 1, reason: 'restock', note: '', supplierName: '', reference: '', unitCost: '' });
     setShowStockAdjustmentModal(false);
     setServiceForm({ name: '', branchId: '', amount: 0, serviceType: 'direct_cost', directCost: 0, monthlySharedCost: 0, expenseGroupId: '' });
@@ -1088,6 +1115,27 @@ export default function Page() {
     </>
   );
 
+  const chooseProductPhoto = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    setProductPhotoBusy(true);
+    try {
+      const image = await compressProductPhoto(file);
+      const next = splitProductImages(products.filter((product) => product.id !== productForm.id)).images;
+      next[productForm.id || 'draft'] = image;
+      if (imageMapChars(next) > PRODUCT_IMAGE_DOC_MAX_CHARS) {
+        showNotification('This shop has as many photos as it can keep. Remove a photo from another product first.', 'error', 5000);
+        return;
+      }
+      setProductForm((prev) => ({ ...prev, image }));
+    } catch (error) {
+      showNotification(error instanceof Error ? error.message : 'Could not use that photo.', 'error');
+    } finally {
+      setProductPhotoBusy(false);
+    }
+  };
+
   const saveProduct = (e: React.FormEvent) => {
     e.preventDefault();
     const name = productForm.name.trim();
@@ -1104,7 +1152,8 @@ export default function Page() {
       showNotification('That SKU or barcode is already assigned to another product.', 'error');
       return;
     }
-    const productDetails = { ...productForm, name, sku: sku || undefined, barcode: barcode || undefined, category: productForm.category.trim() || undefined };
+    const image = isProductImage(productForm.image) ? productForm.image : undefined;
+    const productDetails = { ...productForm, name, sku: sku || undefined, barcode: barcode || undefined, category: productForm.category.trim() || undefined, image };
     if (productForm.id) {
       const previousProduct = products.find((product) => product.id === productForm.id);
       setProducts((prev) => prev.map((p) => (p.id === productForm.id ? { ...p, ...productDetails, ...updatedAuditStamp() } : p)));
@@ -1125,7 +1174,7 @@ export default function Page() {
       setStatus('Product added.');
       logActivity('add_inventory', `Added product "${name}"`);
     }
-    setProductForm({ id: '', name: '', branchId: '', stock: 0, purchasePrice: 0, salePrice: 0, sku: '', barcode: '', category: '' });
+    setProductForm(blankProductForm());
     setShowProductModal(false);
   };
 
@@ -2296,7 +2345,8 @@ export default function Page() {
       }
 
       const restoredBranches = Array.isArray(parsed.data.branches) ? parsed.data.branches : [];
-      const restoredProducts = Array.isArray(parsed.data.products) ? parsed.data.products : [];
+      const restoredSplit = splitProductImages(Array.isArray(parsed.data.products) ? parsed.data.products as Product[] : []);
+      const restoredProducts = attachProductImages(restoredSplit.products, restoredSplit.images);
       const restoredServices = Array.isArray(parsed.data.services) ? parsed.data.services : [];
       const restoredSales = Array.isArray(parsed.data.sales) ? parsed.data.sales : [];
       const restoredExpenses = Array.isArray(parsed.data.expenses) ? parsed.data.expenses : [];
@@ -2330,7 +2380,7 @@ export default function Page() {
         role: 'shop_owner' as Role,
         shopName: restoredShopName,
         branches: restoredBranches,
-        products: restoredProducts,
+        products: restoredSplit.products,
         services: restoredServices,
         sales: restoredSales,
         expenses: restoredExpenses,
@@ -2348,6 +2398,10 @@ export default function Page() {
         restoredFromBackupAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       }), { merge: true });
+      await setDoc(doc(db, 'users', activeShopOwnerUid, 'pos', 'images'), {
+        images: restoredSplit.images,
+        updatedAt: serverTimestamp(),
+      });
 
       await Promise.all(restoredUsers.map((staffUser) => {
         const normalizedEmail = staffUser.email?.toLowerCase().trim();
@@ -2690,7 +2744,7 @@ export default function Page() {
                     setStockAdjustmentForm({ productId: '', direction: 'add', quantity: 1, reason: 'restock', note: '', supplierName: '', reference: '', unitCost: '' });
                     setShowStockAdjustmentModal(true);
                   }}>Receive stock</button>
-                  <button className="primary" onClick={() => { setProductForm({ id: '', name: '', branchId: branches[0]?.id || '', stock: 0, purchasePrice: 0, salePrice: 0, sku: '', barcode: '', category: '' }); setShowProductModal(true); }}>
+                  <button className="primary" onClick={() => { setProductForm(blankProductForm(branches[0]?.id || '')); setShowProductModal(true); }}>
                     Add product
                   </button>
                 </div>
@@ -2727,64 +2781,47 @@ export default function Page() {
               </div>
             </div>
 
-            {/* Inventory Table */}
-
-            <div className="table-wrap">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Product</th>
-                    <th>SKU / Barcode</th>
-                    <th>Branch</th>
-                    <th>Stock</th>
-                    <th>Purchase</th>
-                    <th>Sale</th>
-                    <th>Profit/Unit</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredProducts.length > 0 ? (
-                    productsPagination.rows.map((p) => (
-                      <tr key={p.id} style={{ opacity: p.stock === 0 ? 0.6 : 1 }}>
-                        <td style={{ fontWeight: 600, color: 'var(--text)' }}>
-                          {p.name}
-                          {p.category && <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', fontWeight: 400 }}>{p.category}</div>}
-                        </td>
-                        <td>
-                          <div>{p.sku || '—'}</div>
-                          {p.barcode && <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>{p.barcode}</div>}
-                        </td>
-                        <td>{branchMap[p.branchId]}</td>
-                        <td>
-                          <span className={`badge ${p.stock === 0 ? 'badge-danger' : p.stock < 10 ? 'badge-warning' : 'badge-success'}`}>
-                            {p.stock === 0 ? 'Out' : p.stock < 10 ? `Low · ${p.stock}` : p.stock}
-                          </span>
-                        </td>
-                        <td>{formatUGX(p.purchasePrice)}</td>
-                        <td>{formatUGX(p.salePrice)}</td>
-                        <td style={{ color: 'var(--success)', fontWeight: 600 }}>{formatUGX(p.salePrice - p.purchasePrice)}</td>
-                        <td>
-                          <button className="edit-btn" onClick={() => { setProductForm({ ...p, sku: p.sku || '', barcode: p.barcode || '', category: p.category || '' }); setShowProductModal(true); }}>Edit</button>
-                          <button className="edit-btn" onClick={() => restockProduct(p.id)}>Adjust stock</button>
-                          <button className="delete-btn" onClick={() => {
-                            if (p.stock > 0) logStockMovement(p, -p.stock, 'product_removed', 'Product removed from inventory');
-                            setProducts(prev => prev.filter(x => x.id !== p.id));
-                            logActivity('delete_inventory', `Deleted product "${p.name}"`);
-                          }}>Delete</button>
-                        </td>
-                      </tr>
-                    ))
-                  ) : (
-                    <tr>
-                      <td colSpan={8} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>
-                        No products found matching your filters.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
+            {filteredProducts.length > 0 ? (
+              <div className="shelf-grid">
+                {productsPagination.rows.map((p) => {
+                  const shelfDetails = [p.category, p.sku, p.barcode, branches.length > 1 ? branchMap[p.branchId] : ''].filter(Boolean).join(' · ');
+                  return (
+                  <article key={p.id} className={`shelf-card${p.stock === 0 ? ' is-out' : ''}`}>
+                    <div className="shelf-photo" aria-hidden="true">
+                      {p.image ? <img src={p.image} alt="" /> : <span>{p.name.slice(0, 1).toUpperCase()}</span>}
+                    </div>
+                    <div className="shelf-body">
+                      <div className="shelf-title">
+                        <h3>{p.name}</h3>
+                        <span className={`badge ${p.stock === 0 ? 'badge-danger' : p.stock < 10 ? 'badge-warning' : 'badge-success'}`}>
+                          {p.stock === 0 ? 'Out' : p.stock < 10 ? `Low · ${p.stock}` : p.stock}
+                        </span>
+                      </div>
+                      {shelfDetails && <p className="shelf-meta">{shelfDetails}</p>}
+                      <div className="shelf-prices">
+                        <strong>{formatUGX(p.salePrice)}</strong>
+                        <span>Cost {formatUGX(p.purchasePrice)}</span>
+                      </div>
+                      <div className="shelf-actions">
+                        <button className="edit-btn" onClick={() => { setProductForm({ ...blankProductForm(p.branchId), ...p, sku: p.sku || '', barcode: p.barcode || '', category: p.category || '', image: p.image || '' }); setShowProductModal(true); }}>Edit</button>
+                        <button className="edit-btn" onClick={() => restockProduct(p.id)}>Adjust stock</button>
+                        <button className="delete-btn" onClick={() => {
+                          if (p.stock > 0) logStockMovement(p, -p.stock, 'product_removed', 'Product removed from inventory');
+                          setProducts(prev => prev.filter(x => x.id !== p.id));
+                          logActivity('delete_inventory', `Deleted product "${p.name}"`);
+                        }}>Delete</button>
+                      </div>
+                    </div>
+                  </article>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="shelf-empty">
+                <h3>{products.length === 0 ? 'No products yet' : 'Nothing matches'}</h3>
+                <p>{products.length === 0 ? 'Add a product, with a photo if you have one, then sell it from the register.' : 'Try another name, SKU, or stock filter.'}</p>
+              </div>
+            )}
             <PaginationControls
               totalItems={filteredProducts.length}
               totalPages={productsPagination.totalPages}
@@ -2897,7 +2934,7 @@ export default function Page() {
             onCloseDrawer={closeDrawer}
             onClear={() => { if (cart.length === 0 || window.confirm('Clear this sale?')) clearRegister(); }}
             onPay={completeRegisterSale}
-            onCreateProduct={() => { setProductForm({ id: '', name: '', branchId: branches[0]?.id || '', stock: 0, purchasePrice: 0, salePrice: 0, sku: '', barcode: '', category: '' }); setShowProductModal(true); }}
+            onCreateProduct={() => { setProductForm(blankProductForm(branches[0]?.id || '')); setShowProductModal(true); }}
           />
         )}
 
@@ -3894,6 +3931,23 @@ export default function Page() {
               <form onSubmit={saveProduct}>
                 <div className="modal-body">
                   <div className="form">
+                    <div className="product-photo-field form-span">
+                      <div className="product-photo-preview" aria-hidden="true">
+                        {productForm.image ? <img src={productForm.image} alt="" /> : <span>{(productForm.name || 'P').slice(0, 1).toUpperCase()}</span>}
+                      </div>
+                      <div>
+                        <div className="product-photo-actions">
+                          <button type="button" className="edit-btn" disabled={productPhotoBusy} onClick={() => productPhotoRef.current?.click()}>
+                            {productPhotoBusy ? 'Preparing photo…' : productForm.image ? 'Change photo' : 'Upload photo'}
+                          </button>
+                          <input ref={productPhotoRef} type="file" accept="image/*" onChange={chooseProductPhoto} />
+                          {productForm.image && (
+                            <button type="button" className="edit-btn" onClick={() => setProductForm((prev) => ({ ...prev, image: '' }))}>Remove photo</button>
+                          )}
+                        </div>
+                        <p>Shown on the register and the shelf. Large pictures are reduced automatically.</p>
+                      </div>
+                    </div>
                     <label className="field">
                       <span>Product Name</span>
                       <input value={productForm.name} onChange={(e) => setProductForm({ ...productForm, name: e.target.value })} required />
@@ -3933,7 +3987,7 @@ export default function Page() {
                 </div>
                 <div className="modal-footer">
                   <button type="button" className="edit-btn" onClick={() => setShowProductModal(false)}>Cancel</button>
-                  <button type="submit" className="primary">Save Product</button>
+                  <button type="submit" className="primary" disabled={productPhotoBusy}>Save Product</button>
                 </div>
               </form>
             </div>
