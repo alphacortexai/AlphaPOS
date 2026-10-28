@@ -1728,8 +1728,8 @@ button.primary:hover, .dashboard-refresh-btn:hover:not(:disabled) { background: 
 
 .pos-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
-  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 1rem;
   padding: 0 1rem 1rem;
   overflow: auto;
   align-content: start;
@@ -1780,7 +1780,7 @@ button.primary:hover, .dashboard-refresh-btn:hover:not(:disabled) { background: 
 .pos-photo {
   position: relative;
   width: 100%;
-  aspect-ratio: 4 / 3;
+  aspect-ratio: 1;
   border-radius: 12px;
   font-size: 1.7rem;
 }
@@ -1888,18 +1888,18 @@ button.primary:hover, .dashboard-refresh-btn:hover:not(:disabled) { background: 
 
 .shelf-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
-  gap: 0.6rem;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 1rem;
 }
 
 .shelf-card {
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
-  padding: 0.4rem 0.4rem 0.5rem;
+  gap: 0.7rem;
+  padding: 0.75rem;
   background: #fff;
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: 16px;
 }
 
 .shelf-card.is-out { opacity: 0.72; }
@@ -1909,8 +1909,8 @@ button.primary:hover, .dashboard-refresh-btn:hover:not(:disabled) { background: 
   width: 100%;
   height: auto;
   aspect-ratio: 4 / 3;
-  border-radius: 10px;
-  font-size: 1.25rem;
+  border-radius: 12px;
+  font-size: 1.6rem;
 }
 
 .shelf-flag {
@@ -1929,21 +1929,21 @@ button.primary:hover, .dashboard-refresh-btn:hover:not(:disabled) { background: 
 
 .shelf-flag.is-low { color: #9a6700; }
 
-.shelf-body { min-width: 0; padding: 0 0.25rem; }
+.shelf-body { min-width: 0; padding: 0 0.35rem 0.15rem; }
 
 .shelf-body h3 {
   margin: 0;
-  font-size: 0.92rem;
+  font-size: 1.05rem;
   font-weight: 700;
   letter-spacing: -0.02em;
-  line-height: 1.25;
+  line-height: 1.3;
 }
 
 .shelf-meta {
-  margin: 0.12rem 0 0;
+  margin: 0.2rem 0 0;
   color: var(--text-muted);
-  font-size: 0.7rem;
-  line-height: 1.3;
+  font-size: 0.8rem;
+  line-height: 1.35;
   overflow-wrap: anywhere;
 }
 
@@ -1951,42 +1951,50 @@ button.primary:hover, .dashboard-refresh-btn:hover:not(:disabled) { background: 
   display: flex;
   justify-content: space-between;
   align-items: baseline;
-  gap: 0.4rem;
-  margin-top: 0.2rem;
+  gap: 0.6rem;
+  margin-top: 0.45rem;
 }
 
 .shelf-prices strong {
   color: #176e4e;
-  font-size: 0.9rem;
+  font-size: 1.05rem;
   white-space: nowrap;
 }
 
 .shelf-prices span {
   color: var(--text-muted);
-  font-size: 0.75rem;
+  font-size: 0.82rem;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
 .shelf-cost {
-  margin: 0.05rem 0 0;
+  margin: 0.2rem 0 0;
   color: var(--text-muted);
-  font-size: 0.7rem;
+  font-size: 0.78rem;
 }
 
 .shelf-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.25rem;
-  margin-top: 0.1rem;
-  padding: 0 0.15rem;
+  gap: 0.4rem;
+  margin-top: 0.55rem;
+  padding: 0 0.2rem;
 }
 
 .shelf-actions .edit-btn,
 .shelf-actions .delete-btn {
-  padding: 0.18rem 0.4rem;
-  font-size: 0.7rem;
-  border-radius: 7px;
+  padding: 0.35rem 0.6rem;
+  font-size: 0.78rem;
+  border-radius: 8px;
+}
+
+.shelf-pager {
+  margin-top: 1.15rem;
+  padding: 0.75rem 0.9rem;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 12px;
 }
 
 .shelf-empty {
