@@ -8,6 +8,7 @@ import RegisterDesk from '../components/pos/RegisterDesk';
 import ReceiptDialog from '../components/pos/ReceiptDialog';
 import ReturnDialog, { type ReturnableLine } from '../components/pos/ReturnDialog';
 import { LOCAL_OPERATOR_ID, readLocalShop, writeLocalShop } from '../lib/pos/localShop';
+import { nextSku, reservedProductCodes } from '../lib/pos/sku';
 import { attachProductImages, compressProductPhoto, imageMapChars, isProductImage, PRODUCT_IMAGE_DOC_MAX_CHARS, readLocalProductImages, splitProductImages, writeLocalProductImages } from '../lib/pos/productImage';
 import { beginSalesEmailSend, buildSalesDigest, defaultSalesEmailSettings, finishSalesEmailSend, normalizeSalesEmailSettings, previousSalesPeriod, type SalesDigest, type SalesEmailSettings } from '../lib/pos/salesEmail';
 import { completeEmailLinkSignIn, createStaffInviteLink, rememberInviteFromUrl, staffSignInError, takeInvitedShopId } from '../lib/pos/staffInvite';
@@ -310,6 +311,7 @@ export default function Page() {
   const [productForm, setProductForm] = useState(blankProductForm());
   const [productPhotoBusy, setProductPhotoBusy] = useState(false);
   const [newCategoryOpen, setNewCategoryOpen] = useState(false);
+  const [skuManual, setSkuManual] = useState(false);
   const productPhotoRef = useRef<HTMLInputElement>(null);
   const [stockAdjustmentForm, setStockAdjustmentForm] = useState({ productId: '', direction: 'add' as 'add' | 'remove', quantity: 1, reason: 'restock' as Exclude<StockMovementReason, 'sale' | 'opening_stock' | 'branch_transfer'>, note: '', supplierName: '', reference: '', unitCost: '' });
   const [serviceForm, setServiceForm] = useState({ name: '', branchId: '', amount: 0, serviceType: 'direct_cost' as ServiceType, directCost: 0, monthlySharedCost: 0, expenseGroupId: '' });
@@ -1142,10 +1144,18 @@ export default function Page() {
     }
   };
 
+  const canEditSku = role === 'shop_owner' || role === 'admin' || role === 'manager' || role === 'stock';
+
+  const suggestSku = (name: string, barcode: string, exceptId = '') => (
+    nextSku(name || 'Item', reservedProductCodes(products, exceptId, barcode.trim() ? [barcode] : []))
+  );
+
   const openProductForm = (form: ReturnType<typeof blankProductForm>) => {
     const typed = form.category.trim();
     const known = productCategories.some((name) => name.toLowerCase() === typed.toLowerCase());
-    setProductForm(form);
+    const editing = Boolean(form.id);
+    setSkuManual(editing);
+    setProductForm(editing ? form : { ...form, sku: suggestSku(form.name, form.barcode) });
     setNewCategoryOpen(typed ? !known : productCategories.length === 0);
     setShowProductModal(true);
   };
@@ -1153,8 +1163,14 @@ export default function Page() {
   const saveProduct = (e: React.FormEvent) => {
     e.preventDefault();
     const name = productForm.name.trim();
-    const sku = productForm.sku.trim().toUpperCase();
     const barcode = productForm.barcode.trim();
+    const previousProduct = products.find((product) => product.id === productForm.id);
+    let sku = canEditSku ? productForm.sku.trim().toUpperCase() : (previousProduct?.sku || '');
+    if (!sku) sku = nextSku(name, reservedProductCodes(products, productForm.id, barcode ? [barcode] : []));
+    if (barcode && sku.toLowerCase() === barcode.toLowerCase()) {
+      showNotification('The SKU and barcode need to be different.', 'error');
+      return;
+    }
     if (!name || !productForm.branchId) return;
     if (!Number.isFinite(productForm.stock) || productForm.stock < 0 || !Number.isFinite(productForm.purchasePrice) || productForm.purchasePrice < 0 || !Number.isFinite(productForm.salePrice) || productForm.salePrice < 0) {
       showNotification('Enter valid non-negative stock and price values.', 'error');
@@ -1171,7 +1187,6 @@ export default function Page() {
     const category = productCategories.find((item) => item.toLowerCase() === typedCategory.toLowerCase()) || typedCategory || undefined;
     const productDetails = { ...productForm, name, sku: sku || undefined, barcode: barcode || undefined, category, image };
     if (productForm.id) {
-      const previousProduct = products.find((product) => product.id === productForm.id);
       setProducts((prev) => prev.map((p) => (p.id === productForm.id ? { ...p, ...productDetails, ...updatedAuditStamp() } : p)));
       if (previousProduct) {
         const updatedProduct = { ...previousProduct, ...productDetails };
@@ -3971,7 +3986,14 @@ export default function Page() {
                     </div>
                     <label className="field">
                       <span>Product Name</span>
-                      <input value={productForm.name} onChange={(e) => setProductForm({ ...productForm, name: e.target.value })} required />
+                      <input value={productForm.name} onChange={(e) => {
+                        const name = e.target.value;
+                        setProductForm((prev) => ({
+                          ...prev,
+                          name,
+                          sku: !prev.id && !skuManual ? suggestSku(name, prev.barcode, prev.id) : prev.sku,
+                        }));
+                      }} required />
                     </label>
                     <div className="field form-span">
                       <span>Category</span>
@@ -3988,11 +4010,19 @@ export default function Page() {
                     </div>
                     <label className="field">
                       <span>SKU</span>
-                      <input value={productForm.sku} onChange={(e) => setProductForm({ ...productForm, sku: e.target.value })} autoCapitalize="characters" />
+                      <input value={productForm.sku} onChange={(e) => { setSkuManual(true); setProductForm({ ...productForm, sku: e.target.value }); }} autoCapitalize="characters" readOnly={!canEditSku} />
                     </label>
+                    <p className="muted-copy form-span">{canEditSku ? 'Filled in from the product name. Change it when this product already has a code.' : 'A SKU is created automatically. An owner, admin, manager, or stock lead can change it.'}</p>
                     <label className="field">
                       <span>Barcode</span>
-                      <input value={productForm.barcode} onChange={(e) => setProductForm({ ...productForm, barcode: e.target.value })} inputMode="numeric" />
+                      <input value={productForm.barcode} onChange={(e) => {
+                        const barcode = e.target.value;
+                        setProductForm((prev) => ({
+                          ...prev,
+                          barcode,
+                          sku: !prev.id && !skuManual ? suggestSku(prev.name, barcode, prev.id) : prev.sku,
+                        }));
+                      }} inputMode="numeric" />
                     </label>
                     <label className="field">
                       <span>Branch</span>
