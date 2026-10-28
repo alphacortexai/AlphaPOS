@@ -2441,6 +2441,7 @@ export default function Page() {
 
   const salesHistoryPageSize = 8;
   const sharedTablePageSize = 10;
+  const shelfPageSize = 6;
   const groupedSales = useMemo(() => {
     const groups = new Map<string, Sale[]>();
     filteredSales.forEach((sale) => {
@@ -2504,14 +2505,14 @@ export default function Page() {
     setExpensesPage(1);
   }, [expensesViewMode, expensesDayFilter]);
 
-  const productsPagination = paginateData(filteredProducts, productsPage, setProductsPage);
+  const productsPagination = paginateData(filteredProducts, productsPage, setProductsPage, shelfPageSize);
   const servicesPagination = paginateData(services, servicesPage, setServicesPage);
   const expensesPagination = paginateData(filteredExpenses, expensesPage, setExpensesPage);
   const usersPagination = paginateData(users, usersPage, setUsersPage);
   const activityLogsPagination = paginateData(activityLogs, activityLogsPage, setActivityLogsPage);
 
-  const PaginationControls = ({ totalItems, totalPages, page, start, end, onPrevious, onNext }: { totalItems: number; totalPages: number; page: number; start: number; end: number; onPrevious: () => void; onNext: () => void }) => (
-    <div className="pager">
+  const PaginationControls = ({ totalItems, totalPages, page, start, end, onPrevious, onNext, className = '' }: { totalItems: number; totalPages: number; page: number; start: number; end: number; onPrevious: () => void; onNext: () => void; className?: string }) => (
+    <div className={`pager ${className}`.trim()}>
       <span>Showing {totalItems === 0 ? 0 : start + 1}–{end} of {totalItems}</span>
       <div className="pager-actions">
         <button className="edit-btn" disabled={page <= 1} onClick={onPrevious}>Previous</button>
@@ -3235,6 +3236,7 @@ export default function Page() {
               </div>
             )}
             <PaginationControls
+              className="shelf-pager"
               totalItems={filteredProducts.length}
               totalPages={productsPagination.totalPages}
               page={productsPagination.safePage}
