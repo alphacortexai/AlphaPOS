@@ -11,6 +11,7 @@ import ReturnDialog, { type ReturnableLine } from '../components/pos/ReturnDialo
 import { ACTIVITY_KEEP, readLocalActivity, trimActivity, writeLocalActivity } from '../lib/pos/activityLog';
 import { computeAccountBalances, DEFAULT_REORDER_POINT, normalizeCustomerPayments, normalizeSuppliers, paymentMatchesCustomer, sessionCashAdjustments, stockIsLow, withTenderAccounts, type CustomerPaymentRecord, type SupplierRecord } from '../lib/pos/books';
 import { parseCatalogReading, type CatalogMode } from '../lib/catalog/reading';
+import { catalogKeyError, readOwnerCatalogKey, writeOwnerCatalogKey } from '../lib/catalog/ownerKey';
 import { LOCAL_OPERATOR_ID, readLocalShop, writeLocalShop } from '../lib/pos/localShop';
 import { nextSku, reservedProductCodes } from '../lib/pos/sku';
 import { attachProductImages, compressProductPhoto, imageMapChars, isProductImage, PRODUCT_IMAGE_DOC_MAX_CHARS, readLocalProductImages, splitProductImages, writeLocalProductImages } from '../lib/pos/productImage';
@@ -358,7 +359,7 @@ export default function Page() {
   const [expenseChartRange, setExpenseChartRange] = useState<ExpenseChartRange>('month');
   const [userForm, setUserForm] = useState({ id: '', name: '', email: '', role: 'cashier' as Role, branchId: '' });
   const [shopNameForm, setShopNameForm] = useState('');
-  const [settingsTab, setSettingsTab] = useState<'shop' | 'branches' | 'time' | 'backup' | 'tax' | 'receipt' | 'email'>('shop');
+  const [settingsTab, setSettingsTab] = useState<'shop' | 'branches' | 'time' | 'backup' | 'tax' | 'receipt' | 'email' | 'assistant'>('shop');
   const [salesEmailSettings, setSalesEmailSettings] = useState<SalesEmailSettings>(defaultSalesEmailSettings);
   const [signInNotice, setSignInNotice] = useState('');
   const [invitedEmail, setInvitedEmail] = useState('');
@@ -366,6 +367,9 @@ export default function Page() {
   const [recipientDraft, setRecipientDraft] = useState('');
   const recipientInputRef = useRef<HTMLInputElement>(null);
   const [shopTimeSettings, setShopTimeSettings] = useState<ShopTimeSettings>({ timezoneOffsetMinutes: 0, dayStartTime: '00:00' });
+  const [catalogKey, setCatalogKey] = useState('');
+  const [catalogKeyDraft, setCatalogKeyDraft] = useState('');
+  const [showCatalogKey, setShowCatalogKey] = useState(false);
 
   const branchMap = useMemo(() => Object.fromEntries(branches.map((b) => [b.id, b.name])), [branches]);
   const getEffectiveUnitPrice = useCallback((item: CartItem) => {
@@ -403,6 +407,25 @@ export default function Page() {
     if (!authUser) return;
     if (!canOpenView(view)) setView(role === 'stock' ? 'products' : 'sales');
   }, [authUser, canOpenView, role, view]);
+
+  useEffect(() => {
+    if (!authUser || authUser.uid !== activeShopOwnerUid) {
+      setCatalogKey('');
+      return;
+    }
+    const localKey = readOwnerCatalogKey(authUser.uid);
+    setCatalogKey(localKey);
+    if (!db || authUser.uid === LOCAL_OPERATOR_ID) return;
+    let cancelled = false;
+    void getDoc(doc(db, 'users', authUser.uid, 'pos', 'secrets')).then((snap) => {
+      if (cancelled || !snap.exists()) return;
+      const remote = typeof snap.data().geminiApiKey === 'string' ? snap.data().geminiApiKey.trim() : '';
+      if (!remote) return;
+      writeOwnerCatalogKey(authUser.uid, remote);
+      setCatalogKey(remote);
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [activeShopOwnerUid, authUser, db]);
 
   const showNotification = (message: string, type: 'success' | 'error' | 'info' = 'info', duration: number = 3000) => {
     if (notificationTimeoutRef.current) clearTimeout(notificationTimeoutRef.current);
@@ -2168,12 +2191,52 @@ export default function Page() {
         image: photo.base64,
         productNames: products.map((product) => product.name).slice(0, 200),
         shopOwnerUid: activeShopOwnerUid,
+        ...(catalogKey ? { geminiKey: catalogKey } : {}),
         ...(idToken ? { idToken } : { localCounter: true }),
       }),
     });
     const payload = await response.json() as { ok?: boolean; error?: string };
     if (!response.ok || !payload.ok) throw new Error(payload.error || 'The photo could not be read.');
     return parseCatalogReading(payload);
+  };
+
+  const saveCatalogKey = async () => {
+    if (!isShopOwner || !authUser) return;
+    const next = catalogKeyDraft.trim();
+    if (!next) {
+      showNotification('Paste a Gemini API key first.', 'error');
+      return;
+    }
+    const problem = catalogKeyError(next);
+    if (problem) {
+      showNotification(problem, 'error');
+      return;
+    }
+    await storeCatalogKey(next);
+  };
+
+  const removeCatalogKey = async () => {
+    if (!isShopOwner || !authUser) return;
+    setCatalogKeyDraft('');
+    await storeCatalogKey('');
+  };
+
+  const storeCatalogKey = async (next: string) => {
+    if (!authUser) return;
+    writeOwnerCatalogKey(authUser.uid, next);
+    setCatalogKey(next);
+    setCatalogKeyDraft('');
+    setShowCatalogKey(false);
+    if (db && authUser.uid !== LOCAL_OPERATOR_ID) {
+      try {
+        await setDoc(doc(db, 'users', authUser.uid, 'pos', 'secrets'), { geminiApiKey: next }, { merge: true });
+      } catch {
+        showNotification(next ? 'Saved on this device. It will reach your account when the connection succeeds.' : 'Removed on this device.', 'info');
+        return;
+      }
+    }
+    logActivity('catalog_key', next ? 'Saved the product assistant key.' : 'Removed the product assistant key.');
+    showNotification(next ? 'Assistant key saved.' : 'Assistant key removed.', 'success');
   };
 
   const addProductsFromAssistant = (rows: CatalogCreateRow[]) => {
@@ -3914,6 +3977,7 @@ export default function Page() {
               <button type="button" className={settingsTab === 'shop' ? 'active' : ''} onClick={() => setSettingsTab('shop')}>Name</button>
               <button type="button" className={settingsTab === 'branches' ? 'active' : ''} onClick={() => setSettingsTab('branches')}>Branches</button>
               <button type="button" className={settingsTab === 'time' ? 'active' : ''} onClick={() => setSettingsTab('time')}>Business day</button>
+              <button type="button" className={settingsTab === 'assistant' ? 'active' : ''} onClick={() => setSettingsTab('assistant')}>Assistant</button>
               <p>Checkout</p>
               <button type="button" className={settingsTab === 'tax' ? 'active' : ''} onClick={() => setSettingsTab('tax')}>Tax</button>
               <button type="button" className={settingsTab === 'receipt' ? 'active' : ''} onClick={() => setSettingsTab('receipt')}>Receipt</button>
@@ -3995,6 +4059,37 @@ export default function Page() {
                       })}
                     </select>
                   </div>
+                </div>
+              </div>
+            )}
+            {settingsTab === 'assistant' && (
+              <div className="card">
+                <h3>Product assistant</h3>
+                <p className="muted-copy">Paste a Gemini API key from Google AI Studio (aistudio.google.com/apikey). It is used only to read product photos. Staff cannot open this page, and the key is not included in a shop backup.</p>
+                <p className="muted-copy">{catalogKey ? 'A key is saved for this shop.' : 'No key is saved yet.'}</p>
+                <div className="form" style={{ marginTop: '1rem' }}>
+                  <label className="field">
+                    <span>{catalogKey ? 'Replace the key' : 'Gemini API key'}</span>
+                    <input
+                      type={showCatalogKey ? 'text' : 'password'}
+                      value={catalogKeyDraft}
+                      autoComplete="off"
+                      spellCheck={false}
+                      maxLength={200}
+                      onChange={(event) => setCatalogKeyDraft(event.target.value)}
+                    />
+                  </label>
+                  <label className="field">
+                    <span>Show the key while typing</span>
+                    <select value={showCatalogKey ? 'yes' : 'no'} onChange={(event) => setShowCatalogKey(event.target.value === 'yes')}>
+                      <option value="no">Hidden</option>
+                      <option value="yes">Visible</option>
+                    </select>
+                  </label>
+                </div>
+                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <button type="button" className="primary" onClick={() => { void saveCatalogKey(); }}>Save key</button>
+                  {catalogKey && <button type="button" className="edit-btn" onClick={() => { void removeCatalogKey(); }}>Remove key</button>}
                 </div>
               </div>
             )}
