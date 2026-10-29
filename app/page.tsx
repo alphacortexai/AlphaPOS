@@ -3023,7 +3023,7 @@ export default function Page() {
       <div className={`sidebar-overlay ${isSidebarOpen ? 'show' : ''}`} onClick={() => setIsSidebarOpen(false)}></div>
       <aside className={`sidebar ${isSidebarOpen ? 'open' : ''}`}>
         <div className="sidebar-header">
-          <h2><span className="brand-mark" aria-hidden="true">A</span> AlphaPOS</h2>
+          <h2><span className="brand-mark" aria-hidden="true">A</span>AlphaPOS</h2>
           <p className="rail-shop">
             <strong>{currentShop?.shopName || 'My Shop'}</strong>
             <span>{roleLabels[role]}</span>
@@ -3040,7 +3040,6 @@ export default function Page() {
 
         <nav className="sidebar-nav" aria-label="Shop">
           <div className="nav-group">
-            <div className="nav-group-label">Today</div>
             <button className={`nav-button ${view === 'dashboard' ? 'active' : ''}`} onClick={() => { setView('dashboard'); setIsSidebarOpen(false); }}>Today</button>
             {role !== 'stock' && <button className={`nav-button ${view === 'sales_history' ? 'active' : ''}`} onClick={() => { setView('sales_history'); setIsSidebarOpen(false); }}>Sales</button>}
             {role !== 'stock' && <button className={`nav-button ${view === 'customers' ? 'active' : ''}`} onClick={() => { setView('customers'); setIsSidebarOpen(false); }}>Customers</button>}
