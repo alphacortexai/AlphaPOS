@@ -1,4 +1,4 @@
-import type { PaymentMethod, Tender } from './retail';
+import { roundMoney, type PaymentMethod, type Tender } from './retail';
 
 export const DEFAULT_REORDER_POINT = 10;
 
@@ -9,6 +9,26 @@ export const reorderLevel = (product: { reorderPoint?: number }) => {
 
 export const stockIsLow = (product: { stock: number; reorderPoint?: number }) => (
   product.stock > 0 && product.stock < reorderLevel(product)
+);
+
+export type StockWorth = {
+  units: number;
+  atCost: number;
+  atSalePrice: number;
+};
+
+const countedUnits = (stock: number) => (Number.isFinite(stock) ? Math.max(0, stock) : 0);
+const countedPrice = (price: number) => (Number.isFinite(price) ? Math.max(0, price) : 0);
+
+export const stockWorth = (products: { stock: number; purchasePrice: number; salePrice: number }[]): StockWorth => (
+  products.reduce<StockWorth>((totals, product) => {
+    const units = countedUnits(product.stock);
+    return {
+      units: totals.units + units,
+      atCost: totals.atCost + roundMoney(units * countedPrice(product.purchasePrice)),
+      atSalePrice: totals.atSalePrice + roundMoney(units * countedPrice(product.salePrice)),
+    };
+  }, { units: 0, atCost: 0, atSalePrice: 0 })
 );
 
 export const TENDER_ACCOUNT_NAME: Record<Exclude<PaymentMethod, 'on_account'>, string> = {

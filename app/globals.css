@@ -3047,9 +3047,26 @@ body, .app, .main { background: var(--bg); color: var(--text); }
 }
 .shelf-page .page-tools,
 .shelf-page .inventory-filter-bar,
+.shelf-page .stock-worth,
 .shelf-page .shelf-empty {
   flex: 0 0 auto;
 }
+.stock-worth {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.85rem 1.4rem;
+  align-items: center;
+  margin: 0;
+  padding: 0.8rem 1rem;
+  border: 1px solid #e7e5e4;
+  border-radius: 14px;
+  background: #fff;
+}
+.stock-worth div { display: grid; gap: 0.12rem; min-width: 9rem; }
+.stock-worth span { color: #78716c; font-size: 0.75rem; font-weight: 600; }
+.stock-worth strong { font-size: 1.2rem; letter-spacing: -0.03em; color: #1c1917; }
+.stock-worth p { margin: 0 0 0 auto; color: #78716c; font-size: 0.82rem; }
+.stock-worth-note { margin-top: 0.75rem; }
 .shelf-page .inventory-filter-bar { flex-wrap: nowrap; }
 .shelf-page .shelf-grid {
   flex: 0 1 auto;
@@ -3408,7 +3425,11 @@ input:focus, select:focus, textarea:focus { box-shadow: 0 0 0 3px rgba(31, 107, 
   min-width: 8.5rem;
   flex: 0 0 auto;
 }
-.today-numbers,
+.today-numbers {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.8rem;
+}
 .today-board .today-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -3525,6 +3546,7 @@ input:focus, select:focus, textarea:focus { box-shadow: 0 0 0 3px rgba(31, 107, 
 @media (max-width: 720px) {
   .today-numbers,
   .today-board .today-actions { grid-template-columns: 1fr; }
+  .stock-worth p { margin-left: 0; width: 100%; }
   .page-tools .primary,
   .page-tools-actions { width: 100%; }
   .page-tools .primary { width: 100%; }
