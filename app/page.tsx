@@ -9,7 +9,7 @@ import RegisterDesk from '../components/pos/RegisterDesk';
 import ReceiptDialog from '../components/pos/ReceiptDialog';
 import ReturnDialog, { type ReturnableLine } from '../components/pos/ReturnDialog';
 import { ACTIVITY_KEEP, readLocalActivity, trimActivity, writeLocalActivity } from '../lib/pos/activityLog';
-import { computeAccountBalances, DEFAULT_REORDER_POINT, normalizeCustomerPayments, normalizeSuppliers, paymentMatchesCustomer, sessionCashAdjustments, stockIsLow, withTenderAccounts, type CustomerPaymentRecord, type SupplierRecord } from '../lib/pos/books';
+import { computeAccountBalances, DEFAULT_REORDER_POINT, normalizeCustomerPayments, normalizeSuppliers, paymentMatchesCustomer, sessionCashAdjustments, stockIsLow, stockWorth, withTenderAccounts, type CustomerPaymentRecord, type SupplierRecord } from '../lib/pos/books';
 import { parseOrganiseAssignments, planCategoryUpdates, ORGANISE_PRODUCT_CAP } from '../lib/catalog/organise';
 import { parseCatalogReading, type CatalogMode } from '../lib/catalog/reading';
 import { catalogKeyError, readOwnerCatalogKey, writeOwnerCatalogKey } from '../lib/catalog/ownerKey';
@@ -1074,6 +1074,14 @@ export default function Page() {
       return matchesSearch && matchesBranch && matchesStock;
     });
   }, [products, productSearchQuery, productBranchFilter, productStockFilter]);
+
+  const shopStockWorth = useMemo(() => stockWorth(products), [products]);
+  const shelfStockWorth = useMemo(
+    () => (productBranchFilter ? stockWorth(products.filter((product) => product.branchId === productBranchFilter)) : shopStockWorth),
+    [productBranchFilter, products, shopStockWorth],
+  );
+  const shelfStockBranch = branches.find((branch) => branch.id === productBranchFilter)?.name;
+  const formatCount = (value: number) => new Intl.NumberFormat('en-UG', { maximumFractionDigits: 2 }).format(value);
 
   const productCategories = useMemo(() => {
     const names = new Set(products.map((product) => product.category?.trim()).filter((value): value is string => Boolean(value)));
@@ -3150,6 +3158,13 @@ export default function Page() {
                       <strong className={dashboardMetrics.netProfit.value >= 0 ? 'is-positive' : 'is-negative'}>{formatUGX(dashboardMetrics.netProfit.value)}</strong>
                       <span className="stat-note">After tax, cost, and expenses</span>
                     </article>
+                    {seesBooks && (
+                      <article className="stat-card">
+                        <p>Stock worth</p>
+                        <strong>{formatUGX(shopStockWorth.atCost)}</strong>
+                        <span className="stat-note">At cost · Selling price {formatUGX(shopStockWorth.atSalePrice)}</span>
+                      </article>
+                    )}
                   </div>
                   <div className="today-actions">
                     <article className="card">
@@ -3256,6 +3271,23 @@ export default function Page() {
                 <button type="button" className={productStockFilter === 'out' ? 'active' : ''} onClick={() => setProductStockFilter('out')}>Out</button>
               </div>
             </div>
+
+            {seesBooks && (
+              <div className="stock-worth" aria-label="Stock worth">
+                <div>
+                  <span>At cost</span>
+                  <strong>{formatUGX(shelfStockWorth.atCost)}</strong>
+                </div>
+                <div>
+                  <span>At selling price</span>
+                  <strong>{formatUGX(shelfStockWorth.atSalePrice)}</strong>
+                </div>
+                <p>
+                  {shelfStockWorth.units === 0 ? 'Nothing on the shelf' : `${formatCount(shelfStockWorth.units)} on the shelf`}
+                  {shelfStockBranch ? ` at ${shelfStockBranch}` : ''}
+                </p>
+              </div>
+            )}
 
             {filteredProducts.length > 0 ? (
               <div className="shelf-grid">
@@ -3950,8 +3982,15 @@ export default function Page() {
                   <div><span>Net profit</span><strong className={getMetrics('month', 0).netProfit >= 0 ? 'is-positive' : 'is-negative'}>{formatUGX(getMetrics('month', 0).netProfit)}</strong></div>
                 </div>
               </div>
+              <div className="card">
+                <h4>Stock on hand</h4>
+                <div className="metric-stack">
+                  <div><span>At cost</span><strong>{formatUGX(shopStockWorth.atCost)}</strong></div>
+                  <div><span>At selling price</span><strong>{formatUGX(shopStockWorth.atSalePrice)}</strong></div>
+                </div>
+                <p className="muted-copy stock-worth-note">{formatCount(shopStockWorth.units)} on the shelf. {products.filter((product) => stockIsLow(product)).length} below reorder.</p>
+              </div>
             </div>
-            <p className="stock-line">Stock on hand is worth {formatUGX(products.reduce((a, p) => a + (p.stock * p.purchasePrice), 0))}. {products.filter((product) => stockIsLow(product)).length} product{products.filter((product) => stockIsLow(product)).length === 1 ? '' : 's'} below their reorder level.</p>
           </section>
         )}
 
