@@ -2,8 +2,11 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { reorderLevel } from '../../lib/pos/books';
+import { compareRegisterCatalog, unitsSoldByProduct, type CatalogSaleLine } from '../../lib/pos/catalogOrder';
 import type { CartDiscount, CashSession, Customer, PaymentMethod, Settlement, Tender } from '../../lib/pos/retail';
 import { PAYMENT_METHOD_LABELS } from '../../lib/pos/retail';
+
+export const REGISTER_PAGE_SIZE = 16;
 
 export type RegisterProduct = {
   id: string;
@@ -67,6 +70,7 @@ const emptyPayment = (total: number): PaymentDraft => ({
 export default function RegisterDesk({
   products,
   services,
+  sales,
   cart,
   customers,
   heldTickets,
@@ -100,6 +104,7 @@ export default function RegisterDesk({
 }: {
   products: RegisterProduct[];
   services: RegisterService[];
+  sales: CatalogSaleLine[];
   cart: RegisterCartItem[];
   customers: Customer[];
   heldTickets: HeldTicketView[];
@@ -151,14 +156,16 @@ export default function RegisterDesk({
     return ['All', ...Array.from(names).sort((a, b) => a.localeCompare(b)), ...(services.length > 0 ? ['Services'] : [])];
   }, [products, services]);
 
+  const soldCounts = useMemo(() => unitsSoldByProduct(products, sales), [products, sales]);
+
   const visibleProducts = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return products
       .filter((product) => category === 'All' || category === product.category || (category !== 'Services' && !product.category && category === 'Uncategorized'))
       .filter(() => category !== 'Services')
       .filter((product) => !needle || [product.name, product.sku, product.barcode, product.category].some((value) => value?.toLowerCase().includes(needle)))
-      .sort((a, b) => Number(a.stock <= 0) - Number(b.stock <= 0) || a.name.localeCompare(b.name));
-  }, [category, products, query]);
+      .sort(compareRegisterCatalog(soldCounts));
+  }, [category, products, query, soldCounts]);
 
   const visibleServices = useMemo(() => {
     if (category !== 'All' && category !== 'Services') return [];
@@ -166,7 +173,7 @@ export default function RegisterDesk({
     return services.filter((service) => !needle || service.name.toLowerCase().includes(needle));
   }, [category, query, services]);
 
-  const registerPageSize = 9;
+  const registerPageSize = REGISTER_PAGE_SIZE;
   const catalogPages = Math.max(1, Math.ceil(visibleProducts.length / registerPageSize));
   const catalogPageSafe = Math.min(catalogPage, catalogPages);
   const pageStart = (catalogPageSafe - 1) * registerPageSize;
@@ -297,40 +304,44 @@ export default function RegisterDesk({
         </div>
         {notice && <div className="pos-inline-notice">{notice}</div>}
         <div className="pos-grid">
-          {pageProducts.map((product) => {
+          {pageProducts.map((product, index) => {
             const out = product.stock <= 0;
             const low = product.stock > 0 && product.stock < reorderLevel(product);
             const onTicket = cart.find((item) => item.itemType === 'product' && item.itemId === product.id)?.qty || 0;
             return (
-              <button key={product.id} type="button" className={`pos-tile ${out ? 'is-out' : ''} ${onTicket ? 'is-in-cart' : ''}`} disabled={out} onClick={() => onAddProduct(product.id)}>
-                <span className="pos-photo" aria-hidden="true">
-                  {product.image ? <img src={product.image} alt="" /> : <span>{product.name.slice(0, 1).toUpperCase()}</span>}
-                  {onTicket > 0 && <em className="pos-photo-qty">{onTicket}</em>}
-                  {(out || low) && <em className={`pos-photo-flag${low ? ' is-low' : ''}`}>{out ? 'Out' : 'Low'}</em>}
-                </span>
-                <span className="pos-tile-copy">
-                  <span className="pos-tile-name">{product.name}</span>
-                  <span className="pos-tile-foot">
-                    <strong>{formatMoney(product.salePrice)}</strong>
-                    <em className={low ? 'is-low' : ''}>{out ? 'Out' : product.stock}</em>
+              <button key={product.id} type="button" className={`pos-tile ${out ? 'is-out' : ''} ${onTicket ? 'is-in-cart' : ''}`} style={{ '--enter-delay': `${Math.min(index, 15) * 18}ms` } as React.CSSProperties} disabled={out} onClick={() => onAddProduct(product.id)}>
+                <span className="pos-tile-motion">
+                  <span className="pos-photo" aria-hidden="true">
+                    {product.image ? <img src={product.image} alt="" /> : <span>{product.name.slice(0, 1).toUpperCase()}</span>}
+                    {onTicket > 0 && <em className="pos-photo-qty">{onTicket}</em>}
+                    {(out || low) && <em className={`pos-photo-flag${low ? ' is-low' : ''}`}>{out ? 'Out' : 'Low'}</em>}
                   </span>
-                  {Object.keys(branchNames).length > 1 && <span className="pos-tile-meta">{branchNames[product.branchId]}</span>}
+                  <span className="pos-tile-copy">
+                    <span className="pos-tile-name">{product.name}</span>
+                    <span className="pos-tile-foot">
+                      <strong>{formatMoney(product.salePrice)}</strong>
+                      <em className={low ? 'is-low' : ''}>{out ? 'Out' : product.stock}</em>
+                    </span>
+                    {Object.keys(branchNames).length > 1 && <span className="pos-tile-meta">{branchNames[product.branchId]}</span>}
+                  </span>
                 </span>
               </button>
             );
           })}
-          {showServices && visibleServices.map((service) => {
+          {showServices && visibleServices.map((service, index) => {
             const onTicket = cart.find((item) => item.itemType === 'service' && item.itemId === service.id)?.qty || 0;
             return (
-              <button key={service.id} type="button" className={`pos-tile is-service ${onTicket ? 'is-in-cart' : ''}`} onClick={() => onAddService(service.id)}>
-                <span className="pos-photo" aria-hidden="true">
-                  <span>S</span>
-                  {onTicket > 0 && <em className="pos-photo-qty">{onTicket}</em>}
-                </span>
-                <span className="pos-tile-copy">
-                  <span className="pos-tile-name">{service.name}</span>
-                  <span className="pos-tile-meta">Service</span>
-                  <span className="pos-tile-foot"><strong>{formatMoney(service.salePrice)}</strong></span>
+              <button key={service.id} type="button" className={`pos-tile is-service ${onTicket ? 'is-in-cart' : ''}`} style={{ '--enter-delay': `${Math.min(pageProducts.length + index, 15) * 18}ms` } as React.CSSProperties} onClick={() => onAddService(service.id)}>
+                <span className="pos-tile-motion">
+                  <span className="pos-photo" aria-hidden="true">
+                    <span>S</span>
+                    {onTicket > 0 && <em className="pos-photo-qty">{onTicket}</em>}
+                  </span>
+                  <span className="pos-tile-copy">
+                    <span className="pos-tile-name">{service.name}</span>
+                    <span className="pos-tile-meta">Service</span>
+                    <span className="pos-tile-foot"><strong>{formatMoney(service.salePrice)}</strong></span>
+                  </span>
                 </span>
               </button>
             );
