@@ -3372,11 +3372,11 @@ export default function Page() {
                         : branchMap[movement.branchId] || '—';
                       return (
                         <tr key={log.id}>
-                          <td>{new Date(log.createdAt).toLocaleString()}</td>
-                          <td style={{ fontWeight: 600, color: 'var(--text)' }}>{movement.productName}</td>
-                          <td>{branchLabel}</td>
-                          <td>{reasonLabels[movement.reason]}</td>
-                          <td>
+                          <td data-label="Date">{new Date(log.createdAt).toLocaleString()}</td>
+                          <td data-label="Product" style={{ fontWeight: 600, color: 'var(--text)' }}>{movement.productName}</td>
+                          <td data-label="Branch">{branchLabel}</td>
+                          <td data-label="Reason">{reasonLabels[movement.reason]}</td>
+                          <td data-label="Units">
                             {movement.reason === 'branch_transfer' ? (
                               <span className="qty-chip">Moved</span>
                             ) : (
@@ -3385,8 +3385,8 @@ export default function Page() {
                               </span>
                             )}
                           </td>
-                          <td>{log.userEmail}</td>
-                          <td>{movement.note || '—'}</td>
+                          <td data-label="Recorded by">{log.userEmail}</td>
+                          <td data-label="Note">{movement.note || '—'}</td>
                         </tr>
                       );
                     }) : (
@@ -3475,16 +3475,16 @@ export default function Page() {
                 <tbody>
                   {services.length > 0 ? servicesPagination.rows.map((service) => (
                     <tr key={service.id}>
-                      <td style={{ fontWeight: 600 }}>{service.name}</td>
-                      <td>{branchMap[service.branchId]}</td>
-                      <td>{service.serviceType === 'direct_cost' ? 'Each sale' : 'Monthly'}</td>
-                      <td className="num">{formatUGX(service.salePrice)}</td>
-                      <td className="num">
+                      <td data-label="Service" style={{ fontWeight: 600 }}>{service.name}</td>
+                      <td data-label="Branch">{branchMap[service.branchId]}</td>
+                      <td data-label="Type">{service.serviceType === 'direct_cost' ? 'Each sale' : 'Monthly'}</td>
+                      <td data-label="Price" className="num">{formatUGX(service.salePrice)}</td>
+                      <td data-label="Cost" className="num">
                         {service.serviceType === 'direct_cost'
                           ? formatUGX(service.directCost)
                           : `${formatUGX(service.monthlySharedCost)} / month`}
                       </td>
-                      <td>
+                      <td data-label="">
                         <button className="edit-btn" onClick={() => { setServiceForm({
                           name: service.name,
                           branchId: service.branchId,
@@ -3651,23 +3651,23 @@ export default function Page() {
                     {groupedSales.length > 0 ? (
                       paginatedSales.map((saleGroup) => (
                         <tr key={saleGroup.id}>
-                          <td>{new Date(saleGroup.createdAt).toLocaleString()}</td>
-                          <td style={{ fontWeight: 700 }}>{saleGroup.receiptNumber || `#${saleGroup.id.slice(0, 8)}`}</td>
-                          <td>
+                          <td data-label="Date and time">{new Date(saleGroup.createdAt).toLocaleString()}</td>
+                          <td data-label="Receipt" style={{ fontWeight: 700 }}>{saleGroup.receiptNumber || `#${saleGroup.id.slice(0, 8)}`}</td>
+                          <td data-label="Items">
                             {saleGroup.lines.map((line) => (
                               <div key={line.id}>{line.itemName} × {line.qty}</div>
                             ))}
                           </td>
-                          <td>
+                          <td data-label="Customer">
                             <div>{saleGroup.customerName || 'Walk-in'}</div>
                             <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>
                               {saleGroup.saleKind === 'return' ? 'Credit note · ' : ''}
                               {saleGroup.paymentMethod ? PAYMENT_METHOD_LABELS[saleGroup.paymentMethod] : 'Tender not recorded'}
                             </div>
                           </td>
-                          <td className="num">{formatUGX(saleGroup.total)}</td>
-                          <td className={`num${saleGroup.profit < 0 ? ' is-negative' : ''}`}>{showRegisterMargin ? formatUGX(saleGroup.profit) : '—'}</td>
-                          <td>
+                          <td data-label="Total" className="num">{formatUGX(saleGroup.total)}</td>
+                          <td data-label="Margin" className={`num${saleGroup.profit < 0 ? ' is-negative' : ''}`}>{showRegisterMargin ? formatUGX(saleGroup.profit) : '—'}</td>
+                          <td data-label="">
                             <button className="edit-btn" onClick={() => setActiveReceipt(receiptFromSaleLines(saleGroup.lines))}>Receipt</button>
                             {saleGroup.saleKind !== 'return' && <button className="edit-btn" onClick={() => setReturnTransactionId(saleGroup.id)}>Return</button>}
                             {canManageSalesAndExpenses ? (
@@ -3808,12 +3808,12 @@ export default function Page() {
                   {filteredExpenses.length > 0 ? (
                     expensesPagination.rows.map((e) => (
                       <tr key={e.id}>
-                        <td>{new Date(e.createdAt).toLocaleString()}</td>
-                        <td style={{ fontWeight: 600 }}>{e.title}</td>
-                        <td>{branchMap[e.branchId]}</td>
-                        <td className="num">{formatUGX(e.amount)}</td>
-                        <td>{e.expenseGroupId ? expenseGroupMap[e.expenseGroupId] || 'Unknown group' : 'Ungrouped'}</td>
-                        <td>
+                        <td data-label="Date and time">{new Date(e.createdAt).toLocaleString()}</td>
+                        <td data-label="Expense" style={{ fontWeight: 600 }}>{e.title}</td>
+                        <td data-label="Branch">{branchMap[e.branchId]}</td>
+                        <td data-label="Amount" className="num">{formatUGX(e.amount)}</td>
+                        <td data-label="Group">{e.expenseGroupId ? expenseGroupMap[e.expenseGroupId] || 'Unknown group' : 'Ungrouped'}</td>
+                        <td data-label="">
                           {canManageSalesAndExpenses ? (
                             <>
                               <button className="edit-btn" onClick={() => editExpense(e)}>Edit</button>
@@ -3877,16 +3877,16 @@ export default function Page() {
                       {users.length > 0 ? (
                         usersPagination.rows.map((u) => (
                           <tr key={u.id}>
-                            <td style={{ fontWeight: 600 }}>{u.name}</td>
-                            <td>{u.email}</td>
-                            <td>
+                            <td data-label="Name" style={{ fontWeight: 600 }}>{u.name}</td>
+                            <td data-label="Email">{u.email}</td>
+                            <td data-label="Role">
                               <span className="badge">
                                 {roleLabels[u.role] || u.role}
                               </span>
                             </td>
-                            <td>{branchMap[u.branchId]}</td>
-                            <td>{new Date(u.createdAt).toLocaleDateString()}</td>
-                            <td>
+                            <td data-label="Branch">{branchMap[u.branchId]}</td>
+                            <td data-label="Added">{new Date(u.createdAt).toLocaleDateString()}</td>
+                            <td data-label="">
                               <button className="edit-btn" onClick={() => { setUserForm(u); setShowUserModal(true); }}>Edit</button>
                               <button className="edit-btn" onClick={() => { void emailStaffSignInLink(u.email, u.role).catch((error) => showNotification(staffSignInError(error), 'error', 7000)); }}>Email link</button>
                               <button className="delete-btn" onClick={() => {
@@ -4007,11 +4007,11 @@ export default function Page() {
                 <tbody>
                   {activityLogs.length > 0 ? activityLogsPagination.rows.map((log) => (
                     <tr key={log.id}>
-                      <td>{new Date(log.createdAt).toLocaleString()}</td>
-                      <td>{log.userEmail}</td>
-                      <td><span className="badge badge-info">{roleLabels[log.role] || log.role}</span></td>
-                      <td className="activity-action">{log.action.replaceAll('_', ' ')}</td>
-                      <td>{log.details}</td>
+                      <td data-label="Time">{new Date(log.createdAt).toLocaleString()}</td>
+                      <td data-label="User">{log.userEmail}</td>
+                      <td data-label="Role"><span className="badge badge-info">{roleLabels[log.role] || log.role}</span></td>
+                      <td data-label="Action" className="activity-action">{log.action.replaceAll('_', ' ')}</td>
+                      <td data-label="Details">{log.details}</td>
                     </tr>
                   )) : <tr><td colSpan={5} className="empty-cell">No activity yet.</td></tr>}
                 </tbody>
@@ -4060,11 +4060,11 @@ export default function Page() {
                     const owed = customerBalance(customer.name, customer.phone);
                     return (
                     <tr key={customer.id}>
-                      <td style={{ fontWeight: 700 }}>{customer.name}</td>
-                      <td>{customer.phone || '—'}</td>
-                      <td className="num">{owed > 0 ? <span className="badge badge-warning">Due {formatUGX(owed)}</span> : formatUGX(owed)}</td>
-                      <td>{customer.notes || '—'}</td>
-                      <td>{owed > 0 && <button type="button" className="edit-btn" onClick={() => { setPaymentCustomer(customer); setPaymentDraft({ amount: String(owed), method: 'cash' }); }}>Record payment</button>}</td>
+                      <td data-label="Customer" style={{ fontWeight: 700 }}>{customer.name}</td>
+                      <td data-label="Phone">{customer.phone || '—'}</td>
+                      <td data-label="On account" className="num">{owed > 0 ? <span className="badge badge-warning">Due {formatUGX(owed)}</span> : formatUGX(owed)}</td>
+                      <td data-label="Notes">{customer.notes || '—'}</td>
+                      <td data-label="">{owed > 0 && <button type="button" className="edit-btn" onClick={() => { setPaymentCustomer(customer); setPaymentDraft({ amount: String(owed), method: 'cash' }); }}>Record payment</button>}</td>
                     </tr>
                     );
                   })}
@@ -4365,12 +4365,12 @@ export default function Page() {
                   <tbody>
                     {accounts.map((account) => (
                       <tr key={account.id}>
-                        <td>{account.name}</td>
-                        <td>{account.isDefault ? 'Default' : 'Custom'}</td>
-                        <td className="num">{formatUGX(account.openingBalance || 0)}</td>
-                        <td className="num">{formatUGX(accountBalances.get(account.id) || 0)}</td>
+                        <td data-label="Account">{account.name}</td>
+                        <td data-label="Type">{account.isDefault ? 'Default' : 'Custom'}</td>
+                        <td data-label="Opening balance" className="num">{formatUGX(account.openingBalance || 0)}</td>
+                        <td data-label="Current balance" className="num">{formatUGX(accountBalances.get(account.id) || 0)}</td>
                         {(isShopOwner || role === 'admin') && (
-                          <td>
+                          <td data-label="">
                             <button type="button" className="edit-btn" onClick={() => editAccountOpeningBalance(account.id)}>Edit value</button>
                           </td>
                         )}
