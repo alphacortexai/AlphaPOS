@@ -973,6 +973,25 @@ button.primary.pos-charge {
     min-height: 44px !important;
     flex-wrap: wrap !important;
   }
+  .pos-catalog,
+  .pos-categories,
+  .pos-grid,
+  .pos-tile,
+  .pos-tile-motion,
+  .pos-tile-copy {
+    min-width: 0;
+    max-width: 100%;
+  }
+  .pos-categories {
+    flex-wrap: wrap !important;
+    overflow: visible !important;
+  }
+  .pos-categories button {
+    white-space: normal !important;
+    max-width: 100%;
+    text-align: center;
+  }
+  .pos-tile-name { overflow-wrap: anywhere; }
   .pos-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
   }
