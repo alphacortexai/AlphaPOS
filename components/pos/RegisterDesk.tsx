@@ -140,7 +140,8 @@ export default function RegisterDesk({
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState('All');
   const [catalogPage, setCatalogPage] = useState(1);
-  const [notice, setNotice] = useState('');
+  const [notice, setNotice] = useState<{ message: string; tone: 'ok' | 'warn' } | null>(null);
+  const [addedId, setAddedId] = useState('');
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [payment, setPayment] = useState<PaymentDraft>(emptyPayment(0));
   const [drawerMode, setDrawerMode] = useState<'open' | 'close' | null>(null);
@@ -207,9 +208,15 @@ export default function RegisterDesk({
     }
   }, [cashSession, pendingPay, settlement.total]);
 
-  const showNotice = (message: string) => {
-    setNotice(message);
-    window.setTimeout(() => setNotice(''), 2400);
+  const showNotice = (message: string, tone: 'ok' | 'warn' = 'ok') => {
+    setNotice({ message, tone });
+    window.setTimeout(() => setNotice((current) => (current?.message === message ? null : current)), tone === 'ok' ? 1400 : 2400);
+  };
+
+  const confirmAdd = (id: string, name: string) => {
+    setAddedId(id);
+    showNotice(`Added ${name}`);
+    window.setTimeout(() => setAddedId((current) => (current === id ? '' : current)), 420);
   };
 
   const searchKeyDown = (key: string) => {
@@ -219,10 +226,11 @@ export default function RegisterDesk({
     const matches = products.filter((product) => product.stock > 0 && [product.sku, product.barcode].some((identifier) => identifier?.trim().toLowerCase() === scanned));
     if (matches.length === 1) {
       onAddProduct(matches[0].id);
+      confirmAdd(matches[0].id, matches[0].name);
       setQuery('');
       return;
     }
-    if (matches.length > 1) showNotice('More than one product uses this code.');
+    if (matches.length > 1) showNotice('More than one product uses this code.', 'warn');
   };
 
   const openPay = () => {
@@ -292,7 +300,7 @@ export default function RegisterDesk({
             ) : (
               <>
                 <strong>Drawer closed</strong>
-                <button type="button" className="primary" onClick={() => { setFloatAmount(String(suggestedFloat || 0)); setPendingPay(false); setDrawerMode('open'); }}>Open drawer</button>
+                <button type="button" className="edit-btn" onClick={() => { setFloatAmount(String(suggestedFloat || 0)); setPendingPay(false); setDrawerMode('open'); }}>Open drawer</button>
               </>
             )}
           </div>
@@ -302,14 +310,14 @@ export default function RegisterDesk({
             <button key={item} type="button" className={item === category ? 'active' : ''} onClick={() => setCategory(item)}>{item}</button>
           ))}
         </div>
-        {notice && <div className="pos-inline-notice">{notice}</div>}
+        {notice && <div className={`pos-inline-notice${notice.tone === 'warn' ? ' is-warn' : ''}`} role="status">{notice.message}</div>}
         <div className="pos-grid">
           {pageProducts.map((product, index) => {
             const out = product.stock <= 0;
             const low = product.stock > 0 && product.stock < reorderLevel(product);
             const onTicket = cart.find((item) => item.itemType === 'product' && item.itemId === product.id)?.qty || 0;
             return (
-              <button key={product.id} type="button" className={`pos-tile ${out ? 'is-out' : ''} ${onTicket ? 'is-in-cart' : ''}`} style={{ '--enter-delay': `${Math.min(index, 15) * 18}ms` } as React.CSSProperties} disabled={out} onClick={() => onAddProduct(product.id)}>
+              <button key={product.id} type="button" className={`pos-tile ${out ? 'is-out' : ''} ${onTicket ? 'is-in-cart' : ''} ${addedId === product.id ? 'is-just-added' : ''}`} style={{ '--enter-delay': `${Math.min(index, 15) * 18}ms` } as React.CSSProperties} disabled={out} onClick={() => { onAddProduct(product.id); confirmAdd(product.id, product.name); }}>
                 <span className="pos-tile-motion">
                   <span className="pos-photo" aria-hidden="true">
                     {product.image ? <img src={product.image} alt="" /> : <span>{product.name.slice(0, 1).toUpperCase()}</span>}
@@ -331,7 +339,7 @@ export default function RegisterDesk({
           {showServices && visibleServices.map((service, index) => {
             const onTicket = cart.find((item) => item.itemType === 'service' && item.itemId === service.id)?.qty || 0;
             return (
-              <button key={service.id} type="button" className={`pos-tile is-service ${onTicket ? 'is-in-cart' : ''}`} style={{ '--enter-delay': `${Math.min(pageProducts.length + index, 15) * 18}ms` } as React.CSSProperties} onClick={() => onAddService(service.id)}>
+              <button key={service.id} type="button" className={`pos-tile is-service ${onTicket ? 'is-in-cart' : ''} ${addedId === service.id ? 'is-just-added' : ''}`} style={{ '--enter-delay': `${Math.min(pageProducts.length + index, 15) * 18}ms` } as React.CSSProperties} onClick={() => { onAddService(service.id); confirmAdd(service.id, service.name); }}>
                 <span className="pos-tile-motion">
                   <span className="pos-photo" aria-hidden="true">
                     <span>S</span>
@@ -405,7 +413,8 @@ export default function RegisterDesk({
         <div className="pos-lines">
           {cart.length === 0 ? (
             <div className="pos-ticket-empty">
-              <p>Scan a barcode or tap a product to start a sale.</p>
+              <h3>Empty ticket</h3>
+              <p>Scan a barcode or tap a product. This ticket stays here until you hold it, clear it, or take payment.</p>
             </div>
           ) : cart.map((item) => {
             const lineImage = item.itemType === 'product' ? products.find((product) => product.id === item.itemId)?.image : undefined;
@@ -486,7 +495,7 @@ export default function RegisterDesk({
           <div className="pos-sheet" role="dialog" aria-modal="true" aria-labelledby="payment-title">
             <header>
               <div>
-                <p>Take payment</p>
+                <p>Amount due</p>
                 <h3 id="payment-title">{formatMoney(total)}</h3>
               </div>
               <button type="button" className="modal-close" onClick={() => setPaymentOpen(false)} aria-label="Close payment">×</button>
@@ -495,7 +504,10 @@ export default function RegisterDesk({
             <div className="pos-pay-main">
             <div className="pos-methods">
               {(Object.keys(PAYMENT_METHOD_LABELS) as PaymentMethod[]).map((method) => (
-                <button key={method} type="button" className={payment.method === method ? 'active' : ''} onClick={() => setPayment((prev) => ({ ...prev, method, cashTendered: method === 'cash' ? String(total) : prev.cashTendered }))}>{PAYMENT_METHOD_LABELS[method]}</button>
+                <button key={method} type="button" className={payment.method === method ? 'active' : ''} aria-pressed={payment.method === method} onClick={() => setPayment((prev) => ({ ...prev, method, cashTendered: method === 'cash' ? String(total) : prev.cashTendered }))}>
+                  {payment.method === method && <span className="pos-method-mark" aria-hidden="true">✓</span>}
+                  {PAYMENT_METHOD_LABELS[method]}
+                </button>
               ))}
             </div>
             <label className="pos-check">
@@ -512,13 +524,28 @@ export default function RegisterDesk({
                 </label>
                 <label>
                   Second amount
-                  <input type="number" min={1} max={total - 1} value={payment.secondAmount} onChange={(event) => setPayment((prev) => ({ ...prev, secondAmount: event.target.value }))} />
+                  <input className={payment.secondAmount !== '' && !splitValid ? 'is-invalid' : ''} aria-invalid={payment.secondAmount !== '' && !splitValid} type="number" min={1} max={total - 1} value={payment.secondAmount} onChange={(event) => setPayment((prev) => ({ ...prev, secondAmount: event.target.value }))} />
+                  {payment.secondAmount !== '' && !splitValid && <span className="field-error">The two amounts have to add up to {formatMoney(total)}.</span>}
                 </label>
                 <p>{PAYMENT_METHOD_LABELS[payment.method]} takes {formatMoney(Math.max(0, primaryAmount))}.</p>
               </div>
             )}
+            {needsCustomer && (
+              <label className="pos-account-customer">
+                Customer name
+                <input
+                  className={customerName.trim() ? '' : 'is-invalid'}
+                  value={customerName}
+                  aria-invalid={!customerName.trim()}
+                  aria-describedby={customerName.trim() ? undefined : 'account-name-error'}
+                  placeholder="Who is this account for?"
+                  onChange={(event) => onCustomer({ customerName: event.target.value })}
+                />
+                {!customerName.trim() && <span className="field-error" id="account-name-error">Enter the customer name before putting this sale on account.</span>}
+              </label>
+            )}
             {cashIsPrimary && (
-              <div className="pos-due-readout">
+              <div className={`pos-due-readout${cashTendered >= primaryAmount ? '' : ' is-short'}`}>
                 <span>Cash received</span>
                 <strong>{formatMoney(cashTendered)}</strong>
                 <em>{cashTendered >= primaryAmount ? `Change ${formatMoney(cashTendered - primaryAmount)}` : `Still short ${formatMoney(primaryAmount - cashTendered)}`}</em>
@@ -531,7 +558,6 @@ export default function RegisterDesk({
               </label>
             )}
             <p className="pos-pay-note">Card, mobile money, and bank payments are saved on the sale. AlphaPOS does not charge the customer’s account or card.</p>
-            {needsCustomer && !customerName.trim() && <p className="pos-pay-warning">Enter the customer name before putting a sale on account.</p>}
             </div>
             {cashIsPrimary && (
               <div className="pos-cashbox">
@@ -541,10 +567,10 @@ export default function RegisterDesk({
                 </div>
                 <div className="pos-numpad">
                   {['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '00', '←'].map((key) => (
-                    <button key={key} type="button" onClick={() => setPayment((prev) => {
+                    <button key={key} type="button" aria-label={key === '←' ? 'Delete last digit' : undefined} onClick={() => setPayment((prev) => {
                       if (key === '←') return { ...prev, cashTendered: prev.cashTendered.slice(0, -1) };
                       return { ...prev, cashTendered: `${prev.cashTendered === '0' ? '' : prev.cashTendered}${key}`.slice(0, 9) };
-                    })}>{key}</button>
+                    })}>{key === '←' ? 'Del' : key}</button>
                   ))}
                 </div>
               </div>
