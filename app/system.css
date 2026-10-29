@@ -1029,6 +1029,140 @@ button.primary.pos-charge {
   .pos-actions .pos-pay { grid-column: 1 / -1; }
   .stat-card strong,
   .today-figure { font-size: 24px !important; }
+
+  html, body {
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+  .app,
+  .main,
+  .main > section {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    box-sizing: border-box;
+  }
+  .main { overflow-x: hidden !important; }
+  .table-wrap {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+  .data-table { min-width: 0 !important; }
+  .data-table thead {
+    position: absolute !important;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+  .data-table,
+  .data-table tbody { display: block; width: 100%; }
+  .data-table tbody tr {
+    display: block;
+    padding: 12px 14px;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  }
+  .data-table tbody td {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 10px;
+    width: auto !important;
+    max-width: none !important;
+    padding: 4px 0 !important;
+    border: 0 !important;
+    text-align: right;
+    position: static;
+    white-space: normal;
+  }
+  .data-table tbody td::before {
+    content: attr(data-label);
+    flex: 0 0 42%;
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 600;
+    text-align: left;
+  }
+  .data-table tbody td[colspan],
+  .data-table tbody td[data-label=""] {
+    display: block;
+    text-align: center;
+  }
+  .data-table tbody td[colspan]::before,
+  .data-table tbody td[data-label=""]::before { content: none; }
+  .data-table tbody td[data-label=""]:empty { display: none; }
+  .data-table tbody td[data-label=""] .edit-btn,
+  .data-table tbody td[data-label=""] .delete-btn { margin: 6px 6px 0 0; }
+
+  .sidebar {
+    height: 100dvh !important;
+    max-height: 100dvh !important;
+    display: flex !important;
+    flex-direction: column !important;
+    overflow: hidden !important;
+    padding-bottom: max(8px, env(safe-area-inset-bottom));
+  }
+  .sidebar-nav {
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+    overflow-y: auto !important;
+  }
+  .sidebar-footer { flex: none; background: var(--bg) !important; }
+  .mobile-menu-toggle {
+    min-height: 44px !important;
+    padding: 0 14px !important;
+  }
+  .nav-button,
+  .logout-button,
+  .user-chip {
+    min-height: 44px !important;
+  }
+
+  .today-board .studio-top {
+    flex-direction: column !important;
+    align-items: stretch !important;
+  }
+  .today-board .studio-controls {
+    flex-direction: row !important;
+    align-items: stretch !important;
+    width: 100% !important;
+  }
+  .today-board .studio-controls select,
+  .today-board .studio-controls button {
+    flex: 1 1 0;
+    width: auto !important;
+    min-width: 0 !important;
+    min-height: 44px !important;
+  }
+  .page-tools-actions {
+    width: 100% !important;
+    justify-content: stretch !important;
+  }
+  .page-tools-actions > button,
+  .page-tools > .primary {
+    flex: 1 1 0;
+    width: auto !important;
+    min-height: 44px !important;
+  }
+  .pane-switch { max-width: 100%; }
+  .pane-switch button { min-height: 40px !important; }
+  .stock-worth { max-width: 100%; }
+  .stock-worth strong,
+  .stat-note { overflow-wrap: anywhere; }
+  .settings-nav button { min-height: 40px !important; }
+  .period-summary span { color: var(--text-muted) !important; }
+  .period-summary span.is-negative { color: var(--danger) !important; }
+  .notification-toast,
+  .notification-toast.success,
+  .notification-toast.error,
+  .notification-toast.info {
+    top: 76px !important;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
