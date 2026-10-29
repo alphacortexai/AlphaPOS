@@ -1284,3 +1284,175 @@ button.primary.pos-charge {
     transition: none !important;
   }
 }
+
+/* One material for chrome, one for content. Spacing stays on an 8-point rhythm. */
+:root {
+  --material-chrome: rgba(246, 246, 248, 0.78);
+  --material-sheet: rgba(255, 255, 255, 0.88);
+  --material-content: #ffffff;
+  --separator: rgba(60, 60, 67, 0.12);
+}
+
+.sidebar,
+.main-header {
+  background: var(--material-chrome) !important;
+  backdrop-filter: saturate(180%) blur(24px);
+  -webkit-backdrop-filter: saturate(180%) blur(24px);
+  border-color: var(--separator) !important;
+}
+.main-header {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  padding-top: max(14px, env(safe-area-inset-top));
+  border-bottom: 0.5px solid var(--separator) !important;
+  box-shadow: none !important;
+}
+.main.main-register .main-header { padding-top: max(8px, env(safe-area-inset-top)); }
+html { scroll-padding-top: 76px; }
+
+.card,
+.stat-card,
+.shelf-card,
+.table-wrap,
+.kpi,
+.report-grid > .card,
+.pos-tile-motion,
+.auth-container .auth-card {
+  background: var(--material-content) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border: 0 !important;
+  border-radius: 16px !important;
+  box-shadow: 0 0 0 0.5px var(--separator) !important;
+}
+.modal-content,
+.pos-sheet,
+.notification-toast,
+.notification-toast.success,
+.notification-toast.error,
+.notification-toast.info {
+  background: var(--material-sheet) !important;
+  backdrop-filter: saturate(180%) blur(28px);
+  -webkit-backdrop-filter: saturate(180%) blur(28px);
+  border: 0 !important;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.16), 0 0 0 0.5px var(--separator) !important;
+}
+
+.enter,
+.card,
+.stat-card,
+.stat-card strong,
+.shelf-card,
+.shelf-body h3,
+.today-figure,
+.pos-line,
+.pos-line-top strong,
+.auth-card,
+.auth-kicker,
+.auth-copy h1,
+.auth-copy p,
+.main-header h1,
+.studio-top h2 {
+  animation: none !important;
+}
+button,
+.nav-button,
+.pos-categories button,
+.pane-switch button {
+  transition: background-color 160ms ease, color 160ms ease, opacity 160ms ease !important;
+}
+
+.today-board,
+.main:not(.main-register) > section {
+  gap: 16px;
+}
+.today-numbers,
+.today-board .today-actions { gap: 12px; }
+.stat-card,
+.main > section > .card,
+.report-grid > .card { padding: 16px 18px !important; }
+.field,
+.filter-group { gap: 6px; }
+.attention-list li,
+.shift-list li {
+  padding: 10px 0;
+  border-bottom: 0.5px solid var(--separator);
+}
+.attention-list li:last-child,
+.shift-list li:last-child { border-bottom: 0; }
+.auth-kicker,
+.pos-ticket-head p,
+.pos-sheet header p {
+  text-transform: none !important;
+  letter-spacing: -0.008em !important;
+  font-weight: 600 !important;
+}
+.pager,
+.shelf-pager {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+}
+.auth-container .auth-card {
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.08), 0 0 0 0.5px var(--separator) !important;
+}
+.auth-container { padding: max(32px, env(safe-area-inset-top)) 20px max(32px, env(safe-area-inset-bottom)) !important; }
+
+.main:has(> section.shelf-page) {
+  height: auto !important;
+  max-height: none !important;
+  overflow: visible !important;
+}
+.main > section.shelf-page,
+.shelf-page .shelf-grid {
+  height: auto !important;
+  max-height: none !important;
+  overflow: visible !important;
+}
+
+@media (max-width: 768px) {
+  .main-header,
+  .main-register .main-header {
+    padding-top: max(4px, env(safe-area-inset-top));
+    padding-left: max(12px, env(safe-area-inset-left)) !important;
+    padding-right: max(16px, env(safe-area-inset-right)) !important;
+  }
+  .main:not(.main-register) > section {
+    padding-left: 16px !important;
+    padding-right: 16px !important;
+    padding-bottom: max(32px, env(safe-area-inset-bottom)) !important;
+  }
+  .shelf-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 10px !important;
+  }
+  .shelf-card { gap: 8px !important; padding: 8px !important; }
+  .shelf-photo { height: 84px !important; }
+  .shelf-body h3 { font-size: 15px !important; line-height: 1.25 !important; }
+  .shelf-prices {
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    gap: 2px !important;
+  }
+  .shelf-prices strong,
+  .shelf-prices span { white-space: normal !important; }
+  .shelf-actions .edit-btn,
+  .shelf-actions .delete-btn {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 36px !important;
+    padding: 0 4px !important;
+  }
+  .today-numbers,
+  .today-board .today-actions { grid-template-columns: 1fr !important; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
