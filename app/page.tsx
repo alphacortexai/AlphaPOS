@@ -3312,6 +3312,7 @@ export default function Page() {
           <RegisterDesk
             products={products}
             services={services}
+            sales={sales}
             cart={cart}
             customers={customers}
             heldTickets={heldTickets.map((ticket) => ({

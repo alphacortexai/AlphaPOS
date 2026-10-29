@@ -3590,3 +3590,185 @@ input:focus, select:focus, textarea:focus { box-shadow: 0 0 0 3px rgba(31, 107, 
 .shop-confirm { margin-top: 0.75rem; padding: 0.85rem; border-radius: 12px; background: #f4f3f0; }
 .shop-confirm p { margin: 0 0 0.75rem; }
 .shop-confirm-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+
+/* Denser counter and a short rise when cards, tiles, and headings first appear. */
+html { font-size: 15px; }
+body { line-height: 1.45; }
+
+.sidebar { width: 208px; padding: 0.75rem 0.6rem; }
+.sell-launch { min-height: 44px; padding: 0.62rem 0.72rem; }
+.nav-button { padding: 0.42rem 0.55rem; }
+.main-header { padding: 0.55rem 1rem !important; }
+.main-header h1 { font-size: 1.05rem !important; }
+.main > section { padding: 0.25rem 1rem 1.5rem; }
+.main-register .main-header { padding: 0.32rem 0.7rem !important; }
+.card { padding: 0.75rem; }
+.stat-card { padding: 0.72rem 0.8rem; }
+.stat-card strong { font-size: 1.28rem; }
+.today-figure { font-size: 1.4rem; }
+.studio-top h2 { font-size: 1.2rem; }
+.auth-copy h1 { font-size: clamp(2.15rem, 4.4vw, 3.55rem); }
+.auth-copy p:last-child { font-size: 0.98rem; }
+.auth-container .auth-card { padding: 1.35rem 1.15rem 1.05rem; }
+.auth-container .auth-card h2 { font-size: 1.4rem; }
+.auth-action { min-height: 44px; padding: 0.75rem 0.9rem; }
+
+.pos-toolbar { gap: 0.5rem; padding: 0.5rem 0.65rem 0.15rem; }
+.pos-search input { min-height: 42px; font-size: 0.92rem; padding: 0.5rem 0.7rem; }
+.pos-session { min-height: 42px; gap: 0.4rem; padding: 0.25rem 0.4rem 0.25rem 0.6rem; }
+.pos-categories { gap: 0.28rem; padding: 0.32rem 0.65rem 0.4rem; }
+.pos-categories button { min-height: 32px; padding: 0.28rem 0.58rem; font-size: 0.76rem; }
+.pos-grid {
+  grid-template-columns: repeat(auto-fill, minmax(156px, 1fr));
+  gap: 0.55rem;
+  padding: 0 0.7rem 0.6rem;
+}
+.pos-tile { gap: 0.32rem; padding: 0.3rem; border-radius: 12px; }
+.pos-photo { height: 80px; border-radius: 10px; font-size: 1.35rem; }
+.pos-tile-copy { gap: 0.06rem; padding: 0 0.24rem 0.28rem; }
+.pos-tile-name { font-size: 0.9rem; line-height: 1.25; }
+.pos-tile-foot { margin-top: 0.1rem; font-size: 0.78rem; }
+.pos-tile-foot strong { font-size: 0.88rem; }
+.pos-pager { padding: 0.4rem 0.65rem; font-size: 0.78rem; }
+.pos-ticket-head,
+.pos-ticket-foot,
+.pos-customer { padding: 0.55rem 0.7rem; }
+.pos-line { padding: 0.5rem 0.1rem; }
+.pos-stepper button { width: 40px; height: 40px; }
+.pos-actions .edit-btn { min-height: 44px; }
+.pos-pay, .pos-charge { min-height: 46px; }
+.pos-total-row.is-due strong { font-size: 1.2rem; }
+.shelf-grid { grid-template-columns: repeat(auto-fill, minmax(196px, 1fr)); gap: 0.6rem; }
+.shelf-card { gap: 0.45rem; padding: 0.5rem; border-radius: 12px; }
+.shelf-photo { height: 96px; }
+.shelf-body h3 { font-size: 0.95rem; }
+
+@media (min-width: 1180px) {
+  .pos-register { grid-template-columns: minmax(0, 1fr) minmax(304px, 352px); }
+}
+
+@keyframes enter-rise {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: var(--enter-opacity, 1); transform: translateY(0); }
+}
+
+.enter,
+.card,
+.stat-card,
+.shelf-card,
+.auth-card,
+.auth-kicker,
+.auth-copy h1,
+.auth-copy p,
+.auth-container .auth-card h2,
+.auth-container .auth-card p,
+.main-header h1,
+.pos-ticket-head h2,
+.studio-top h2,
+.shelf-body h3,
+.pos-empty h3,
+.today-figure {
+  animation: enter-rise 280ms ease-out backwards;
+  animation-delay: var(--enter-delay, 0ms);
+}
+
+.stat-card strong,
+.shelf-body h3 {
+  animation: enter-rise 220ms ease-out backwards;
+  animation-delay: calc(var(--enter-delay, 0ms) + 45ms);
+}
+
+.pos-tile-motion,
+.pos-tile-name,
+.pos-tile-foot,
+.pos-line {
+  animation: none;
+  transition: opacity 280ms ease-out, transform 280ms ease-out;
+  transition-delay: var(--enter-delay, 0ms);
+}
+.pos-tile-name,
+.pos-tile-foot,
+.pos-line-top strong {
+  transition-duration: 220ms;
+  transition-delay: calc(var(--enter-delay, 0ms) + 45ms);
+}
+@starting-style {
+  .pos-tile-motion,
+  .pos-tile-name,
+  .pos-tile-foot,
+  .pos-line,
+  .pos-line-top strong {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+.pos-tile { animation: none; background: transparent; border-color: transparent; box-shadow: none; padding: 0; }
+.pos-tile-motion {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.32rem;
+  width: 100%;
+  padding: 0.3rem;
+  border: 1px solid #e7e5e4;
+  border-radius: 12px;
+  background: #fff;
+}
+.pos-tile.is-in-cart .pos-tile-motion { border-color: #1f6b45; box-shadow: 0 0 0 1px #1f6b45; }
+.pos-tile:hover:not(:disabled) .pos-tile-motion { border-color: #1f6b45; }
+.pos-tile:disabled,
+.pos-tile.is-out { opacity: 1; }
+.pos-tile.is-out .pos-tile-motion { opacity: 0.55; --enter-opacity: 0.55; }
+.shelf-card.is-out { --enter-opacity: 0.72; }
+.auth-copy .auth-kicker { --enter-delay: 0ms; }
+.auth-copy h1,
+.auth-container .auth-card h2,
+.pos-ticket-head h2 { --enter-delay: 50ms; }
+.auth-copy p,
+.auth-container .auth-card p { --enter-delay: 100ms; }
+
+.shelf-grid > .shelf-card:nth-child(2),
+.pos-lines > .pos-line:nth-child(2) { --enter-delay: 16ms; }
+.shelf-grid > .shelf-card:nth-child(3),
+.pos-lines > .pos-line:nth-child(3) { --enter-delay: 32ms; }
+.shelf-grid > .shelf-card:nth-child(4),
+.pos-lines > .pos-line:nth-child(4) { --enter-delay: 48ms; }
+.shelf-grid > .shelf-card:nth-child(5),
+.pos-lines > .pos-line:nth-child(5) { --enter-delay: 64ms; }
+.shelf-grid > .shelf-card:nth-child(6),
+.pos-lines > .pos-line:nth-child(6) { --enter-delay: 80ms; }
+.shelf-grid > .shelf-card:nth-child(7) { --enter-delay: 96ms; }
+.shelf-grid > .shelf-card:nth-child(8) { --enter-delay: 112ms; }
+
+@media (prefers-reduced-motion: reduce) {
+  .enter,
+  .pos-tile-motion,
+  .pos-tile,
+  .pos-tile-name,
+  .pos-tile-foot,
+  .card,
+  .stat-card,
+  .stat-card strong,
+  .shelf-card,
+  .shelf-body h3,
+  .pos-line,
+  .pos-tile-motion,
+  .pos-tile-name,
+  .pos-tile-foot,
+  .pos-line-top strong,
+  .auth-card,
+  .auth-kicker,
+  .auth-copy h1,
+  .auth-copy p,
+  .auth-container .auth-card h2,
+  .auth-container .auth-card p,
+  .main-header h1,
+  .pos-ticket-head h2,
+  .studio-top h2,
+  .pos-empty h3,
+  .today-figure {
+    animation: none !important;
+    transition: none !important;
+  }
+}
