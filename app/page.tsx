@@ -3072,19 +3072,19 @@ export default function Page() {
               <small>{authUser.email === 'counter@this-device' ? 'Saved in this browser' : authUser.email}</small>
             </span>
           </button>
-          <button className="logout-button" onClick={handleLogout}>Sign Out</button>
+          <button className="logout-button" onClick={handleLogout}>Sign out</button>
         </div>
-
-        {notification && (
-          <div className={`notification-toast ${notification.type}`}>
-            <div className="notification-content">
-              <span className={`notification-icon ${notification.type}`} aria-hidden="true" />
-              <span className="notification-message">{notification.message}</span>
-            </div>
-            <button className="notification-close" onClick={() => setNotification(null)} aria-label="Dismiss notification">✕</button>
-          </div>
-        )}
       </aside>
+
+      {notification && (
+        <div className={`notification-toast ${notification.type}`} role="status">
+          <div className="notification-content">
+            <span className={`notification-icon ${notification.type}`} aria-hidden="true" />
+            <span className="notification-message">{notification.message}</span>
+          </div>
+          <button className="notification-close" onClick={() => setNotification(null)} aria-label="Dismiss notification">✕</button>
+        </div>
+      )}
 
       <main className={`main${view === 'sales' ? ' main-register' : ''}`}>
         <header className="main-header">
@@ -3930,7 +3930,7 @@ export default function Page() {
                 <h4>Today</h4>
                 <div className="metric-stack">
                   <div><span>Sales</span><strong>{formatUGX(getMetrics('day', 0).revenue)}</strong></div>
-                  <div><span>Expenses</span><strong className="is-negative">{formatUGX(getMetrics('day', 0).expenseTotal)}</strong></div>
+                  <div><span>Expenses</span><strong className={getMetrics('day', 0).expenseTotal > 0 ? 'is-negative' : ''}>{formatUGX(getMetrics('day', 0).expenseTotal)}</strong></div>
                   <div><span>Net profit</span><strong className={getMetrics('day', 0).netProfit >= 0 ? 'is-positive' : 'is-negative'}>{formatUGX(getMetrics('day', 0).netProfit)}</strong></div>
                 </div>
               </div>
@@ -3938,7 +3938,7 @@ export default function Page() {
                 <h4>This week</h4>
                 <div className="metric-stack">
                   <div><span>Sales</span><strong>{formatUGX(getMetrics('week', 0).revenue)}</strong></div>
-                  <div><span>Expenses</span><strong className="is-negative">{formatUGX(getMetrics('week', 0).expenseTotal)}</strong></div>
+                  <div><span>Expenses</span><strong className={getMetrics('week', 0).expenseTotal > 0 ? 'is-negative' : ''}>{formatUGX(getMetrics('week', 0).expenseTotal)}</strong></div>
                   <div><span>Net profit</span><strong className={getMetrics('week', 0).netProfit >= 0 ? 'is-positive' : 'is-negative'}>{formatUGX(getMetrics('week', 0).netProfit)}</strong></div>
                 </div>
               </div>
@@ -3946,7 +3946,7 @@ export default function Page() {
                 <h4>This month</h4>
                 <div className="metric-stack">
                   <div><span>Sales</span><strong>{formatUGX(getMetrics('month', 0).revenue)}</strong></div>
-                  <div><span>Expenses</span><strong className="is-negative">{formatUGX(getMetrics('month', 0).expenseTotal)}</strong></div>
+                  <div><span>Expenses</span><strong className={getMetrics('month', 0).expenseTotal > 0 ? 'is-negative' : ''}>{formatUGX(getMetrics('month', 0).expenseTotal)}</strong></div>
                   <div><span>Net profit</span><strong className={getMetrics('month', 0).netProfit >= 0 ? 'is-positive' : 'is-negative'}>{formatUGX(getMetrics('month', 0).netProfit)}</strong></div>
                 </div>
               </div>
