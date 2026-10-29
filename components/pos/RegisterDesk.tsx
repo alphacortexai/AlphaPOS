@@ -505,6 +505,21 @@ export default function RegisterDesk({
         </footer>
       </aside>
 
+      <div className={`pos-sale-bar${cart.length === 0 ? ' is-empty' : ''}`}>
+        <button
+          type="button"
+          className="pos-sale-jump"
+          onClick={() => {
+            const behavior = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+            document.querySelector('.pos-ticket')?.scrollIntoView({ behavior, block: 'start' });
+          }}
+        >
+          <span>{cart.length === 0 ? 'Nothing yet' : `${cart.length} item${cart.length === 1 ? '' : 's'}`}</span>
+          <strong>{formatMoney(settlement.total)}</strong>
+        </button>
+        <button type="button" className="primary pos-pay" disabled={cart.length === 0} onClick={openPay}>Pay</button>
+      </div>
+
       {paymentOpen && (
         <div className="pos-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setPaymentOpen(false); }}>
           <div className="pos-sheet" role="dialog" aria-modal="true" aria-labelledby="payment-title" tabIndex={-1} ref={paymentRef}>
