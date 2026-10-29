@@ -754,6 +754,7 @@ a:focus-visible,
   border-left: 1px solid rgba(0, 0, 0, 0.06) !important;
   box-shadow: none !important;
 }
+.pos-sale-bar { display: none; }
 .pos-ticket-head h2 { font-size: 20px !important; font-weight: 700 !important; letter-spacing: -0.03em; color: var(--text) !important; }
 .pos-ticket-head p { color: var(--text-muted) !important; font-size: 12px !important; font-weight: 600 !important; letter-spacing: 0.04em; text-transform: uppercase; }
 .pos-line,
@@ -851,10 +852,73 @@ button.primary.pos-charge {
     overflow: visible !important;
   }
   .pos-ticket {
+    order: 2;
     min-height: 0 !important;
     height: auto !important;
-    border-left: 0 !important;
-    border-top: 1px solid rgba(0, 0, 0, 0.06) !important;
+    margin: 8px 12px 0;
+    border: 0 !important;
+    border-radius: 18px;
+    scroll-margin-top: 64px;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.04);
+  }
+  .pos-ticket-head { order: 1; }
+  .pos-lines { order: 2; }
+  .pos-customer { order: 3; }
+  .pos-ticket-foot { order: 4; }
+  .pos-ticket-foot .pos-pay { display: none !important; }
+  .pos-register { padding-bottom: 92px !important; }
+  .pos-sale-bar {
+    display: flex;
+    position: fixed;
+    z-index: 30;
+    left: 12px;
+    right: 12px;
+    bottom: calc(10px + env(safe-area-inset-bottom));
+    align-items: center;
+    gap: 10px;
+    min-height: 64px;
+    padding: 8px 8px 8px 16px;
+    border-radius: 20px;
+    background: rgba(255, 255, 255, 0.94);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.16), 0 0 0 0.5px rgba(0, 0, 0, 0.08);
+    backdrop-filter: saturate(180%) blur(20px);
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
+  }
+  .pos-sale-bar.is-empty,
+  .pos-register:has(.pos-overlay) .pos-sale-bar { display: none !important; }
+  .pos-sale-jump {
+    flex: 1;
+    display: flex;
+    flex-direction: row;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    min-width: 0;
+    min-height: 44px;
+    padding: 0 4px 0 0;
+    border: 0;
+    background: transparent;
+    color: var(--text);
+    text-align: left;
+  }
+  .pos-sale-jump span {
+    color: var(--text-muted);
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .pos-sale-jump strong {
+    color: var(--text);
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    font-variant-numeric: tabular-nums;
+  }
+  .pos-sale-bar .pos-pay {
+    flex: none;
+    width: auto !important;
+    min-width: 108px;
+    min-height: 44px !important;
+    border-radius: 14px !important;
   }
 }
 
