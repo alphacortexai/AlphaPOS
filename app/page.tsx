@@ -2498,7 +2498,7 @@ export default function Page() {
 
   const salesHistoryPageSize = 8;
   const sharedTablePageSize = 10;
-  const shelfPageSize = 4;
+  const shelfPageSize = 24;
   const groupedSales = useMemo(() => {
     const groups = new Map<string, Sale[]>();
     filteredSales.forEach((sale) => {
