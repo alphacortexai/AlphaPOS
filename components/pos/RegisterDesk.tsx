@@ -133,10 +133,12 @@ export default function RegisterDesk({
   onOpenDrawer: (openingFloat: number) => void;
   onCloseDrawer: (countedCash: number, note: string) => void;
   onClear: () => void;
-  onPay: (tenders: Tender[]) => void;
+  onPay: (tenders: Tender[]) => boolean;
   onCreateProduct: () => void;
 }) {
   const searchRef = useRef<HTMLInputElement>(null);
+  const paymentRef = useRef<HTMLDivElement>(null);
+  const payLock = useRef(false);
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState('All');
   const [catalogPage, setCatalogPage] = useState(1);
@@ -198,6 +200,19 @@ export default function RegisterDesk({
   useEffect(() => {
     searchRef.current?.focus();
   }, []);
+
+  useEffect(() => {
+    if (!paymentOpen && !drawerMode && !heldOpen) return;
+    if (paymentOpen) paymentRef.current?.focus();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      if (paymentOpen) setPaymentOpen(false);
+      else if (drawerMode) { setDrawerMode(null); setPendingPay(false); }
+      else setHeldOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [paymentOpen, drawerMode, heldOpen]);
 
   useEffect(() => {
     if (pendingPay && cashSession) {
@@ -328,7 +343,7 @@ export default function RegisterDesk({
                     <span className="pos-tile-name">{product.name}</span>
                     <span className="pos-tile-foot">
                       <strong>{formatMoney(product.salePrice)}</strong>
-                      <em className={low ? 'is-low' : ''}>{out ? 'Out' : product.stock}</em>
+                      <em className={out ? 'is-out' : low ? 'is-low' : ''}>{out ? 'Out of stock' : low ? `${product.stock} low` : `${product.stock} in stock`}</em>
                     </span>
                     {Object.keys(branchNames).length > 1 && <span className="pos-tile-meta">{branchNames[product.branchId]}</span>}
                   </span>
@@ -492,7 +507,7 @@ export default function RegisterDesk({
 
       {paymentOpen && (
         <div className="pos-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setPaymentOpen(false); }}>
-          <div className="pos-sheet" role="dialog" aria-modal="true" aria-labelledby="payment-title">
+          <div className="pos-sheet" role="dialog" aria-modal="true" aria-labelledby="payment-title" tabIndex={-1} ref={paymentRef}>
             <header>
               <div>
                 <p>Amount due</p>
@@ -577,10 +592,13 @@ export default function RegisterDesk({
             )}
             </div>
             <button type="button" className="primary pos-charge" disabled={!canCharge} onClick={() => {
+              if (payLock.current) return;
               const tenders = buildTenders();
               if (!tenders) return;
-              onPay(tenders);
-              setPaymentOpen(false);
+              payLock.current = true;
+              const completed = onPay(tenders);
+              payLock.current = false;
+              if (completed) setPaymentOpen(false);
             }}>Charge {formatMoney(total)}</button>
           </div>
         </div>
