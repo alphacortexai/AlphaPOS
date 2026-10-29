@@ -1974,32 +1974,32 @@ export default function Page() {
   const completeRegisterSale = (tenders: Tender[]) => {
     if (cart.length === 0) {
       showNotification('Cart is empty', 'error');
-      return;
+      return false;
     }
     if (!openCashSession) {
       showNotification('Open the drawer before taking payment.', 'error');
-      return;
+      return false;
     }
     if (cart.some((item) => !Number.isFinite(item.qty) || item.qty <= 0)) {
       showNotification('Sale quantities must be greater than zero.', 'error');
-      return;
+      return false;
     }
     if (!selectedSaleAccountId) {
       showNotification('Please create an account first (CASH is created by default).', 'error');
-      return;
+      return false;
     }
     if (!tendersCoverTotal(tenders, registerQuote.total)) {
       showNotification('The payment does not match the amount due.', 'error');
-      return;
+      return false;
     }
     if (tenders.some((tender) => tender.method === 'on_account') && !checkoutDetails.customerName.trim()) {
       showNotification('Enter a customer name for an on-account sale.', 'error');
-      return;
+      return false;
     }
     const insufficientItem = cart.find((item) => item.itemType === 'product' && (products.find((product) => product.id === item.itemId)?.stock ?? 0) < item.qty);
     if (insufficientItem) {
       showNotification(`Not enough stock for "${insufficientItem.itemName}".`, 'error');
-      return;
+      return false;
     }
     const soldAt = new Date();
     const receiptNumber = nextDocumentNumber(sales, receiptPrefix(soldAt, 'sale'));
@@ -2049,10 +2049,11 @@ export default function Page() {
     setActiveReceipt(receiptFromSaleLines(newSales, 'sale'));
     clearRegister();
     if (showRegisterMargin && saleMargin < 0) {
-      showNotification(`${receiptNumber} is below cost. Margin ${formatUGX(saleMargin)}.`, 'error', 6000);
+      showNotification(`${receiptNumber} completed. Margin ${formatUGX(saleMargin)} is below cost.`, 'info', 6000);
     } else {
       showNotification(`${receiptNumber} completed.`, 'success');
     }
+    return true;
   };
 
   const issueReturn = (quantities: Record<string, number>, method: PaymentMethod, reference: string) => {
@@ -2564,14 +2565,16 @@ export default function Page() {
   const activityLogsPagination = paginateData(activityLogs, activityLogsPage, setActivityLogsPage);
 
   const PaginationControls = ({ totalItems, totalPages, page, start, end, onPrevious, onNext, className = '' }: { totalItems: number; totalPages: number; page: number; start: number; end: number; onPrevious: () => void; onNext: () => void; className?: string }) => (
-    <div className={`pager ${className}`.trim()}>
-      <span>Showing {totalItems === 0 ? 0 : start + 1}–{end} of {totalItems}</span>
-      <div className="pager-actions">
-        <button className="edit-btn" disabled={page <= 1} onClick={onPrevious}>Previous</button>
-        <span>Page {page} / {totalPages}</span>
-        <button className="edit-btn" disabled={page >= totalPages} onClick={onNext}>Next</button>
+    totalItems === 0 ? null : (
+      <div className={`pager ${className}`.trim()}>
+        <span>Showing {start + 1}–{end} of {totalItems}</span>
+        <div className="pager-actions">
+          <button className="edit-btn" disabled={page <= 1} onClick={onPrevious}>Previous</button>
+          <span>Page {page} / {totalPages}</span>
+          <button className="edit-btn" disabled={page >= totalPages} onClick={onNext}>Next</button>
+        </div>
       </div>
-    </div>
+    )
   );
 
   const canManageUsers = (role === 'shop_owner' || role === 'admin') && activeShopOwnerUid === authUser?.uid;
@@ -2636,6 +2639,7 @@ export default function Page() {
       setStatus('Only the shop owner or admin can delete expenses.');
       return;
     }
+    if (!window.confirm('Delete this expense?')) return;
     setExpenses((prev) => prev.filter((expense) => expense.id !== id));
     logActivity('delete_expense', `Deleted expense id "${id}"`);
     showNotification('Expense deleted successfully!', 'success');
@@ -2702,6 +2706,7 @@ export default function Page() {
       showNotification('You must have at least one branch!', 'error');
       return;
     }
+    if (!window.confirm('Delete this branch? Sales and stock already recorded stay on their original branch.')) return;
     setBranches((prev) => prev.filter((b) => b.id !== id));
     logActivity('delete_branch', `Deleted branch id "${id}"`);
     showNotification('Branch deleted successfully!', 'success');
@@ -3076,7 +3081,7 @@ export default function Page() {
               <span className={`notification-icon ${notification.type}`} aria-hidden="true" />
               <span className="notification-message">{notification.message}</span>
             </div>
-            <button className="notification-close" onClick={() => setNotification(null)}>✕</button>
+            <button className="notification-close" onClick={() => setNotification(null)} aria-label="Dismiss notification">✕</button>
           </div>
         )}
       </aside>
@@ -3267,7 +3272,7 @@ export default function Page() {
                       {p.category && <p className="shelf-meta">{p.category}</p>}
                       <div className="shelf-prices">
                         <strong>{formatUGX(p.salePrice)}</strong>
-                        <span>{p.stock === 0 ? 'Out' : p.stock}</span>
+                        <span>{p.stock === 0 ? 'Out of stock' : stockIsLow(p) ? `${p.stock} low` : `${p.stock} in stock`}</span>
                       </div>
                       {seesCost && p.purchasePrice > 0 && <p className="shelf-cost">Cost {formatUGX(p.purchasePrice)}</p>}
                     </div>
@@ -3275,6 +3280,7 @@ export default function Page() {
                       <button className="edit-btn" onClick={() => openProductForm({ ...blankProductForm(p.branchId), ...p, sku: p.sku || '', barcode: p.barcode || '', category: p.category || '', image: p.image || '', reorderPoint: p.reorderPoint ?? DEFAULT_REORDER_POINT })}>Edit</button>
                       <button className="edit-btn" onClick={() => restockProduct(p.id)}>Stock</button>
                       <button className="delete-btn" onClick={() => {
+                        if (!window.confirm(`Delete ${p.name}? This removes it from the shelf.`)) return;
                         if (p.stock > 0) logStockMovement(p, -p.stock, 'product_removed', 'Product removed from inventory');
                         setProducts(prev => prev.filter(x => x.id !== p.id));
                         logActivity('delete_inventory', `Deleted product "${p.name}"`);
@@ -3338,8 +3344,14 @@ export default function Page() {
                           <td style={{ fontWeight: 600, color: 'var(--text)' }}>{movement.productName}</td>
                           <td>{branchLabel}</td>
                           <td>{reasonLabels[movement.reason]}</td>
-                          <td style={{ color: movement.quantityDelta >= 0 ? 'var(--success)' : 'var(--danger)', fontWeight: 700 }}>
-                            {movement.reason === 'branch_transfer' ? 'Moved' : `${movement.quantityDelta > 0 ? '+' : ''}${movement.quantityDelta}`}
+                          <td>
+                            {movement.reason === 'branch_transfer' ? (
+                              <span className="qty-chip">Moved</span>
+                            ) : (
+                              <span className={`qty-chip ${movement.quantityDelta >= 0 ? 'is-in' : 'is-out'}`}>
+                                {movement.quantityDelta > 0 ? 'In' : 'Out'} {movement.quantityDelta > 0 ? `+${movement.quantityDelta}` : movement.quantityDelta}
+                              </span>
+                            )}
                           </td>
                           <td>{log.userEmail}</td>
                           <td>{movement.note || '—'}</td>
@@ -3423,8 +3435,8 @@ export default function Page() {
                     <th>Service</th>
                     <th>Branch</th>
                     <th>Type</th>
-                    <th>Price</th>
-                    <th>Cost Model</th>
+                    <th className="num">Price</th>
+                    <th className="num">Cost model</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
@@ -3434,8 +3446,8 @@ export default function Page() {
                       <td style={{ fontWeight: 600 }}>{service.name}</td>
                       <td>{branchMap[service.branchId]}</td>
                       <td>{service.serviceType === 'direct_cost' ? 'Each sale' : 'Monthly'}</td>
-                      <td>{formatUGX(service.salePrice)}</td>
-                      <td>
+                      <td className="num">{formatUGX(service.salePrice)}</td>
+                      <td className="num">
                         {service.serviceType === 'direct_cost'
                           ? formatUGX(service.directCost)
                           : `${formatUGX(service.monthlySharedCost)} / month`}
@@ -3450,7 +3462,7 @@ export default function Page() {
                           monthlySharedCost: service.monthlySharedCost || 0,
                           expenseGroupId: service.expenseGroupId || ''
                         }); setShowServiceModal(true); }}>Edit</button>
-                        <button className="delete-btn" onClick={() => { setServices((prev) => prev.filter((item) => item.id !== service.id)); logActivity('delete_service', `Deleted service "${service.name}"`); }}>Delete</button>
+                        <button className="delete-btn" onClick={() => { if (!window.confirm(`Delete ${service.name}?`)) return; setServices((prev) => prev.filter((item) => item.id !== service.id)); logActivity('delete_service', `Deleted service "${service.name}"`); }}>Delete</button>
                       </td>
                     </tr>
                   )) : (
@@ -3594,12 +3606,12 @@ export default function Page() {
                 <table className="data-table">
                   <thead>
                     <tr>
-                      <th>Date & Time</th>
+                      <th>Date and time</th>
                       <th>Receipt</th>
                       <th>Items</th>
                       <th>Customer / tender</th>
-                      <th>Total</th>
-                      <th>Margin</th>
+                      <th className="num">Total</th>
+                      <th className="num">Margin</th>
                       <th>Actions</th>
                     </tr>
                   </thead>
@@ -3621,8 +3633,8 @@ export default function Page() {
                               {saleGroup.paymentMethod ? PAYMENT_METHOD_LABELS[saleGroup.paymentMethod] : 'Tender not recorded'}
                             </div>
                           </td>
-                          <td style={{ fontWeight: 700 }}>{formatUGX(saleGroup.total)}</td>
-                          <td style={{ color: saleGroup.profit >= 0 ? 'var(--success)' : 'var(--danger)', fontWeight: 600 }}>{showRegisterMargin ? formatUGX(saleGroup.profit) : '—'}</td>
+                          <td className="num">{formatUGX(saleGroup.total)}</td>
+                          <td className={`num${saleGroup.profit < 0 ? ' is-negative' : ''}`}>{showRegisterMargin ? formatUGX(saleGroup.profit) : '—'}</td>
                           <td>
                             <button className="edit-btn" onClick={() => setActiveReceipt(receiptFromSaleLines(saleGroup.lines))}>Receipt</button>
                             {saleGroup.saleKind !== 'return' && <button className="edit-btn" onClick={() => setReturnTransactionId(saleGroup.id)}>Return</button>}
@@ -3752,11 +3764,11 @@ export default function Page() {
               <table className="data-table">
                 <thead>
                   <tr>
-                    <th>Date & Time</th>
-                    <th>Expense Title</th>
+                    <th>Date and time</th>
+                    <th>Expense</th>
                     <th>Branch</th>
-                    <th>Amount</th>
-                    <th>Expense Group</th>
+                    <th className="num">Amount</th>
+                    <th>Group</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
@@ -3767,7 +3779,7 @@ export default function Page() {
                         <td>{new Date(e.createdAt).toLocaleString()}</td>
                         <td style={{ fontWeight: 600 }}>{e.title}</td>
                         <td>{branchMap[e.branchId]}</td>
-                        <td style={{ color: 'var(--danger)', fontWeight: 600 }}>{formatUGX(e.amount)}</td>
+                        <td className="num">{formatUGX(e.amount)}</td>
                         <td>{e.expenseGroupId ? expenseGroupMap[e.expenseGroupId] || 'Unknown group' : 'Ungrouped'}</td>
                         <td>
                           {canManageSalesAndExpenses ? (
@@ -3836,7 +3848,7 @@ export default function Page() {
                             <td style={{ fontWeight: 600 }}>{u.name}</td>
                             <td>{u.email}</td>
                             <td>
-                              <span className={`badge ${u.role === 'manager' ? 'badge-warning' : 'badge-success'}`}>
+                              <span className="badge">
                                 {roleLabels[u.role] || u.role}
                               </span>
                             </td>
@@ -3846,6 +3858,7 @@ export default function Page() {
                               <button className="edit-btn" onClick={() => { setUserForm(u); setShowUserModal(true); }}>Edit</button>
                               <button className="edit-btn" onClick={() => { void emailStaffSignInLink(u.email, u.role).catch((error) => showNotification(staffSignInError(error), 'error', 7000)); }}>Email link</button>
                               <button className="delete-btn" onClick={() => {
+                                if (!window.confirm(`Remove ${u.name || u.email}? They lose access to this shop.`)) return;
                                 setUsers(prev => prev.filter(x => x.id !== u.id));
                                 if (db) void deleteDoc(doc(db, 'shopMemberships', `${activeShopOwnerUid}_${u.email.toLowerCase().trim()}`)).catch(() => undefined);
                                 logActivity('delete_user', `Removed user "${u.email}"`);
@@ -3995,7 +4008,7 @@ export default function Page() {
                   <tr>
                     <th>Customer</th>
                     <th>Phone</th>
-                    <th>On account</th>
+                    <th className="num">On account</th>
                     <th>Notes</th>
                     <th></th>
                   </tr>
@@ -4010,7 +4023,7 @@ export default function Page() {
                     <tr key={customer.id}>
                       <td style={{ fontWeight: 700 }}>{customer.name}</td>
                       <td>{customer.phone || '—'}</td>
-                      <td>{formatUGX(owed)}</td>
+                      <td className="num">{owed > 0 ? <span className="badge badge-warning">Due {formatUGX(owed)}</span> : formatUGX(owed)}</td>
                       <td>{customer.notes || '—'}</td>
                       <td>{owed > 0 && <button type="button" className="edit-btn" onClick={() => { setPaymentCustomer(customer); setPaymentDraft({ amount: String(owed), method: 'cash' }); }}>Record payment</button>}</td>
                     </tr>
@@ -4062,21 +4075,19 @@ export default function Page() {
 
             {settingsTab === 'branches' && (
               <div>
-                <div style={{ marginBottom: '2rem' }}>
+                <div className="page-tools">
                   {isShopOwner && (
-                    <button className="primary" onClick={() => { setBranchForm({ name: '', location: '', id: '' }); setShowBranchFormModal(true); }}>+ Add Branch</button>
+                    <button className="primary" onClick={() => { setBranchForm({ name: '', location: '', id: '' }); setShowBranchFormModal(true); }}>Add branch</button>
                   )}
                 </div>
-                <div className="grid dashboard-metrics-grid">
+                <div className="branch-grid">
                   {branches.map((b) => (
-                    <div key={b.id} className="card">
-                      <h4 style={{ marginBottom: '1rem' }}>{b.name}</h4>
-                      <div style={{ marginBottom: '1rem' }}>
-                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Location</div>
-                        <div style={{ fontSize: '0.95rem', color: 'var(--text)' }}>{b.location}</div>
-                      </div>
+                    <div key={b.id} className="card branch-card">
+                      <h3>{b.name}</h3>
+                      <p className="meta-label">Location</p>
+                      <p className="meta-value">{b.location || 'Not set'}</p>
                       {isShopOwner && (
-                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                        <div className="branch-actions">
                           <button className="edit-btn" onClick={() => { setBranchForm(b); setShowBranchFormModal(true); }}>Edit</button>
                           <button className="delete-btn" onClick={() => deleteBranch(b.id)}>Delete</button>
                         </div>
@@ -4088,19 +4099,19 @@ export default function Page() {
             )}
             {settingsTab === 'time' && (
               <div className="card">
-                <h3>Time & Timezone</h3>
-                <p style={{ color: 'var(--text-muted)' }}>These settings control what counts as a business day in reports and expense charts.</p>
-                <div style={{ marginTop: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem' }}>
-                  <div>
-                    <label>Business day starts at</label>
+                <h3>Business day</h3>
+                <p className="muted-copy">These settings control what counts as a business day in reports and expense charts.</p>
+                <div className="settings-fields">
+                  <label className="field">
+                    <span>Business day starts at</span>
                     <input
                       type="time"
                       value={shopTimeSettings.dayStartTime}
                       onChange={(e) => setShopTimeSettings((prev) => ({ ...prev, dayStartTime: e.target.value || '00:00' }))}
                     />
-                  </div>
-                  <div>
-                    <label>Timezone</label>
+                  </label>
+                  <label className="field">
+                    <span>Timezone</span>
                     <select
                       value={shopTimeSettings.timezoneOffsetMinutes}
                       onChange={(e) => setShopTimeSettings((prev) => ({ ...prev, timezoneOffsetMinutes: Number(e.target.value) }))}
@@ -4113,7 +4124,7 @@ export default function Page() {
                         return <option key={offsetMinutes} value={offsetMinutes}>UTC{sign}{absHour}:00</option>;
                       })}
                     </select>
-                  </div>
+                  </label>
                 </div>
               </div>
             )}
@@ -4311,14 +4322,14 @@ export default function Page() {
               )}
               <div className="table-wrap" style={{ marginTop: '1rem' }}>
                 <table className="data-table">
-                  <thead><tr><th>Account</th><th>Type</th><th>Opening Balance</th><th>Current Balance</th>{(isShopOwner || role === 'admin') && <th>Actions</th>}</tr></thead>
+                  <thead><tr><th>Account</th><th>Type</th><th className="num">Opening balance</th><th className="num">Current balance</th>{(isShopOwner || role === 'admin') && <th>Actions</th>}</tr></thead>
                   <tbody>
                     {accounts.map((account) => (
                       <tr key={account.id}>
                         <td>{account.name}</td>
                         <td>{account.isDefault ? 'Default' : 'Custom'}</td>
-                        <td>{formatUGX(account.openingBalance || 0)}</td>
-                        <td>{formatUGX(accountBalances.get(account.id) || 0)}</td>
+                        <td className="num">{formatUGX(account.openingBalance || 0)}</td>
+                        <td className="num">{formatUGX(accountBalances.get(account.id) || 0)}</td>
                         {(isShopOwner || role === 'admin') && (
                           <td>
                             <button type="button" className="edit-btn" onClick={() => editAccountOpeningBalance(account.id)}>Edit value</button>
