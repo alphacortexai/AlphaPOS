@@ -4,12 +4,13 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, ty
 import { firebaseApp } from '../lib.firebase';
 import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
 import { collection, deleteDoc, doc, getDoc, getDocs, getFirestore, query, runTransaction, serverTimestamp, setDoc, where } from 'firebase/firestore';
-import CatalogAssistant, { type CatalogCreateRow, type CatalogPriceRow } from '../components/pos/CatalogAssistant';
+import CatalogAssistant, { type CatalogCategoryRow, type CatalogCreateRow, type CatalogPriceRow } from '../components/pos/CatalogAssistant';
 import RegisterDesk from '../components/pos/RegisterDesk';
 import ReceiptDialog from '../components/pos/ReceiptDialog';
 import ReturnDialog, { type ReturnableLine } from '../components/pos/ReturnDialog';
 import { ACTIVITY_KEEP, readLocalActivity, trimActivity, writeLocalActivity } from '../lib/pos/activityLog';
 import { computeAccountBalances, DEFAULT_REORDER_POINT, normalizeCustomerPayments, normalizeSuppliers, paymentMatchesCustomer, sessionCashAdjustments, stockIsLow, withTenderAccounts, type CustomerPaymentRecord, type SupplierRecord } from '../lib/pos/books';
+import { parseOrganiseAssignments, planCategoryUpdates, ORGANISE_PRODUCT_CAP } from '../lib/catalog/organise';
 import { parseCatalogReading, type CatalogMode } from '../lib/catalog/reading';
 import { catalogKeyError, readOwnerCatalogKey, writeOwnerCatalogKey } from '../lib/catalog/ownerKey';
 import { LOCAL_OPERATOR_ID, readLocalShop, writeLocalShop } from '../lib/pos/localShop';
@@ -2200,6 +2201,31 @@ export default function Page() {
     return parseCatalogReading(payload);
   };
 
+  const organiseCatalog = async () => {
+    if (!isShopOwner) throw new Error('Only the shop owner can use the product assistant.');
+    const shelf = products.slice(0, ORGANISE_PRODUCT_CAP).map((product) => ({
+      id: product.id,
+      name: product.name,
+      branchId: product.branchId,
+      category: product.category || '',
+    }));
+    const idToken = firebaseApp && authUser?.uid !== LOCAL_OPERATOR_ID ? await getAuth(firebaseApp).currentUser?.getIdToken() : '';
+    const response = await fetch('/api/catalog/organise', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        products: shelf,
+        categories: productCategories,
+        shopOwnerUid: activeShopOwnerUid,
+        ...(catalogKey ? { geminiKey: catalogKey } : {}),
+        ...(idToken ? { idToken } : { localCounter: true }),
+      }),
+    });
+    const payload = await response.json() as { ok?: boolean; error?: string };
+    if (!response.ok || !payload.ok) throw new Error(payload.error || 'Categories could not be suggested.');
+    return parseOrganiseAssignments(payload, shelf.map((product) => product.id), productCategories);
+  };
+
   const saveCatalogKey = async () => {
     if (!isShopOwner || !authUser) return;
     const next = catalogKeyDraft.trim();
@@ -2295,6 +2321,28 @@ export default function Page() {
     rememberSupplier(supplierName);
     logActivity('catalog_cost', `Updated purchase prices for ${updates.length} product(s) from a receipt.`);
     showNotification(`Purchase prices updated for ${updates.length} product${updates.length === 1 ? '' : 's'}.`, 'success');
+    return true;
+  };
+
+  const applyCategoriesFromAssistant = (rows: CatalogCategoryRow[]) => {
+    if (!isShopOwner) return false;
+    const planned = planCategoryUpdates(products, rows, productCategories);
+    if (planned.length === 0) {
+      showNotification('No categories were changed.', 'info');
+      return false;
+    }
+    const byId = new Map(planned.map((row) => [row.productId, row.category]));
+    setProducts((prev) => prev.map((product) => {
+      const category = byId.get(product.id);
+      if (category === undefined) return product;
+      const stamped = { ...product, ...updatedAuditStamp() };
+      if (category) return { ...stamped, category };
+      const rest = { ...stamped };
+      delete rest.category;
+      return rest;
+    }));
+    logActivity('edit_inventory', `Updated categories for ${planned.length} product(s).`);
+    showNotification(`Categories updated for ${planned.length} product${planned.length === 1 ? '' : 's'}.`, 'success');
     return true;
   };
 
@@ -3145,9 +3193,12 @@ export default function Page() {
           <CatalogAssistant
             products={products}
             branches={branches}
+            categories={productCategories}
             onCreate={addProductsFromAssistant}
             onUpdatePrices={updatePurchasePricesFromAssistant}
+            onApplyCategories={applyCategoriesFromAssistant}
             requestReading={readCatalogPhoto}
+            requestOrganise={organiseCatalog}
           />
         )}
 
@@ -4069,7 +4120,7 @@ export default function Page() {
             {settingsTab === 'assistant' && (
               <div className="card">
                 <h3>Product assistant</h3>
-                <p className="muted-copy">Paste a Gemini API key from Google AI Studio (aistudio.google.com/apikey). It is used only to read product photos. Staff cannot open this page, and the key is not included in a shop backup.</p>
+                <p className="muted-copy">Paste a Gemini API key from Google AI Studio (aistudio.google.com/apikey). It is used only to read product photos and to suggest categories. Staff cannot open this page, and the key is not included in a shop backup.</p>
                 <p className="muted-copy">{catalogKey ? 'A key is saved for this shop.' : 'No key is saved yet.'}</p>
                 <div className="form" style={{ marginTop: '1rem' }}>
                   <label className="field">
