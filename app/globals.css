@@ -3458,6 +3458,9 @@ input:focus, select:focus, textarea:focus { box-shadow: 0 0 0 3px rgba(31, 107, 
 .assistant-review > .muted-copy { align-self: flex-start; max-width: 100%; }
 .assistant-review input, .assistant-review select { min-width: 7rem; }
 .assistant-warn { margin-top: 0.25rem; color: var(--danger); font-size: 0.75rem; }
+.assistant-category-edit { display: grid; gap: 0.35rem; }
+.assistant-category-edit input,
+.assistant-category-edit select { width: 100%; min-width: 8.5rem; }
 .shift-list { list-style: none; margin: 0.85rem 0 0; padding: 0; display: flex; flex-direction: column; gap: 0.7rem; }
 .shift-list li { display: grid; gap: 0.15rem; }
 .shift-list strong { font-size: 0.88rem; }
