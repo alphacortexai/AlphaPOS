@@ -134,6 +134,7 @@ export default function RegisterDesk({
   const searchRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState('All');
+  const [catalogPage, setCatalogPage] = useState(1);
   const [notice, setNotice] = useState('');
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [payment, setPayment] = useState<PaymentDraft>(emptyPayment(0));
@@ -164,6 +165,21 @@ export default function RegisterDesk({
     const needle = query.trim().toLowerCase();
     return services.filter((service) => !needle || service.name.toLowerCase().includes(needle));
   }, [category, query, services]);
+
+  const registerPageSize = 9;
+  const catalogPages = Math.max(1, Math.ceil(visibleProducts.length / registerPageSize));
+  const catalogPageSafe = Math.min(catalogPage, catalogPages);
+  const pageStart = (catalogPageSafe - 1) * registerPageSize;
+  const pageProducts = visibleProducts.slice(pageStart, pageStart + registerPageSize);
+  const showServices = catalogPageSafe === catalogPages;
+
+  useEffect(() => {
+    setCatalogPage(1);
+  }, [category, query]);
+
+  useEffect(() => {
+    if (catalogPage > catalogPages) setCatalogPage(catalogPages);
+  }, [catalogPage, catalogPages]);
 
   const customerMatches = useMemo(() => {
     const needle = customerName.trim().toLowerCase();
@@ -281,7 +297,7 @@ export default function RegisterDesk({
         </div>
         {notice && <div className="pos-inline-notice">{notice}</div>}
         <div className="pos-grid">
-          {visibleProducts.map((product) => {
+          {pageProducts.map((product) => {
             const out = product.stock <= 0;
             const low = product.stock > 0 && product.stock < reorderLevel(product);
             const onTicket = cart.find((item) => item.itemType === 'product' && item.itemId === product.id)?.qty || 0;
@@ -303,7 +319,7 @@ export default function RegisterDesk({
               </button>
             );
           })}
-          {visibleServices.map((service) => {
+          {showServices && visibleServices.map((service) => {
             const onTicket = cart.find((item) => item.itemType === 'service' && item.itemId === service.id)?.qty || 0;
             return (
               <button key={service.id} type="button" className={`pos-tile is-service ${onTicket ? 'is-in-cart' : ''}`} onClick={() => onAddService(service.id)}>
@@ -327,6 +343,16 @@ export default function RegisterDesk({
             </div>
           )}
         </div>
+        {visibleProducts.length > 0 && (
+          <div className="pos-pager">
+            <span>Showing {pageStart + 1}–{Math.min(pageStart + registerPageSize, visibleProducts.length)} of {visibleProducts.length}</span>
+            <div className="pager-actions">
+              <button type="button" className="edit-btn" disabled={catalogPageSafe <= 1} onClick={() => setCatalogPage((page) => Math.max(1, page - 1))}>Previous</button>
+              <span>Page {catalogPageSafe} / {catalogPages}</span>
+              <button type="button" className="edit-btn" disabled={catalogPageSafe >= catalogPages} onClick={() => setCatalogPage((page) => page + 1)}>Next</button>
+            </div>
+          </div>
+        )}
       </div>
 
       <aside className="pos-ticket" aria-label="Current sale">

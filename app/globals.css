@@ -1634,6 +1634,8 @@ button.primary:hover, .dashboard-refresh-btn:hover:not(:disabled) { background: 
 .pos-catalog {
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .pos-toolbar {
@@ -1731,8 +1733,11 @@ button.primary:hover, .dashboard-refresh-btn:hover:not(:disabled) { background: 
   grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
   gap: 1rem;
   padding: 0 1rem 1rem;
+  flex: 1;
+  min-height: 0;
   overflow: auto;
   align-content: start;
+  grid-auto-rows: max-content;
 }
 
 .pos-tile {
@@ -1740,7 +1745,7 @@ button.primary:hover, .dashboard-refresh-btn:hover:not(:disabled) { background: 
   flex-direction: column;
   align-items: stretch;
   gap: 0.55rem;
-  min-height: 0;
+  min-height: min-content;
   text-align: left;
   padding: 0.45rem;
   border-radius: 16px;
@@ -1780,7 +1785,8 @@ button.primary:hover, .dashboard-refresh-btn:hover:not(:disabled) { background: 
 .pos-photo {
   position: relative;
   width: 100%;
-  aspect-ratio: 1;
+  height: 112px;
+  flex: none;
   border-radius: 12px;
   font-size: 1.7rem;
 }
@@ -1907,8 +1913,7 @@ button.primary:hover, .dashboard-refresh-btn:hover:not(:disabled) { background: 
 .shelf-photo {
   position: relative;
   width: 100%;
-  height: auto;
-  aspect-ratio: 4 / 3;
+  height: 132px;
   border-radius: 12px;
   font-size: 1.6rem;
 }
@@ -1990,11 +1995,26 @@ button.primary:hover, .dashboard-refresh-btn:hover:not(:disabled) { background: 
 }
 
 .shelf-pager {
-  margin-top: 1.15rem;
+  flex: 0 0 auto;
+  margin-top: 0.75rem;
   padding: 0.75rem 0.9rem;
   background: #fff;
   border: 1px solid var(--border);
   border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(28, 25, 23, 0.06);
+}
+
+.pos-pager {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding: 0.7rem 1rem;
+  border-top: 1px solid var(--border);
+  background: #f7faf7;
+  color: var(--text-muted);
+  font-size: 0.84rem;
 }
 
 .shelf-empty {
@@ -2382,6 +2402,7 @@ button.primary:hover, .dashboard-refresh-btn:hover:not(:disabled) { background: 
   .main.main-register { height: auto; overflow: visible; }
   .pos-register { grid-template-columns: 1fr; height: auto; }
   .pos-toolbar, .pos-session { flex-wrap: wrap; }
+  .pos-catalog { max-height: 72dvh; }
   .pos-grid { max-height: none; }
   .pos-ticket { border-left: 0; border-top: 1px solid var(--border); min-height: 70dvh; }
 }
@@ -2981,6 +3002,33 @@ body, .app, .main { background: var(--bg); color: var(--text); }
 .main-header h1 { font-size: 1.15rem !important; font-weight: 600 !important; letter-spacing: -0.03em !important; }
 .header-kicker { margin: 0.1rem 0 0; color: var(--text-muted); font-size: 0.8rem; }
 .main > section { max-width: 1080px; padding: 0.4rem 1.25rem 2.5rem; }
+.main:has(> section.shelf-page) {
+  flex: 1 1 auto;
+  height: 100dvh;
+  max-height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+.main > section.shelf-page {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-bottom: 0.85rem;
+}
+.shelf-page .page-tools,
+.shelf-page .inventory-filter-bar,
+.shelf-page .shelf-empty {
+  flex: 0 0 auto;
+}
+.shelf-page .inventory-filter-bar { flex-wrap: nowrap; }
+.shelf-page .shelf-grid {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: auto;
+  align-content: start;
+}
 .page-header { align-items: center; margin: 0.35rem 0 0.85rem; background: transparent !important; border: 0 !important; padding: 0 !important; box-shadow: none !important; }
 .page-header h2, .section-lead { display: none; }
 .page-header:not(:has(button, a, .primary, .edit-btn)) { display: none; }
@@ -3464,6 +3512,14 @@ input:focus, select:focus, textarea:focus { box-shadow: 0 0 0 3px rgba(31, 107, 
 @media (max-width: 768px) {
   .sidebar { background: #f4f3f0; transform: translateX(-105%); }
   .sidebar.open { transform: translateX(0); box-shadow: 0 16px 40px rgba(28, 25, 23, 0.16); }
+  .shelf-page .inventory-filter-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .shelf-page .inventory-filter-bar .pane-switch {
+    align-self: flex-start;
+    max-width: 100%;
+  }
 }
 
 .header-kicker strong { color: #1c1917; font-weight: 700; }

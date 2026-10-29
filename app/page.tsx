@@ -2441,7 +2441,7 @@ export default function Page() {
 
   const salesHistoryPageSize = 8;
   const sharedTablePageSize = 10;
-  const shelfPageSize = 6;
+  const shelfPageSize = 4;
   const groupedSales = useMemo(() => {
     const groups = new Map<string, Sale[]>();
     filteredSales.forEach((sale) => {
@@ -2504,6 +2504,10 @@ export default function Page() {
   useEffect(() => {
     setExpensesPage(1);
   }, [expensesViewMode, expensesDayFilter]);
+
+  useEffect(() => {
+    setProductsPage(1);
+  }, [productSearchQuery, productBranchFilter, productStockFilter]);
 
   const productsPagination = paginateData(filteredProducts, productsPage, setProductsPage, shelfPageSize);
   const servicesPagination = paginateData(services, servicesPage, setServicesPage);
@@ -3148,7 +3152,7 @@ export default function Page() {
         )}
 
         {view === 'products' && (
-          <section>
+          <section className={productPane === 'shelf' ? 'shelf-page' : undefined}>
             <div className="page-tools">
               <div className="pane-switch" role="tablist" aria-label="Products">
                 <button type="button" className={productPane === 'shelf' ? 'active' : ''} onClick={() => setProductPane('shelf')}>Shelf</button>
