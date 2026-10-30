@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { reorderLevel } from '../../lib/pos/books';
 import { compareRegisterCatalog, unitsSoldByProduct, type CatalogSaleLine } from '../../lib/pos/catalogOrder';
 import type { CartDiscount, CashSession, Customer, PaymentMethod, Settlement, Tender } from '../../lib/pos/retail';
@@ -137,6 +137,7 @@ export default function RegisterDesk({
   onCreateProduct: () => void;
 }) {
   const searchRef = useRef<HTMLInputElement>(null);
+  const categoryStripRef = useRef<HTMLDivElement>(null);
   const paymentRef = useRef<HTMLDivElement>(null);
   const payLock = useRef(false);
   const [query, setQuery] = useState('');
@@ -158,6 +159,41 @@ export default function RegisterDesk({
     const names = new Set(products.map((product) => product.category?.trim()).filter((value): value is string => Boolean(value)));
     return ['All', ...Array.from(names).sort((a, b) => a.localeCompare(b)), ...(services.length > 0 ? ['Services'] : [])];
   }, [products, services]);
+  const [categoryEnds, setCategoryEnds] = useState({ left: false, right: false });
+
+  const measureCategories = useCallback(() => {
+    const strip = categoryStripRef.current;
+    if (!strip) return;
+    const max = strip.scrollWidth - strip.clientWidth;
+    const left = strip.scrollLeft > 1;
+    const right = max - strip.scrollLeft > 1;
+    setCategoryEnds((current) => (current.left === left && current.right === right ? current : { left, right }));
+  }, []);
+
+  const revealCategory = useCallback((name: string) => {
+    const strip = categoryStripRef.current;
+    if (!strip) return;
+    const button = strip.querySelector<HTMLButtonElement>(`[data-category="${CSS.escape(name)}"]`);
+    if (!button) return;
+    const pad = 28;
+    const left = button.offsetLeft;
+    const right = left + button.offsetWidth;
+    const viewLeft = strip.scrollLeft + pad;
+    const viewRight = strip.scrollLeft + strip.clientWidth - pad;
+    let next = strip.scrollLeft;
+    if (left < viewLeft) next = Math.max(0, left - pad);
+    else if (right > viewRight) next = right - strip.clientWidth + pad;
+    if (Math.abs(next - strip.scrollLeft) < 2) return;
+    const behavior = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+    strip.scrollTo({ left: next, behavior });
+  }, []);
+
+  const nudgeCategories = (direction: -1 | 1) => {
+    const strip = categoryStripRef.current;
+    if (!strip) return;
+    const behavior = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+    strip.scrollBy({ left: direction * Math.max(140, Math.round(strip.clientWidth * 0.72)), behavior });
+  };
 
   const soldCounts = useMemo(() => unitsSoldByProduct(products, sales), [products, sales]);
 
@@ -186,6 +222,27 @@ export default function RegisterDesk({
   useEffect(() => {
     setCatalogPage(1);
   }, [category, query]);
+
+  useEffect(() => {
+    const strip = categoryStripRef.current;
+    if (!strip) return;
+    measureCategories();
+    revealCategory(category);
+    const selected = strip.querySelector<HTMLButtonElement>('[aria-selected="true"]');
+    if (selected && strip.contains(document.activeElement) && document.activeElement !== selected) {
+      selected.focus({ preventScroll: true });
+    }
+    const onScroll = () => measureCategories();
+    strip.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', onScroll);
+    const observer = new ResizeObserver(onScroll);
+    observer.observe(strip);
+    return () => {
+      strip.removeEventListener('scroll', onScroll);
+      window.removeEventListener('resize', onScroll);
+      observer.disconnect();
+    };
+  }, [categories, category, measureCategories, revealCategory]);
 
   useEffect(() => {
     if (catalogPage > catalogPages) setCatalogPage(catalogPages);
@@ -320,10 +377,42 @@ export default function RegisterDesk({
             )}
           </div>
         </div>
-        <div className="pos-categories" role="tablist" aria-label="Product categories">
-          {categories.map((item) => (
-            <button key={item} type="button" className={item === category ? 'active' : ''} onClick={() => setCategory(item)}>{item}</button>
-          ))}
+        <div className={`pos-category-rail${categoryEnds.left ? ' can-left' : ''}${categoryEnds.right ? ' can-right' : ''}`}>
+          <button type="button" className="pos-category-nav is-prev" aria-label="Previous categories" hidden={!categoryEnds.left && !categoryEnds.right} disabled={!categoryEnds.left} onClick={() => nudgeCategories(-1)}>
+            <CategoryChevron direction="left" />
+          </button>
+          <div
+            className="pos-categories"
+            ref={categoryStripRef}
+            role="tablist"
+            aria-label="Product categories"
+            onKeyDown={(event) => {
+              if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+              const index = categories.indexOf(category);
+              const next = categories[index + (event.key === 'ArrowRight' ? 1 : -1)];
+              if (!next) return;
+              event.preventDefault();
+              setCategory(next);
+            }}
+          >
+            {categories.map((item) => (
+              <button
+                key={item}
+                type="button"
+                role="tab"
+                data-category={item}
+                aria-selected={item === category}
+                tabIndex={item === category ? 0 : -1}
+                className={item === category ? 'active' : ''}
+                onClick={() => setCategory(item)}
+              >
+                {item}
+              </button>
+            ))}
+          </div>
+          <button type="button" className="pos-category-nav is-next" aria-label="Next categories" hidden={!categoryEnds.left && !categoryEnds.right} disabled={!categoryEnds.right} onClick={() => nudgeCategories(1)}>
+            <CategoryChevron direction="right" />
+          </button>
         </div>
         {notice && <div className={`pos-inline-notice${notice.tone === 'warn' ? ' is-warn' : ''}`} role="status">{notice.message}</div>}
         <div className="pos-grid">
@@ -694,5 +783,21 @@ export default function RegisterDesk({
         </div>
       )}
     </section>
+  );
+}
+
+function CategoryChevron({ direction }: { direction: 'left' | 'right' }) {
+  const pointsLeft = direction === 'left';
+  return (
+    <svg width="9" height="14" viewBox="0 0 9 14" aria-hidden="true" focusable="false">
+      <path
+        d={pointsLeft ? 'M7 1.5 2 7l5 5.5' : 'M2 1.5 7 7l-5 5.5'}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }
