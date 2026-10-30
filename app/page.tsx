@@ -741,7 +741,7 @@ export default function Page() {
       } catch (error) {
         if (error instanceof Error && error.message === 'SHOP_CONFLICT') {
           hasLoadedUserDataRef.current = false;
-          showNotificationRef.current('Another till saved this shop. Reloading so nothing is overwritten.', 'info', 6000);
+          showNotificationRef.current('Another register saved this shop. Refreshing so this till does not overwrite it.', 'info', 6000);
           void loadUserData();
           return;
         }
