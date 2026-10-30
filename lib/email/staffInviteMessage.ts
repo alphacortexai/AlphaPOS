@@ -27,10 +27,10 @@ export const staffInviteText = (invite: StaffInvite) => [
   invite.link,
 ].join('\n');
 
-export const staffInviteHtml = (invite: StaffInvite) => `<!doctype html><html><body style="font-family:sans-serif;color:#172033">
-  <p style="margin:0 0 4px;font-size:13px;letter-spacing:.04em;text-transform:uppercase;color:#66758c">AlphaPOS</p>
-  <h1 style="font-size:22px;margin:0 0 8px">${escapeHtml(invite.shopName)}</h1>
+export const staffInviteHtml = (invite: StaffInvite) => `<!doctype html><html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#1d1d1f">
+  <p style="margin:0 0 10px;font-size:17px;font-weight:700;letter-spacing:-0.03em;color:#1d1d1f">Alpha<span style="color:#0071e3">POS</span></p>
+  <h1 style="font-size:22px;margin:0 0 8px;letter-spacing:-0.02em">${escapeHtml(invite.shopName)}</h1>
   <p>You are invited as <strong>${escapeHtml(invite.roleLabel)}</strong> for <strong>${escapeHtml(invite.email)}</strong>.</p>
-  <p><a href="${escapeHtml(invite.link)}" style="display:inline-block;background:#1f6feb;color:#fff;text-decoration:none;padding:12px 18px;border-radius:10px">Open AlphaPOS</a></p>
+  <p><a href="${escapeHtml(invite.link)}" style="display:inline-block;background:#0071e3;color:#fff;text-decoration:none;padding:12px 18px;border-radius:980px;font-weight:600">Open AlphaPOS</a></p>
   <p style="color:#66758c;font-size:13px">${escapeHtml(inviteInstruction(invite))}</p>
 </body></html>`;

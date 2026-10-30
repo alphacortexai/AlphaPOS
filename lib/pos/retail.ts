@@ -373,6 +373,7 @@ export const receiptHtml = (receipt: ReceiptModel, formatMoney: (value: number) 
     .right { text-align: right; white-space: nowrap; }
     .total { font-size: 16px; font-weight: 800; margin-top: 8px; }
     .note { margin-top: 10px; }
+    .brand { display: block; height: 13px; width: auto; margin: 14px auto 0; }
   </style>
 </head>
 <body>
@@ -393,6 +394,7 @@ export const receiptHtml = (receipt: ReceiptModel, formatMoney: (value: number) 
     ${tenders}
     <p class="note muted">${escapeHtml(receipt.note)}</p>
     ${receipt.footer ? `<p class="center">${escapeHtml(receipt.footer)}</p>` : ''}
+    <img class="brand" src="/brand/wordmark.png" alt="" />
   </div>
 </body>
 </html>`;
@@ -410,7 +412,19 @@ export const printReceipt = (receipt: ReceiptModel, formatMoney: (value: number)
   popup.document.open();
   popup.document.write(receiptHtml(receipt, formatMoney));
   popup.document.close();
-  popup.focus();
-  window.setTimeout(() => popup.print(), 180);
+  const brand = popup.document.querySelector('img.brand');
+  const paint = () => {
+    popup.focus();
+    popup.print();
+  };
+  if (brand instanceof HTMLImageElement) {
+    brand.src = `${window.location.origin}/brand/wordmark.png`;
+    if (!brand.complete) {
+      brand.addEventListener('load', paint, { once: true });
+      brand.addEventListener('error', paint, { once: true });
+      return true;
+    }
+  }
+  window.setTimeout(paint, 60);
   return true;
 };
