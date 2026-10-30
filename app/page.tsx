@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, ty
 import { firebaseApp } from '../lib.firebase';
 import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
 import { collection, deleteDoc, doc, getDoc, getDocs, getFirestore, query, runTransaction, serverTimestamp, setDoc, where } from 'firebase/firestore';
+import Logo from '../components/brand/Logo';
 import CatalogAssistant, { type CatalogCategoryRow, type CatalogCreateRow, type CatalogPriceRow } from '../components/pos/CatalogAssistant';
 import RegisterDesk from '../components/pos/RegisterDesk';
 import ReceiptDialog from '../components/pos/ReceiptDialog';
@@ -2914,16 +2915,18 @@ export default function Page() {
         <div className="auth-glow auth-glow-b" aria-hidden="true" />
         <div className="auth-glow auth-glow-c" aria-hidden="true" />
         {loading ? (
-          <p className="auth-loading">Opening AlphaPOS</p>
+          <div className="auth-opening">
+            <Logo variant="mark" />
+            <p className="auth-loading">Opening AlphaPOS</p>
+          </div>
         ) : (
           <div className="auth-layout">
+            <Logo variant="stacked" />
             <div className="auth-copy">
-              <p className="auth-kicker">AlphaPOS</p>
               <h1>The counter, ready when the shop opens.</h1>
               <p>Sell, take payment, and keep the books in one place.</p>
             </div>
             <section className="auth-card" aria-label="Sign in">
-              <span className="brand-mark" aria-hidden="true">A</span>
               <h2>Sign in</h2>
               <p className="auth-lede">{firebaseApp ? 'Use the Google account for this shop.' : 'This browser keeps the shop on this device.'}</p>
               {signInNotice && <p className="auth-local-note">{signInNotice}</p>}
@@ -2949,7 +2952,10 @@ export default function Page() {
         <div className="auth-glow auth-glow-a" aria-hidden="true" />
         <div className="auth-glow auth-glow-b" aria-hidden="true" />
         <div className="auth-glow auth-glow-c" aria-hidden="true" />
-        <p className="auth-loading">Opening AlphaPOS</p>
+        <div className="auth-opening">
+          <Logo variant="mark" />
+          <p className="auth-loading">Opening AlphaPOS</p>
+        </div>
       </div>
     );
   }
@@ -2961,13 +2967,12 @@ export default function Page() {
         <div className="auth-glow auth-glow-b" aria-hidden="true" />
         <div className="auth-glow auth-glow-c" aria-hidden="true" />
         <div className="auth-layout">
+          <Logo variant="stacked" />
           <div className="auth-copy">
-            <p className="auth-kicker">AlphaPOS</p>
             <h1>Which shop are you opening?</h1>
             <p>Sales, stock, and expenses stay in the shop you choose. You can change it later from your profile or from Settings.</p>
           </div>
           <section className="auth-card" aria-label="Choose a shop">
-            <span className="brand-mark" aria-hidden="true">A</span>
             <h2>Your shops</h2>
             <p className="auth-lede">Open one shop. The next sale is recorded there.</p>
             <div className="shop-choice-list">
@@ -3023,7 +3028,11 @@ export default function Page() {
       <div className={`sidebar-overlay ${isSidebarOpen ? 'show' : ''}`} onClick={() => setIsSidebarOpen(false)}></div>
       <aside className={`sidebar ${isSidebarOpen ? 'open' : ''}`}>
         <div className="sidebar-header">
-          <h2><span className="brand-mark" aria-hidden="true">A</span>AlphaPOS</h2>
+          <h2>
+            <button type="button" className="brand-home" aria-label="AlphaPOS" onClick={() => { setView('dashboard'); setIsSidebarOpen(false); }}>
+              <Logo />
+            </button>
+          </h2>
           <p className="rail-shop">
             <strong>{currentShop?.shopName || 'My Shop'}</strong>
             <span>{roleLabels[role]}</span>

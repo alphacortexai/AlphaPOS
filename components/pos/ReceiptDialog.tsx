@@ -1,5 +1,6 @@
 'use client';
 
+import Image from 'next/image';
 import type { ReceiptModel } from '../../lib/pos/retail';
 import { printReceipt } from '../../lib/pos/retail';
 
@@ -53,6 +54,7 @@ export default function ReceiptDialog({
           ))}
           <p className="pos-pay-note">{receipt.note}</p>
           {receipt.footer && <p className="pos-receipt-footer">{receipt.footer}</p>}
+          <p className="pos-receipt-brand"><Image src="/brand/wordmark.png" alt="" width={165} height={34} unoptimized /></p>
         </article>
         <div className="pos-actions">
           <button type="button" className="edit-btn" onClick={onClose}>New sale</button>

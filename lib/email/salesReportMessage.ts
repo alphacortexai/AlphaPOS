@@ -40,9 +40,9 @@ export const salesReportHtml = (digest: SalesDigest) => {
   const items = digest.topItems.length > 0
     ? `<ul>${digest.topItems.map((item) => `<li>${escapeHtml(item.name)} · ${item.qty} · ${escapeHtml(money(item.revenue))}</li>`).join('')}</ul>`
     : '<p>No sales were recorded in this period.</p>';
-  return `<!doctype html><html><body style="font-family:sans-serif;color:#172033">
-    <p style="margin:0 0 4px;font-size:13px;letter-spacing:.04em;text-transform:uppercase;color:#66758c">AlphaPOS</p>
-    <h1 style="font-size:22px;margin:0 0 4px">${escapeHtml(digest.shopName)}</h1>
+  return `<!doctype html><html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#1d1d1f">
+    <p style="margin:0 0 10px;font-size:17px;font-weight:700;letter-spacing:-0.03em;color:#1d1d1f">Alpha<span style="color:#0071e3">POS</span></p>
+    <h1 style="font-size:22px;margin:0 0 4px;letter-spacing:-0.02em">${escapeHtml(digest.shopName)}</h1>
     <p style="margin:0 0 16px;color:#66758c">${escapeHtml(digest.periodLabel)}</p>
     <p><strong>Sales:</strong> ${escapeHtml(money(digest.revenue))}<br>
     <strong>Receipts:</strong> ${digest.receipts}<br>

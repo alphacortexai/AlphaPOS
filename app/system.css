@@ -79,14 +79,75 @@ button, input, select, textarea { font-family: inherit; letter-spacing: -0.011em
   border-radius: 0 !important;
 }
 .brand-mark { display: none !important; }
-.sidebar-header h2 {
-  margin: 0;
-  color: var(--text) !important;
-  font-size: 17px !important;
-  font-weight: 600;
-  letter-spacing: -0.022em;
-  line-height: 1.15;
+.logo-mark,
+.logo-word {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
+  pointer-events: none;
 }
+.sidebar-header h2 {
+  display: block !important;
+  margin: 0;
+  padding: 0;
+  color: var(--text) !important;
+  font-size: 0 !important;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 0 !important;
+}
+button.brand-home {
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 36px;
+  margin: 0 !important;
+  padding: 2px 4px !important;
+  border: 0 !important;
+  border-radius: 10px !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  cursor: pointer;
+  text-align: left;
+}
+button.brand-home:hover { background: rgba(0, 0, 0, 0.05) !important; }
+button.brand-home:active { background: rgba(0, 0, 0, 0.08) !important; }
+button.brand-home .logo-mark { height: 28px; }
+button.brand-home .logo-word { height: 15px; transform: translateY(1px); }
+.logo-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+.logo-stack .logo-mark { height: 64px; }
+.logo-stack .logo-word { height: 24px; }
+.logo-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.auth-opening {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+.auth-opening .logo-mark { height: 52px; }
+.auth-opening .auth-loading { margin: 0; }
+.pos-receipt-brand {
+  display: flex;
+  justify-content: center;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 0.5px solid rgba(0, 0, 0, 0.08);
+}
+.pos-receipt-brand img { height: 13px; width: auto; }
 .rail-shop { margin: 4px 0 0 !important; }
 .rail-shop strong { color: var(--text) !important; font-size: 15px; font-weight: 500; letter-spacing: -0.011em; }
 .rail-shop span { color: var(--text-muted) !important; font-size: 13px; font-weight: 400; }
@@ -1213,11 +1274,12 @@ button.primary.pos-charge {
     background: rgba(246, 246, 248, 0.96) !important;
   }
   .sidebar-header { margin: 4px 8px 8px !important; padding: 4px 4px 12px !important; }
-  .sidebar-header h2 {
-    font-size: 22px !important;
-    font-weight: 700 !important;
-    letter-spacing: -0.03em !important;
-  }
+  .sidebar-header h2 { font-size: 0 !important; line-height: 0 !important; }
+  button.brand-home { min-height: 44px; padding: 4px !important; border-radius: 12px !important; }
+  button.brand-home .logo-mark { height: 32px; }
+  button.brand-home .logo-word { height: 17px; }
+  .logo-stack .logo-mark { height: 56px; }
+  .logo-stack .logo-word { height: 22px; }
   .rail-shop strong { font-size: 15px !important; }
   .rail-shop span { font-size: 13px !important; }
   .sell-launch { margin: 4px 4px 8px !important; }
