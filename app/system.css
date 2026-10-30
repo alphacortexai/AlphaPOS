@@ -1869,6 +1869,62 @@ button.edit-btn:active:not(:disabled),
   .sidebar { background: rgba(246, 246, 248, 0.8) !important; }
 }
 
+/* The reload notice is a floating card. Liquid Glass had set position: relative,
+   which dropped it into the desktop row between the sidebar and the page. */
+.notification-toast,
+.notification-toast.success,
+.notification-toast.error,
+.notification-toast.info {
+  position: fixed !important;
+  z-index: 2400 !important;
+  top: 20px !important;
+  right: 20px !important;
+  left: auto !important;
+  bottom: auto !important;
+  display: flex !important;
+  align-items: flex-start !important;
+  flex: none !important;
+  width: min(400px, calc(100vw - 40px)) !important;
+  min-width: 0 !important;
+  max-width: 400px !important;
+  margin: 0 !important;
+  padding: 14px 12px 14px 16px !important;
+}
+.notification-toast::after { z-index: 0; }
+.notification-content,
+.notification-close {
+  position: relative;
+  z-index: 1;
+}
+.notification-content {
+  align-items: flex-start !important;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.notification-icon {
+  margin-top: 2px;
+  flex: none;
+}
+.notification-message {
+  min-width: 0;
+  white-space: normal !important;
+  overflow-wrap: break-word;
+}
+.notification-close { flex: none; }
+
+@media (max-width: 768px) {
+  .notification-toast,
+  .notification-toast.success,
+  .notification-toast.error,
+  .notification-toast.info {
+    top: max(12px, env(safe-area-inset-top)) !important;
+    right: 12px !important;
+    left: 12px !important;
+    width: auto !important;
+    max-width: none !important;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation: none !important;
