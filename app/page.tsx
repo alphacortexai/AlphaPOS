@@ -11,6 +11,7 @@ import ReceiptDialog from '../components/pos/ReceiptDialog';
 import ReturnDialog, { type ReturnableLine } from '../components/pos/ReturnDialog';
 import { ACTIVITY_KEEP, readLocalActivity, trimActivity, writeLocalActivity } from '../lib/pos/activityLog';
 import { computeAccountBalances, DEFAULT_REORDER_POINT, normalizeCustomerPayments, normalizeSuppliers, paymentMatchesCustomer, sessionCashAdjustments, stockIsLow, stockWorth, withTenderAccounts, type CustomerPaymentRecord, type SupplierRecord } from '../lib/pos/books';
+import { businessDayKey, businessDayRange, recentBusinessDays, reportPeriodRange, shiftDayKey, summarizePeriod, type ShopClock } from '../lib/pos/reports';
 import { parseOrganiseAssignments, planCategoryUpdates, ORGANISE_PRODUCT_CAP } from '../lib/catalog/organise';
 import { parseCatalogReading, type CatalogMode } from '../lib/catalog/reading';
 import { catalogKeyError, readOwnerCatalogKey, writeOwnerCatalogKey } from '../lib/catalog/ownerKey';
@@ -845,92 +846,15 @@ export default function Page() {
     setView('sales');
   };
 
-  // Enhanced Metric Calculation Utilities
-  const getSharedServiceCostForRange = (periodSales: Sale[]) => {
-    const sharedServices = services.filter((service) => service.serviceType === 'shared_cost');
-    if (sharedServices.length === 0 || periodSales.length === 0) return 0;
+  const shopClock = useMemo<ShopClock>(() => ({
+    timezoneOffsetMinutes: shopTimeSettings.timezoneOffsetMinutes,
+    dayStartTime: shopTimeSettings.dayStartTime,
+  }), [shopTimeSettings.dayStartTime, shopTimeSettings.timezoneOffsetMinutes]);
 
-    const sharedCostByService = new Map(
-      sharedServices.map((service) => [
-        `${service.branchId}::${service.name.trim().toLowerCase()}`,
-        service.monthlySharedCost / 30,
-      ])
-    );
-
-    const activeServiceDays = new Set<string>();
-
-    periodSales
-      .filter((sale) => sale.type === 'service')
-      .forEach((sale) => {
-        const serviceKey = `${sale.branchId}::${sale.itemName.trim().toLowerCase()}`;
-        if (!sharedCostByService.has(serviceKey)) return;
-        const saleDay = new Date(sale.createdAt).toISOString().slice(0, 10);
-        activeServiceDays.add(`${serviceKey}::${saleDay}`);
-      });
-
-    let allocatedSharedCost = 0;
-    activeServiceDays.forEach((activeDayKey) => {
-      const [serviceKey] = activeDayKey.split('::', 2);
-      allocatedSharedCost += sharedCostByService.get(serviceKey) ?? 0;
-    });
-
-    return allocatedSharedCost;
-  };
-
-  const getBusinessDayRange = useCallback((reference: Date, offsetDays: number = 0) => {
-    const [startHourStr, startMinuteStr] = shopTimeSettings.dayStartTime.split(':');
-    const startHour = Number(startHourStr || 0);
-    const startMinute = Number(startMinuteStr || 0);
-    const tzOffsetMs = shopTimeSettings.timezoneOffsetMinutes * 60 * 1000;
-    const dayStartMs = (startHour * 60 + startMinute) * 60 * 1000;
-    const referenceInShopTz = new Date(reference.getTime() + tzOffsetMs);
-    const businessBase = new Date(Date.UTC(referenceInShopTz.getUTCFullYear(), referenceInShopTz.getUTCMonth(), referenceInShopTz.getUTCDate()));
-    const startInShopTzMs = businessBase.getTime() + dayStartMs - offsetDays * 24 * 60 * 60 * 1000;
-    const start = new Date(startInShopTzMs - tzOffsetMs);
-    const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
-    return { start, end };
-  }, [shopTimeSettings.dayStartTime, shopTimeSettings.timezoneOffsetMinutes]);
-
-  const getMetricsForPeriod = (period: DashboardPeriod, offset: number = 0) => {
-    const now = new Date();
-    let start: Date, end: Date;
-
-    if (period === 'daily') {
-      const range = getBusinessDayRange(now, offset);
-      start = range.start;
-      end = range.end;
-    } else if (period === 'weekly') {
-      const currentWeekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay());
-      start = new Date(currentWeekStart.getTime() - offset * 7 * 24 * 60 * 60 * 1000);
-      end = new Date(start.getTime() + 7 * 24 * 60 * 60 * 1000);
-    } else if (period === 'monthly') {
-      start = new Date(now.getFullYear(), now.getMonth() - offset, 1);
-      end = new Date(now.getFullYear(), now.getMonth() - offset + 1, 1);
-    } else {
-      start = new Date(now.getFullYear() - offset, 0, 1);
-      end = new Date(now.getFullYear() - offset + 1, 0, 1);
-    }
-
-    const periodSales = sales.filter(s => {
-      const d = new Date(s.createdAt);
-      return d >= start && d < end;
-    });
-    const periodExpenses = expenses.filter(e => {
-      const d = new Date(e.createdAt);
-      return d >= start && d < end;
-    });
-
-    const revenue = periodSales.reduce((a, s) => a + s.amount, 0);
-    const taxCollected = periodSales.reduce((a, s) => a + (s.taxAmount || 0), 0);
-    const cost = periodSales.reduce((a, s) => a + s.cost, 0);
-    const expenseTotal = periodExpenses.reduce((a, e) => a + e.amount, 0);
-    const sharedServiceCost = getSharedServiceCostForRange(periodSales);
-    const grossProfit = revenue - taxCollected - cost - sharedServiceCost;
-    const netProfit = grossProfit - expenseTotal;
-
-    const receiptCount = new Set(periodSales.map((sale) => transactionKey(sale))).size;
-    return { revenue, taxCollected, cost: cost + sharedServiceCost, expenseTotal, grossProfit, netProfit, salesCount: periodSales.length, receiptCount };
-  };
+  const getMetricsForPeriod = useCallback((period: DashboardPeriod, offset: number = 0) => {
+    const range = reportPeriodRange(period, offset, new Date(), shopClock);
+    return summarizePeriod(sales, expenses, range.start, range.end);
+  }, [expenses, sales, shopClock]);
 
   const getMetrics = (period: 'day' | 'week' | 'month', offset: number = 0) => {
     const periodMap: Record<'day' | 'week' | 'month', DashboardPeriod> = {
@@ -985,7 +909,7 @@ export default function Page() {
       },
       receipts: current.receiptCount,
     };
-  }, [sales, expenses, products, dashboardPeriod, services, getBusinessDayRange]);
+  }, [products, dashboardPeriod, getMetricsForPeriod]);
 
   // Product & Service Chart Data
   const chartData = useMemo(() => {
@@ -1032,24 +956,19 @@ export default function Page() {
     const mostSold = ranked.sort((a, b) => b.qty - a.qty).slice(0, 3);
     const topRevenue = ranked.sort((a, b) => b.revenue - a.revenue).slice(0, 3);
 
-    const today = new Date();
-    const trendDays = Array.from({ length: insightTrendRange }, (_, idx) => {
-      const d = new Date(today);
-      d.setHours(12, 0, 0, 0);
-      d.setDate(today.getDate() - (insightTrendRange - 1 - idx));
-      const key = d.toISOString().slice(0, 10);
-      return { date: key, revenue: 0, expense: 0 };
-    });
+    const trendDays = recentBusinessDays(insightTrendRange, new Date(), shopClock).map((date) => ({ date, revenue: 0, expense: 0 }));
     const trendMap = new Map(trendDays.map((item) => [item.date, item]));
 
     sales.forEach((sale) => {
-      const key = new Date(sale.createdAt).toISOString().slice(0, 10);
-      const bucket = trendMap.get(key);
+      const soldAt = new Date(sale.createdAt);
+      if (Number.isNaN(soldAt.getTime())) return;
+      const bucket = trendMap.get(businessDayKey(soldAt, shopClock));
       if (bucket) bucket.revenue += sale.amount;
     });
     expenses.forEach((expense) => {
-      const key = new Date(expense.createdAt).toISOString().slice(0, 10);
-      const bucket = trendMap.get(key);
+      const spentAt = new Date(expense.createdAt);
+      if (Number.isNaN(spentAt.getTime())) return;
+      const bucket = trendMap.get(businessDayKey(spentAt, shopClock));
       if (bucket) bucket.expense += expense.amount;
     });
 
@@ -1060,7 +979,7 @@ export default function Page() {
     const averageRevenue = trendDays.length > 0 ? totalRevenue / trendDays.length : 0;
 
     return { mostSold, topRevenue, trendDays, maxRevenue, chartMax, totalRevenue, totalExpense, averageRevenue };
-  }, [insightTrendRange, sales, expenses]);
+  }, [insightTrendRange, sales, expenses, shopClock]);
 
   // Filtered products for inventory
   const filteredProducts = useMemo(() => {
@@ -1107,7 +1026,7 @@ export default function Page() {
   });
 
   useEffect(() => {
-    const todayKey = new Date().toISOString().slice(0, 10);
+    const todayKey = businessDayKey(new Date(), shopClock);
     const sharedCostServices = services.filter((service) => service.serviceType === 'shared_cost' && service.monthlySharedCost > 0);
     if (sharedCostServices.length === 0) return;
 
@@ -1127,7 +1046,7 @@ export default function Page() {
           id: autoExpenseId,
           title: `Shared Cost (${todayKey}) - ${service.name}`,
           branchId: service.branchId,
-          amount: service.monthlySharedCost / 30,
+          amount: roundMoney(service.monthlySharedCost / 30),
           expenseGroupId: service.expenseGroupId || undefined,
           ...currentAuditStamp(),
         });
@@ -1136,7 +1055,7 @@ export default function Page() {
       if (newAutoExpenses.length === 0) return prev;
       return [...newAutoExpenses, ...prev];
     });
-  }, [services]);
+  }, [services, shopClock]);
 
   const logActivity = (action: string, details: string, stockMovement?: StockMovementAudit) => {
     setActivityLogs((prev) => [{
@@ -1529,14 +1448,20 @@ export default function Page() {
 
   const expenseChartData = useMemo(() => {
     const now = new Date();
-    const rangeStart = new Date(now);
-    if (expenseChartRange === 'day') rangeStart.setTime(getBusinessDayRange(now, 0).start.getTime());
-    if (expenseChartRange === '7days') rangeStart.setDate(now.getDate() - 7);
-    if (expenseChartRange === '14days') rangeStart.setDate(now.getDate() - 14);
-    if (expenseChartRange === 'month') rangeStart.setMonth(now.getMonth() - 1);
-    if (expenseChartRange === '3months') rangeStart.setMonth(now.getMonth() - 3);
-    if (expenseChartRange === '6months') rangeStart.setMonth(now.getMonth() - 6);
-    if (expenseChartRange === '1year') rangeStart.setFullYear(now.getFullYear() - 1);
+    const todayKey = businessDayKey(now, shopClock);
+    const rangeStart = expenseChartRange === 'day'
+      ? businessDayRange(todayKey, shopClock).start
+      : expenseChartRange === '7days'
+        ? businessDayRange(shiftDayKey(todayKey, -6), shopClock).start
+        : expenseChartRange === '14days'
+          ? businessDayRange(shiftDayKey(todayKey, -13), shopClock).start
+          : expenseChartRange === 'month'
+            ? reportPeriodRange('monthly', 0, now, shopClock).start
+            : expenseChartRange === '3months'
+              ? reportPeriodRange('monthly', 2, now, shopClock).start
+              : expenseChartRange === '6months'
+                ? reportPeriodRange('monthly', 5, now, shopClock).start
+                : reportPeriodRange('yearly', 0, now, shopClock).start;
     const filtered = expenses.filter((expense) => new Date(expense.createdAt) >= rangeStart);
     const grouped = new Map<string, number>();
     filtered.forEach((expense) => {
@@ -1549,7 +1474,7 @@ export default function Page() {
       name, amount, percentage: total > 0 ? (amount / total) * 100 : 0, color: colors[idx % colors.length]
     })).sort((a, b) => b.amount - a.amount);
     return { total, segments };
-  }, [expenseChartRange, expenseGroupMap, expenses, getBusinessDayRange]);
+  }, [expenseChartRange, expenseGroupMap, expenses, shopClock]);
 
   const saveExpense = (e: React.FormEvent) => {
     e.preventDefault();
@@ -2460,42 +2385,29 @@ export default function Page() {
   };
 
   const filteredSales = useMemo(() => {
-    const baseDate = salesDateFilter ? new Date(`${salesDateFilter}T00:00:00`) : new Date();
-
-    const startOfWeek = (date: Date) => {
-      const d = new Date(date);
-      const day = d.getDay();
-      const diff = day === 0 ? -6 : 1 - day;
-      d.setDate(d.getDate() + diff);
-      d.setHours(0, 0, 0, 0);
-      return d;
-    };
+    const selectedKey = salesDateFilter || businessDayKey(new Date(), shopClock);
+    const selectedStart = businessDayRange(selectedKey, shopClock).start;
 
     return sales.filter((sale) => {
       const saleDate = new Date(sale.createdAt);
       if (Number.isNaN(saleDate.getTime())) return false;
+      const saleKey = businessDayKey(saleDate, shopClock);
 
-      if (salesHistoryViewMode === 'day') {
-        return saleDate.toISOString().slice(0, 10) === salesDateFilter;
-      }
+      if (salesHistoryViewMode === 'day') return saleKey === selectedKey;
 
       if (salesHistoryViewMode === 'week') {
-        const start = startOfWeek(baseDate);
-        const end = new Date(start);
-        end.setDate(end.getDate() + 7);
-        return saleDate >= start && saleDate < end;
+        const range = reportPeriodRange('weekly', 0, selectedStart, shopClock);
+        return saleDate >= range.start && saleDate < range.end;
       }
 
-      if (salesHistoryViewMode === 'month') {
-        return saleDate.getFullYear() === baseDate.getFullYear() && saleDate.getMonth() === baseDate.getMonth();
-      }
+      if (salesHistoryViewMode === 'month') return saleKey.slice(0, 7) === selectedKey.slice(0, 7);
 
       if (!salesRangeStart || !salesRangeEnd) return true;
-      const rangeStart = new Date(`${salesRangeStart}T00:00:00`);
-      const rangeEnd = new Date(`${salesRangeEnd}T23:59:59`);
-      return saleDate >= rangeStart && saleDate <= rangeEnd;
+      const rangeStart = businessDayRange(salesRangeStart, shopClock).start;
+      const rangeEnd = businessDayRange(shiftDayKey(salesRangeEnd, 1), shopClock).start;
+      return saleDate >= rangeStart && saleDate < rangeEnd;
     });
-  }, [sales, salesDateFilter, salesHistoryViewMode, salesRangeEnd, salesRangeStart]);
+  }, [sales, salesDateFilter, salesHistoryViewMode, salesRangeEnd, salesRangeStart, shopClock]);
 
   const salesHistoryPageSize = 8;
   const sharedTablePageSize = 10;
@@ -3628,7 +3540,7 @@ export default function Page() {
                   </>
                 )}
 
-                <button className="edit-btn" onClick={() => { const today = new Date().toISOString().split('T')[0]; setSalesDateFilter(today); setSalesRangeStart(today); setSalesRangeEnd(today); setSalesHistoryViewMode('day'); }}>Today</button>
+                <button className="edit-btn" onClick={() => { const today = businessDayKey(new Date(), shopClock); setSalesDateFilter(today); setSalesRangeStart(today); setSalesRangeEnd(today); setSalesHistoryViewMode('day'); }}>Today</button>
               </div>
               <p className="period-summary">
                 {groupedSales.length} receipt{groupedSales.length === 1 ? '' : 's'}
@@ -3959,7 +3871,7 @@ export default function Page() {
                       <span className="is-sales" style={{ height: `${dashboardInsights.chartMax > 0 ? Math.max(day.revenue > 0 ? 6 : 0, (day.revenue / dashboardInsights.chartMax) * 100) : 0}%` }} />
                       <span className="is-expense" style={{ height: `${dashboardInsights.chartMax > 0 ? Math.max(day.expense > 0 ? 6 : 0, (day.expense / dashboardInsights.chartMax) * 100) : 0}%` }} />
                     </div>
-                    {insightTrendRange <= 14 && <em>{new Date(`${day.date}T12:00:00`).toLocaleDateString(undefined, { weekday: 'narrow' })}</em>}
+                    {insightTrendRange <= 14 && <em>{new Date(`${day.date}T12:00:00Z`).toLocaleDateString('en-UG', { weekday: 'narrow', timeZone: 'UTC' })}</em>}
                   </div>
                 ))}
               </div>
@@ -4147,7 +4059,7 @@ export default function Page() {
             {settingsTab === 'time' && (
               <div className="card">
                 <h3>Business day</h3>
-                <p className="muted-copy">These settings control what counts as a business day in reports and expense charts.</p>
+                <p className="muted-copy">These settings control what counts as a business day in reports, sales history, and expense charts. A week starts on Monday.</p>
                 <div className="settings-fields">
                   <label className="field">
                     <span>Business day starts at</span>
