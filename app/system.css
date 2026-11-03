@@ -2040,6 +2040,12 @@ button.edit-btn:active:not(:disabled),
   -webkit-mask-image: linear-gradient(to right, transparent, #000 36px, #000 calc(100% - 36px), transparent);
   mask-image: linear-gradient(to right, transparent, #000 36px, #000 calc(100% - 36px), transparent);
 }
+.report-grid .report-period {
+  margin: 2px 0 0;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
 .pos-category-nav:active:not(:disabled) { transform: scale(0.96); }
 .pos-category-nav:focus-visible {
   outline: none;

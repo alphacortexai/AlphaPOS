@@ -11,7 +11,7 @@ import ReceiptDialog from '../components/pos/ReceiptDialog';
 import ReturnDialog, { type ReturnableLine } from '../components/pos/ReturnDialog';
 import { ACTIVITY_KEEP, readLocalActivity, trimActivity, writeLocalActivity } from '../lib/pos/activityLog';
 import { computeAccountBalances, DEFAULT_REORDER_POINT, normalizeCustomerPayments, normalizeSuppliers, paymentMatchesCustomer, sessionCashAdjustments, stockIsLow, stockWorth, withTenderAccounts, type CustomerPaymentRecord, type SupplierRecord } from '../lib/pos/books';
-import { businessDayKey, businessDayRange, recentBusinessDays, reportPeriodRange, shiftDayKey, summarizePeriod, type ShopClock } from '../lib/pos/reports';
+import { businessDayKey, businessDayRange, businessDaysThrough, formatDayKey, recentBusinessDays, reportPeriodRange, shiftDayKey, summarizeBusinessDays, summarizePeriod, type ShopClock } from '../lib/pos/reports';
 import { parseOrganiseAssignments, planCategoryUpdates, ORGANISE_PRODUCT_CAP } from '../lib/catalog/organise';
 import { parseCatalogReading, type CatalogMode } from '../lib/catalog/reading';
 import { catalogKeyError, readOwnerCatalogKey, writeOwnerCatalogKey } from '../lib/catalog/ownerKey';
@@ -856,15 +856,6 @@ export default function Page() {
     return summarizePeriod(sales, expenses, range.start, range.end);
   }, [expenses, sales, shopClock]);
 
-  const getMetrics = (period: 'day' | 'week' | 'month', offset: number = 0) => {
-    const periodMap: Record<'day' | 'week' | 'month', DashboardPeriod> = {
-      day: 'daily',
-      week: 'weekly',
-      month: 'monthly',
-    };
-    return getMetricsForPeriod(periodMap[period], offset);
-  };
-
   const calculateChange = (current: number, previous: number) => {
     if (previous === 0) return current > 0 ? 100 : 0;
     return ((current - previous) / previous) * 100;
@@ -980,6 +971,23 @@ export default function Page() {
 
     return { mostSold, topRevenue, trendDays, maxRevenue, chartMax, totalRevenue, totalExpense, averageRevenue };
   }, [insightTrendRange, sales, expenses, shopClock]);
+
+  const reportCards = useMemo(() => {
+    const todayKey = businessDayKey(new Date(), shopClock);
+    const [year, month] = todayKey.split('-').map(Number);
+    const windowKeys = dashboardInsights.trendDays.map((day) => day.date);
+    const monthKeys = businessDaysThrough(`${todayKey.slice(0, 7)}-01`, formatDayKey(year, month, 0));
+    const label = (key: string) => new Date(`${key}T12:00:00Z`).toLocaleDateString('en-UG', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+    return {
+      todayLabel: label(todayKey),
+      windowTitle: insightTrendRange === 7 ? 'Last 7 days' : `Last ${insightTrendRange} days`,
+      windowSpan: windowKeys.length > 0 ? `${label(windowKeys[0])} – ${label(windowKeys[windowKeys.length - 1])}` : '',
+      monthLabel: new Date(`${todayKey}T12:00:00Z`).toLocaleDateString('en-UG', { month: 'long', timeZone: 'UTC' }),
+      today: summarizeBusinessDays(sales, expenses, shopClock, [todayKey]),
+      window: summarizeBusinessDays(sales, expenses, shopClock, windowKeys),
+      month: summarizeBusinessDays(sales, expenses, shopClock, monthKeys),
+    };
+  }, [dashboardInsights.trendDays, expenses, insightTrendRange, sales, shopClock]);
 
   // Filtered products for inventory
   const filteredProducts = useMemo(() => {
@@ -3850,7 +3858,7 @@ export default function Page() {
               <div className="insight-header-row">
                 <div>
                   <h3>Sales and expenses</h3>
-                  <p className="muted-copy">{formatUGX(dashboardInsights.totalRevenue)} in · {formatUGX(dashboardInsights.totalExpense)} out</p>
+                  <p className="muted-copy">{reportCards.windowSpan} · {formatUGX(reportCards.window.revenue)} in · {formatUGX(reportCards.window.expenseTotal)} out</p>
                 </div>
                 <select aria-label="Chart window" value={insightTrendRange} onChange={(e) => setInsightTrendRange(Number(e.target.value) as InsightTrendRange)}>
                   <option value={7}>7 days</option>
@@ -3880,26 +3888,29 @@ export default function Page() {
             <div className="report-grid">
               <div className="card">
                 <h4>Today</h4>
+                <p className="muted-copy report-period">{reportCards.todayLabel}</p>
                 <div className="metric-stack">
-                  <div><span>Sales</span><strong>{formatUGX(getMetrics('day', 0).revenue)}</strong></div>
-                  <div><span>Expenses</span><strong className={getMetrics('day', 0).expenseTotal > 0 ? 'is-negative' : ''}>{formatUGX(getMetrics('day', 0).expenseTotal)}</strong></div>
-                  <div><span>Net profit</span><strong className={getMetrics('day', 0).netProfit >= 0 ? 'is-positive' : 'is-negative'}>{formatUGX(getMetrics('day', 0).netProfit)}</strong></div>
+                  <div><span>Sales</span><strong>{formatUGX(reportCards.today.revenue)}</strong></div>
+                  <div><span>Expenses</span><strong className={reportCards.today.expenseTotal > 0 ? 'is-negative' : ''}>{formatUGX(reportCards.today.expenseTotal)}</strong></div>
+                  <div><span>Net profit</span><strong className={reportCards.today.netProfit >= 0 ? 'is-positive' : 'is-negative'}>{formatUGX(reportCards.today.netProfit)}</strong></div>
                 </div>
               </div>
               <div className="card">
-                <h4>This week</h4>
+                <h4>{reportCards.windowTitle}</h4>
+                <p className="muted-copy report-period">{reportCards.windowSpan}</p>
                 <div className="metric-stack">
-                  <div><span>Sales</span><strong>{formatUGX(getMetrics('week', 0).revenue)}</strong></div>
-                  <div><span>Expenses</span><strong className={getMetrics('week', 0).expenseTotal > 0 ? 'is-negative' : ''}>{formatUGX(getMetrics('week', 0).expenseTotal)}</strong></div>
-                  <div><span>Net profit</span><strong className={getMetrics('week', 0).netProfit >= 0 ? 'is-positive' : 'is-negative'}>{formatUGX(getMetrics('week', 0).netProfit)}</strong></div>
+                  <div><span>Sales</span><strong>{formatUGX(reportCards.window.revenue)}</strong></div>
+                  <div><span>Expenses</span><strong className={reportCards.window.expenseTotal > 0 ? 'is-negative' : ''}>{formatUGX(reportCards.window.expenseTotal)}</strong></div>
+                  <div><span>Net profit</span><strong className={reportCards.window.netProfit >= 0 ? 'is-positive' : 'is-negative'}>{formatUGX(reportCards.window.netProfit)}</strong></div>
                 </div>
               </div>
               <div className="card">
                 <h4>This month</h4>
+                <p className="muted-copy report-period">{reportCards.monthLabel}</p>
                 <div className="metric-stack">
-                  <div><span>Sales</span><strong>{formatUGX(getMetrics('month', 0).revenue)}</strong></div>
-                  <div><span>Expenses</span><strong className={getMetrics('month', 0).expenseTotal > 0 ? 'is-negative' : ''}>{formatUGX(getMetrics('month', 0).expenseTotal)}</strong></div>
-                  <div><span>Net profit</span><strong className={getMetrics('month', 0).netProfit >= 0 ? 'is-positive' : 'is-negative'}>{formatUGX(getMetrics('month', 0).netProfit)}</strong></div>
+                  <div><span>Sales</span><strong>{formatUGX(reportCards.month.revenue)}</strong></div>
+                  <div><span>Expenses</span><strong className={reportCards.month.expenseTotal > 0 ? 'is-negative' : ''}>{formatUGX(reportCards.month.expenseTotal)}</strong></div>
+                  <div><span>Net profit</span><strong className={reportCards.month.netProfit >= 0 ? 'is-positive' : 'is-negative'}>{formatUGX(reportCards.month.netProfit)}</strong></div>
                 </div>
               </div>
               <div className="card">
