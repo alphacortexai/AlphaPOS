@@ -103,19 +103,30 @@ export const recentBusinessDays = (count: number, now: Date, clock: ShopClock) =
   return Array.from({ length: Math.max(0, count) }, (_, index) => shiftDayKey(today, -(count - 1 - index)));
 };
 
+/** Inclusive shop-calendar days from startKey through endKey. */
+export const businessDaysThrough = (startKey: string, endKey: string) => {
+  if (!startKey || !endKey || startKey > endKey) return [];
+  const keys: string[] = [];
+  let key = startKey;
+  while (key <= endKey && keys.length < 400) {
+    keys.push(key);
+    key = shiftDayKey(key, 1);
+  }
+  return keys;
+};
+
 export const instantInRange = (createdAt: string, start: Date, end: Date) => {
   const time = new Date(createdAt).getTime();
   return Number.isFinite(time) && time >= start.getTime() && time < end.getTime();
 };
 
-/** Sales the customer paid, minus tax and the cost recorded on each line, then minus expenses. */
-export const summarizePeriod = (sales: PeriodSale[], expenses: PeriodExpense[], start: Date, end: Date): ReportTotals => {
-  const periodSales = sales.filter((sale) => instantInRange(sale.createdAt, start, end));
-  const periodExpenses = expenses.filter((expense) => instantInRange(expense.createdAt, start, end));
-  const revenue = periodSales.reduce((sum, sale) => sum + sale.amount, 0);
-  const taxCollected = periodSales.reduce((sum, sale) => sum + (sale.taxAmount || 0), 0);
-  const cost = periodSales.reduce((sum, sale) => sum + sale.cost, 0);
-  const expenseTotal = periodExpenses.reduce((sum, expense) => sum + expense.amount, 0);
+const money = (value: number | undefined) => (Number.isFinite(value) ? value as number : 0);
+
+const totalsFor = (periodSales: PeriodSale[], periodExpenses: PeriodExpense[]): ReportTotals => {
+  const revenue = periodSales.reduce((sum, sale) => sum + money(sale.amount), 0);
+  const taxCollected = periodSales.reduce((sum, sale) => sum + money(sale.taxAmount), 0);
+  const cost = periodSales.reduce((sum, sale) => sum + money(sale.cost), 0);
+  const expenseTotal = periodExpenses.reduce((sum, expense) => sum + money(expense.amount), 0);
   const grossProfit = revenue - taxCollected - cost;
   return {
     revenue,
@@ -126,4 +137,25 @@ export const summarizePeriod = (sales: PeriodSale[], expenses: PeriodExpense[], 
     netProfit: grossProfit - expenseTotal,
     receiptCount: new Set(periodSales.map((sale) => sale.transactionId || sale.id)).size,
   };
+};
+
+/** Sales the customer paid, minus tax and the cost recorded on each line, then minus expenses. */
+export const summarizePeriod = (sales: PeriodSale[], expenses: PeriodExpense[], start: Date, end: Date): ReportTotals => (
+  totalsFor(
+    sales.filter((sale) => instantInRange(sale.createdAt, start, end)),
+    expenses.filter((expense) => instantInRange(expense.createdAt, start, end)),
+  )
+);
+
+/** Same totals, counted by shop calendar day so a chart bar and its card cannot disagree. */
+export const summarizeBusinessDays = (sales: PeriodSale[], expenses: PeriodExpense[], clock: ShopClock, dayKeys: string[]): ReportTotals => {
+  const wanted = new Set(dayKeys);
+  const onWantedDay = (createdAt: string) => {
+    const time = new Date(createdAt);
+    return !Number.isNaN(time.getTime()) && wanted.has(businessDayKey(time, clock));
+  };
+  return totalsFor(
+    sales.filter((sale) => onWantedDay(sale.createdAt)),
+    expenses.filter((expense) => onWantedDay(expense.createdAt)),
+  );
 };

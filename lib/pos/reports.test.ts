@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { businessDayKey, recentBusinessDays, reportPeriodRange, summarizePeriod, type ShopClock } from './reports';
+import { businessDayKey, businessDaysThrough, formatDayKey, recentBusinessDays, reportPeriodRange, summarizeBusinessDays, summarizePeriod, type ShopClock } from './reports';
 
 const kampala: ShopClock = { timezoneOffsetMinutes: 180, dayStartTime: '00:00' };
 const kampalaOpen: ShopClock = { timezoneOffsetMinutes: 180, dayStartTime: '06:00' };
@@ -45,6 +45,35 @@ test('today on the chart is the same business day as the Today total', () => {
     netProfit: 2500,
     receiptCount: 1,
   });
+});
+
+test('a sale on the chart still counts when it falls before Monday and before this month', () => {
+  const now = new Date('2026-11-03T05:24:00.000Z');
+  assert.equal(businessDayKey(now, kampala), '2026-11-03');
+  const days = recentBusinessDays(7, now, kampala);
+  assert.deepEqual(days, ['2026-10-28', '2026-10-29', '2026-10-30', '2026-10-31', '2026-11-01', '2026-11-02', '2026-11-03']);
+  const octoberSale = { id: 'october', amount: 4200, cost: 2000, taxAmount: 0, createdAt: '2026-10-30T10:00:00.000Z' };
+  const mondaySale = { id: 'monday', amount: 800, cost: 300, taxAmount: 0, createdAt: '2026-11-02T08:00:00.000Z' };
+  const week = reportPeriodRange('weekly', 0, now, kampala);
+  const month = reportPeriodRange('monthly', 0, now, kampala);
+  const today = reportPeriodRange('daily', 0, now, kampala);
+  assert.equal(summarizePeriod([octoberSale], [], week.start, week.end).revenue, 0);
+  assert.equal(summarizePeriod([octoberSale], [], month.start, month.end).revenue, 0);
+  assert.equal(summarizePeriod([octoberSale], [], today.start, today.end).revenue, 0);
+  assert.equal(summarizeBusinessDays([octoberSale, mondaySale], [], kampala, days).revenue, 5000);
+  const todayKey = businessDayKey(now, kampala);
+  const [year, monthNumber] = todayKey.split('-').map(Number);
+  const monthKeys = businessDaysThrough(`${todayKey.slice(0, 7)}-01`, formatDayKey(year, monthNumber, 0));
+  assert.equal(summarizeBusinessDays([octoberSale, mondaySale], [], kampala, [todayKey]).revenue, 0);
+  assert.equal(summarizeBusinessDays([octoberSale, mondaySale], [], kampala, monthKeys).revenue, 800);
+  const broken = summarizeBusinessDays(
+    [{ id: 'broken', amount: Number.NaN, cost: Number.NaN, createdAt: octoberSale.createdAt }],
+    [{ amount: Number.NaN, createdAt: octoberSale.createdAt }],
+    kampala,
+    days,
+  );
+  assert.equal(broken.revenue, 0);
+  assert.equal(broken.netProfit, 0);
 });
 
 test('a monthly service accrual already stored as an expense is not subtracted again', () => {
