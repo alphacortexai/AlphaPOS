@@ -15,6 +15,12 @@ export type ReceiptSettings = {
   address: string;
 };
 
+export type RegisterMode = 'simple' | 'drawer';
+
+export type RegisterSettings = {
+  mode: RegisterMode;
+};
+
 export type CartDiscount = {
   mode: 'none' | 'amount' | 'percent';
   value: number;
@@ -102,6 +108,10 @@ export const defaultReceiptSettings: ReceiptSettings = {
   address: '',
 };
 
+export const defaultRegisterSettings: RegisterSettings = {
+  mode: 'simple',
+};
+
 export const roundMoney = (value: number) => Math.round(Number.isFinite(value) ? value : 0);
 
 const asRecord = (value: unknown): Record<string, unknown> | null => (
@@ -117,6 +127,11 @@ export const normalizeTaxSettings = (value: unknown): TaxSettings => {
     ratePercent: Number.isFinite(rate) ? Math.min(100, Math.max(0, rate)) : defaultTaxSettings.ratePercent,
     pricesIncludeTax: record?.pricesIncludeTax !== false,
   };
+};
+
+export const normalizeRegisterSettings = (value: unknown): RegisterSettings => {
+  const record = asRecord(value);
+  return { mode: record?.mode === 'drawer' ? 'drawer' : 'simple' };
 };
 
 export const normalizeReceiptSettings = (value: unknown): ReceiptSettings => {
