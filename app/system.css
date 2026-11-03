@@ -2046,6 +2046,40 @@ button.edit-btn:active:not(:disabled),
   font-weight: 500;
   letter-spacing: -0.01em;
 }
+.register-choice {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+}
+.register-choice button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 14px 16px;
+  border: 0;
+  border-radius: 14px;
+  background: #f5f5f7;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.06);
+  cursor: pointer;
+}
+.register-choice button.active {
+  background: #fff;
+  box-shadow: inset 0 0 0 2px #0071e3;
+}
+.register-choice strong {
+  display: block;
+  color: var(--text);
+  font-size: 15px;
+  letter-spacing: -0.02em;
+}
+.register-choice span {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+}
 .pos-category-nav:active:not(:disabled) { transform: scale(0.96); }
 .pos-category-nav:focus-visible {
   outline: none;

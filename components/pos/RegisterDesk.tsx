@@ -83,6 +83,7 @@ export default function RegisterDesk({
   cashSession,
   sessionExpected,
   suggestedFloat,
+  drawerEnabled,
   showMargin,
   formatMoney,
   onAddProduct,
@@ -117,6 +118,7 @@ export default function RegisterDesk({
   cashSession: CashSession | null;
   sessionExpected: number;
   suggestedFloat: number;
+  drawerEnabled: boolean;
   showMargin: boolean;
   formatMoney: (value: number) => string;
   onAddProduct: (productId: string) => void;
@@ -307,7 +309,7 @@ export default function RegisterDesk({
 
   const openPay = () => {
     if (cart.length === 0 || settlement.total < 0) return;
-    if (!cashSession) {
+    if (drawerEnabled && !cashSession) {
       setFloatAmount(String(suggestedFloat || 0));
       setPendingPay(true);
       setDrawerMode('open');
@@ -361,21 +363,23 @@ export default function RegisterDesk({
               onKeyDown={(event) => searchKeyDown(event.key)}
             />
           </label>
-          <div className="pos-session">
-            {cashSession ? (
-              <>
-                <strong>Drawer open</strong>
-                <span>Float {formatMoney(cashSession.openingFloat)}</span>
-                <span>Expected {formatMoney(sessionExpected)}</span>
-                <button type="button" className="edit-btn" onClick={() => { setCountedCash(String(sessionExpected)); setDrawerNote(''); setDrawerMode('close'); }}>Close drawer</button>
-              </>
-            ) : (
-              <>
-                <strong>Drawer closed</strong>
-                <button type="button" className="edit-btn" onClick={() => { setFloatAmount(String(suggestedFloat || 0)); setPendingPay(false); setDrawerMode('open'); }}>Open drawer</button>
-              </>
-            )}
-          </div>
+          {(drawerEnabled || cashSession) && (
+            <div className="pos-session">
+              {cashSession ? (
+                <>
+                  <strong>{drawerEnabled ? 'Drawer open' : 'Shift still open'}</strong>
+                  {drawerEnabled && <span>Float {formatMoney(cashSession.openingFloat)}</span>}
+                  <span>Expected {formatMoney(sessionExpected)}</span>
+                  <button type="button" className="edit-btn" onClick={() => { setCountedCash(String(sessionExpected)); setDrawerNote(''); setDrawerMode('close'); }}>Close drawer</button>
+                </>
+              ) : (
+                <>
+                  <strong>Drawer closed</strong>
+                  <button type="button" className="edit-btn" onClick={() => { setFloatAmount(String(suggestedFloat || 0)); setPendingPay(false); setDrawerMode('open'); }}>Open drawer</button>
+                </>
+              )}
+            </div>
+          )}
         </div>
         <div className={`pos-category-rail${categoryEnds.left ? ' can-left' : ''}${categoryEnds.right ? ' can-right' : ''}`}>
           <button type="button" className="pos-category-nav is-prev" aria-label="Previous categories" hidden={!categoryEnds.left && !categoryEnds.right} disabled={!categoryEnds.left} onClick={() => nudgeCategories(-1)}>
@@ -589,7 +593,7 @@ export default function RegisterDesk({
           <div className="pos-actions">
             <button type="button" className="edit-btn" disabled={cart.length === 0} onClick={onClear}>Clear</button>
             <button type="button" className="edit-btn" disabled={cart.length === 0} onClick={onHold}>Hold</button>
-            <button type="button" className="primary pos-pay" disabled={cart.length === 0} onClick={openPay}>Pay {formatMoney(settlement.total)}</button>
+            <button type="button" className="primary pos-pay" disabled={cart.length === 0} onClick={openPay}>Take payment</button>
           </div>
         </footer>
       </aside>
@@ -606,7 +610,7 @@ export default function RegisterDesk({
           <span>{cart.length === 0 ? 'Nothing yet' : `${cart.length} item${cart.length === 1 ? '' : 's'}`}</span>
           <strong>{formatMoney(settlement.total)}</strong>
         </button>
-        <button type="button" className="primary pos-pay" disabled={cart.length === 0} onClick={openPay}>Pay</button>
+        <button type="button" className="primary pos-pay" disabled={cart.length === 0} onClick={openPay}>Take payment</button>
       </div>
 
       {paymentOpen && (
@@ -703,7 +707,7 @@ export default function RegisterDesk({
               const completed = onPay(tenders);
               payLock.current = false;
               if (completed) setPaymentOpen(false);
-            }}>Charge {formatMoney(total)}</button>
+            }}>Complete sale</button>
           </div>
         </div>
       )}

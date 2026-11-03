@@ -23,11 +23,13 @@ import { completeEmailLinkSignIn, createStaffInviteLink, rememberInviteFromUrl, 
 import {
   customerAccountBalance,
   defaultReceiptSettings,
+  defaultRegisterSettings,
   defaultTaxSettings,
   nextDocumentNumber,
   normalizeCashSessions,
   normalizeCustomers,
   normalizeReceiptSettings,
+  normalizeRegisterSettings,
   normalizeTaxSettings,
   PAYMENT_METHOD_LABELS,
   receiptPrefix,
@@ -43,6 +45,7 @@ import {
   type PaymentMethod,
   type ReceiptModel,
   type ReceiptSettings,
+  type RegisterSettings,
   type TaxSettings,
   type Tender,
 } from '../lib/pos/retail';
@@ -131,6 +134,7 @@ type ShopBackupPayload = {
     cashSessions?: CashSession[];
     taxSettings?: TaxSettings;
     receiptSettings?: ReceiptSettings;
+    registerSettings?: RegisterSettings;
     salesEmailSettings?: SalesEmailSettings;
   };
 };
@@ -302,6 +306,7 @@ export default function Page() {
   const [cashSessions, setCashSessions] = useState<CashSession[]>([]);
   const [taxSettings, setTaxSettings] = useState<TaxSettings>(defaultTaxSettings);
   const [receiptSettings, setReceiptSettings] = useState<ReceiptSettings>(defaultReceiptSettings);
+  const [registerSettings, setRegisterSettings] = useState<RegisterSettings>(defaultRegisterSettings);
   const [cartDiscount, setCartDiscount] = useState<CartDiscount>({ mode: 'none', value: 0 });
   const [activeReceipt, setActiveReceipt] = useState<ReceiptModel | null>(null);
   const [returnTransactionId, setReturnTransactionId] = useState('');
@@ -362,7 +367,7 @@ export default function Page() {
   const [expenseChartRange, setExpenseChartRange] = useState<ExpenseChartRange>('month');
   const [userForm, setUserForm] = useState({ id: '', name: '', email: '', role: 'cashier' as Role, branchId: '' });
   const [shopNameForm, setShopNameForm] = useState('');
-  const [settingsTab, setSettingsTab] = useState<'shop' | 'branches' | 'time' | 'backup' | 'tax' | 'receipt' | 'email' | 'assistant'>('shop');
+  const [settingsTab, setSettingsTab] = useState<'shop' | 'branches' | 'time' | 'backup' | 'tax' | 'receipt' | 'register' | 'email' | 'assistant'>('shop');
   const [salesEmailSettings, setSalesEmailSettings] = useState<SalesEmailSettings>(defaultSalesEmailSettings);
   const [signInNotice, setSignInNotice] = useState('');
   const [invitedEmail, setInvitedEmail] = useState('');
@@ -507,6 +512,7 @@ export default function Page() {
         setCashSessions(normalizeCashSessions(data?.cashSessions));
         setTaxSettings(normalizeTaxSettings(data?.taxSettings));
         setReceiptSettings(normalizeReceiptSettings(data?.receiptSettings));
+        setRegisterSettings(normalizeRegisterSettings(data?.registerSettings));
         setSalesEmailSettings(normalizeSalesEmailSettings(data?.salesEmailSettings));
       };
       if (authUser.uid === LOCAL_OPERATOR_ID) {
@@ -706,6 +712,7 @@ export default function Page() {
           cashSessions,
           taxSettings,
           receiptSettings,
+          registerSettings,
           salesEmailSettings,
         };
         if (authUser.uid === LOCAL_OPERATOR_ID) {
@@ -750,7 +757,7 @@ export default function Page() {
       }
     };
     void saveUserData();
-  }, [activeShopOwnerUid, authUser, customerPayments, db, loadUserData, role, branches, products, services, sales, expenses, expenseGroups, users, activityLogs, shopTimeSettings, accounts, customers, suppliers, heldTickets, cashSessions, taxSettings, receiptSettings, salesEmailSettings, currentShop?.shopName]);
+  }, [activeShopOwnerUid, authUser, customerPayments, db, loadUserData, role, branches, products, services, sales, expenses, expenseGroups, users, activityLogs, shopTimeSettings, accounts, customers, suppliers, heldTickets, cashSessions, taxSettings, receiptSettings, registerSettings, salesEmailSettings, currentShop?.shopName]);
 
   const startLocalCounter = () => {
     hasLoadedUserDataRef.current = false;
@@ -1918,7 +1925,8 @@ export default function Page() {
       showNotification('Cart is empty', 'error');
       return false;
     }
-    if (!openCashSession) {
+    const countDrawer = registerSettings.mode === 'drawer';
+    if (countDrawer && !openCashSession) {
       showNotification('Open the drawer before taking payment.', 'error');
       return false;
     }
@@ -1969,7 +1977,7 @@ export default function Page() {
         paymentMethod: primaryTender.method,
         ...(primaryTender.reference ? { paymentReference: primaryTender.reference } : {}),
         tenders,
-        cashSessionId: openCashSession.id,
+        ...(countDrawer && openCashSession ? { cashSessionId: openCashSession.id } : {}),
         ...(customerName ? { customerName } : {}),
         ...(customerPhone ? { customerPhone } : {}),
         ...currentAuditStamp(),
@@ -1999,7 +2007,8 @@ export default function Page() {
   };
 
   const issueReturn = (quantities: Record<string, number>, method: PaymentMethod, reference: string) => {
-    if (!openCashSession) {
+    const countDrawer = registerSettings.mode === 'drawer';
+    if (countDrawer && !openCashSession) {
       showNotification('Open the drawer before refunding.', 'error');
       return;
     }
@@ -2040,7 +2049,7 @@ export default function Page() {
         paymentMethod: method,
         ...(reference.trim() ? { paymentReference: reference.trim() } : {}),
         tenders: [{ method, amount, ...(reference.trim() ? { reference: reference.trim() } : {}) }],
-        cashSessionId: openCashSession.id,
+        ...(countDrawer && openCashSession ? { cashSessionId: openCashSession.id } : {}),
         ...(sale.customerName ? { customerName: sale.customerName } : {}),
         ...(sale.customerPhone ? { customerPhone: sale.customerPhone } : {}),
         ...currentAuditStamp(),
@@ -2665,6 +2674,7 @@ export default function Page() {
       cashSessions,
       taxSettings,
       receiptSettings,
+      registerSettings,
       salesEmailSettings,
     },
   });
@@ -2726,6 +2736,7 @@ export default function Page() {
       const restoredCashSessions = normalizeCashSessions(parsed.data.cashSessions);
       const restoredTaxSettings = normalizeTaxSettings(parsed.data.taxSettings);
       const restoredReceiptSettings = normalizeReceiptSettings(parsed.data.receiptSettings);
+      const restoredRegisterSettings = normalizeRegisterSettings(parsed.data.registerSettings);
       const restoredSalesEmailSettings = normalizeSalesEmailSettings(parsed.data.salesEmailSettings);
       const restoredShopName = parsed.shopName?.trim() || currentShop?.shopName || 'Restored Shop';
 
@@ -2763,6 +2774,7 @@ export default function Page() {
           cashSessions: restoredCashSessions,
           taxSettings: restoredTaxSettings,
           receiptSettings: restoredReceiptSettings,
+          registerSettings: restoredRegisterSettings,
           salesEmailSettings: restoredSalesEmailSettings,
         }),
         restoredFromBackupAt: serverTimestamp(),
@@ -2808,6 +2820,7 @@ export default function Page() {
       setCashSessions(restoredCashSessions);
       setTaxSettings(restoredTaxSettings);
       setReceiptSettings(restoredReceiptSettings);
+      setRegisterSettings(restoredRegisterSettings);
       setSalesEmailSettings(restoredSalesEmailSettings);
       setRole('shop_owner');
       setAvailableShops((prev) => prev.map((shop) => shop.ownerUid === activeShopOwnerUid ? { ...shop, shopName: restoredShopName, role: 'shop_owner' } : shop));
@@ -2964,7 +2977,7 @@ export default function Page() {
 
         <button type="button" className={`sell-launch${view === 'sales' ? ' active' : ''}`} onClick={() => { setView('sales'); setIsSidebarOpen(false); }}>
           <span>Register</span>
-          <small>{openCashSession ? 'Drawer open' : 'Open a sale'}</small>
+          <small>{registerSettings.mode === 'drawer' ? (openCashSession ? 'Drawer open' : 'Drawer closed') : 'Tap a product'}</small>
         </button>
 
         <nav className="sidebar-nav" aria-label="Shop">
@@ -3096,9 +3109,19 @@ export default function Page() {
                   </div>
                   <div className="today-actions">
                     <article className="card">
-                      <h3>{openCashSession ? 'Drawer open' : 'Drawer closed'}</h3>
-                      <strong className="today-figure">{openCashSession ? formatUGX(sessionExpectedCash) : '—'}</strong>
-                      <p className="muted-copy">{openCashSession ? 'Expected in the till.' : 'Open the drawer on the register before taking cash.'}</p>
+                      {registerSettings.mode === 'drawer' ? (
+                        <>
+                          <h3>{openCashSession ? 'Drawer open' : 'Drawer closed'}</h3>
+                          <strong className="today-figure">{openCashSession ? formatUGX(sessionExpectedCash) : '—'}</strong>
+                          <p className="muted-copy">{openCashSession ? 'Expected in the till.' : 'Open the drawer on the register before taking cash.'}</p>
+                        </>
+                      ) : (
+                        <>
+                          <h3>Make a sale</h3>
+                          <p className="muted-copy">Tap a product to add it, then take payment.</p>
+                          <button type="button" className="primary" onClick={() => setView('sales')}>Start a sale</button>
+                        </>
+                      )}
                     </article>
                     <article className="card">
                       <div className="insight-header-row">
@@ -3116,7 +3139,7 @@ export default function Page() {
                         </ul>
                       ) : <p className="muted-copy">Nothing is running low.</p>}
                     </article>
-                    {recentClosedShifts.length > 0 && (
+                    {registerSettings.mode === 'drawer' && recentClosedShifts.length > 0 && (
                       <article className="card today-shifts">
                         <h3>Closed shifts</h3>
                         <ul className="shift-list">
@@ -3360,6 +3383,7 @@ export default function Page() {
             cashSession={openCashSession}
             sessionExpected={sessionExpectedCash}
             suggestedFloat={suggestedFloat}
+            drawerEnabled={registerSettings.mode === 'drawer'}
             showMargin={showRegisterMargin}
             formatMoney={formatUGX}
             onAddProduct={(productId) => addProductToCart(productId, true)}
@@ -4017,6 +4041,7 @@ export default function Page() {
               <button type="button" className={settingsTab === 'time' ? 'active' : ''} onClick={() => setSettingsTab('time')}>Business day</button>
               <button type="button" className={settingsTab === 'assistant' ? 'active' : ''} onClick={() => setSettingsTab('assistant')}>Assistant</button>
               <p>Checkout</p>
+              <button type="button" className={settingsTab === 'register' ? 'active' : ''} onClick={() => setSettingsTab('register')}>Register</button>
               <button type="button" className={settingsTab === 'tax' ? 'active' : ''} onClick={() => setSettingsTab('tax')}>Tax</button>
               <button type="button" className={settingsTab === 'receipt' ? 'active' : ''} onClick={() => setSettingsTab('receipt')}>Receipt</button>
               <p>Money</p>
@@ -4127,6 +4152,25 @@ export default function Page() {
                   <button type="button" className="primary" onClick={() => { void saveCatalogKey(); }}>Save key</button>
                   {catalogKey && <button type="button" className="edit-btn" onClick={() => { void removeCatalogKey(); }}>Remove key</button>}
                 </div>
+              </div>
+            )}
+            {settingsTab === 'register' && (
+              <div className="card">
+                <h3>Register</h3>
+                <p className="muted-copy">Simple selling is ready as soon as someone signs in. Turn on drawer shifts when the shop wants to count the till at the start and end of a shift.</p>
+                <div className="register-choice" role="radiogroup" aria-label="Register style">
+                  <button type="button" role="radio" aria-checked={registerSettings.mode === 'simple'} className={registerSettings.mode === 'simple' ? 'active' : ''} onClick={() => setRegisterSettings({ mode: 'simple' })}>
+                    <strong>Simple selling</strong>
+                    <span>Tap a product, add it to the sale, and take payment.</span>
+                  </button>
+                  <button type="button" role="radio" aria-checked={registerSettings.mode === 'drawer'} className={registerSettings.mode === 'drawer' ? 'active' : ''} onClick={() => setRegisterSettings({ mode: 'drawer' })}>
+                    <strong>Drawer shifts</strong>
+                    <span>Open the till at the start of a shift and count the cash when you close it.</span>
+                  </button>
+                </div>
+                {registerSettings.mode === 'simple' && openCashSession && (
+                  <p className="muted-copy">A shift is still open. Close the drawer on the register once. After that, selling stays simple.</p>
+                )}
               </div>
             )}
             {settingsTab === 'tax' && (
@@ -4260,7 +4304,7 @@ export default function Page() {
           <section>
             <div className="card">
               <h3>Where money sits</h3>
-              <p className="muted-copy">Each sale and expense updates one of these balances. Cash in the drawer is counted on the register.</p>
+              <p className="muted-copy">{registerSettings.mode === 'drawer' ? 'Each sale and expense updates one of these balances. Cash in the drawer is counted on the register.' : 'Each sale and expense updates one of these balances.'}</p>
               {(isShopOwner || role === 'admin') && (
                 <details className="quiet-fold">
                   <summary>Add or adjust a balance</summary>
@@ -4660,7 +4704,7 @@ export default function Page() {
                         <option value="bank_transfer">Bank</option>
                       </select>
                     </label>
-                    <p className="muted-copy form-span">Owes {formatUGX(customerBalance(paymentCustomer.name, paymentCustomer.phone))}. {paymentDraft.method === 'cash' && openCashSession ? 'Cash is added to the open drawer.' : paymentDraft.method === 'cash' ? 'The drawer is closed, so this cash is recorded on the cash account only.' : 'This is recorded on that account. AlphaPOS does not collect the money.'}</p>
+                    <p className="muted-copy form-span">Owes {formatUGX(customerBalance(paymentCustomer.name, paymentCustomer.phone))}. {paymentDraft.method === 'cash' && registerSettings.mode === 'drawer' && openCashSession ? 'Cash is added to the open drawer.' : paymentDraft.method === 'cash' ? 'Cash is recorded on the cash account.' : 'This is recorded on that account. AlphaPOS does not collect the money.'}</p>
                   </div>
                 </div>
                 <div className="modal-footer">
