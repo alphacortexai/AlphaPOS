@@ -56,6 +56,7 @@ type PaymentDraft = {
   cashTendered: string;
   secondAmount: string;
   reference: string;
+  cashTouched: boolean;
 };
 
 const emptyPayment = (total: number): PaymentDraft => ({
@@ -65,7 +66,21 @@ const emptyPayment = (total: number): PaymentDraft => ({
   cashTendered: String(total),
   secondAmount: '',
   reference: '',
+  cashTouched: false,
 });
+
+const withCashEntry = (prev: PaymentDraft, entry: string | number): PaymentDraft => {
+  if (typeof entry === 'number') {
+    const next = prev.cashTouched ? Number(prev.cashTendered || 0) + entry : entry;
+    return { ...prev, cashTendered: String(next), cashTouched: true };
+  }
+  if (entry === '←') {
+    if (!prev.cashTouched) return { ...prev, cashTendered: '', cashTouched: true };
+    return { ...prev, cashTendered: prev.cashTendered.slice(0, -1), cashTouched: true };
+  }
+  if (!prev.cashTouched) return { ...prev, cashTendered: entry === '00' ? '0' : entry, cashTouched: true };
+  return { ...prev, cashTendered: `${prev.cashTendered === '0' ? '' : prev.cashTendered}${entry}`.slice(0, 9), cashTouched: true };
+};
 
 export default function RegisterDesk({
   products,
@@ -155,6 +170,7 @@ export default function RegisterDesk({
   const [drawerNote, setDrawerNote] = useState('');
   const [pendingPay, setPendingPay] = useState(false);
   const [heldOpen, setHeldOpen] = useState(false);
+  const [clearOpen, setClearOpen] = useState(false);
   const [customerOpen, setCustomerOpen] = useState(false);
 
   const categories = useMemo(() => {
@@ -261,17 +277,18 @@ export default function RegisterDesk({
   }, []);
 
   useEffect(() => {
-    if (!paymentOpen && !drawerMode && !heldOpen) return;
+    if (!paymentOpen && !drawerMode && !heldOpen && !clearOpen) return;
     if (paymentOpen) paymentRef.current?.focus();
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       if (paymentOpen) setPaymentOpen(false);
       else if (drawerMode) { setDrawerMode(null); setPendingPay(false); }
+      else if (clearOpen) setClearOpen(false);
       else setHeldOpen(false);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [paymentOpen, drawerMode, heldOpen]);
+  }, [paymentOpen, drawerMode, heldOpen, clearOpen]);
 
   useEffect(() => {
     if (pendingPay && cashSession) {
@@ -425,41 +442,59 @@ export default function RegisterDesk({
             const low = product.stock > 0 && product.stock < reorderLevel(product);
             const onTicket = cart.find((item) => item.itemType === 'product' && item.itemId === product.id)?.qty || 0;
             return (
-              <button key={product.id} type="button" className={`pos-tile ${out ? 'is-out' : ''} ${onTicket ? 'is-in-cart' : ''} ${addedId === product.id ? 'is-just-added' : ''}`} style={{ '--enter-delay': `${Math.min(index, 15) * 18}ms` } as React.CSSProperties} disabled={out} onClick={() => { onAddProduct(product.id); confirmAdd(product.id, product.name); }}>
-                <span className="pos-tile-motion">
-                  <span className="pos-photo" aria-hidden="true">
-                    {product.image ? <img src={product.image} alt="" /> : <span>{product.name.slice(0, 1).toUpperCase()}</span>}
-                    {onTicket > 0 && <em className="pos-photo-qty">{onTicket}</em>}
-                    {(out || low) && <em className={`pos-photo-flag${low ? ' is-low' : ''}`}>{out ? 'Out' : 'Low'}</em>}
-                  </span>
-                  <span className="pos-tile-copy">
-                    <span className="pos-tile-name">{product.name}</span>
-                    <span className="pos-tile-foot">
-                      <strong>{formatMoney(product.salePrice)}</strong>
-                      <em className={out ? 'is-out' : low ? 'is-low' : ''}>{out ? 'Out of stock' : low ? `${product.stock} low` : `${product.stock} in stock`}</em>
+              <div key={product.id} className={`pos-tile ${out ? 'is-out' : ''} ${onTicket ? 'is-in-cart' : ''} ${addedId === product.id ? 'is-just-added' : ''}`} style={{ '--enter-delay': `${Math.min(index, 15) * 18}ms` } as React.CSSProperties}>
+                <button type="button" className="pos-tile-hit" disabled={out} onClick={() => { onAddProduct(product.id); confirmAdd(product.id, product.name); }}>
+                  <span className="pos-tile-motion">
+                    <span className="pos-photo" aria-hidden="true">
+                      {product.image ? <img src={product.image} alt="" /> : <span>{product.name.slice(0, 1).toUpperCase()}</span>}
+                      {(out || low) && <em className={`pos-photo-flag${low ? ' is-low' : ''}`}>{out ? 'Out' : 'Low'}</em>}
                     </span>
-                    {Object.keys(branchNames).length > 1 && <span className="pos-tile-meta">{branchNames[product.branchId]}</span>}
+                    <span className="pos-tile-copy">
+                      <span className="pos-tile-name">{product.name}</span>
+                      <span className="pos-tile-foot">
+                        <strong>{formatMoney(product.salePrice)}</strong>
+                        <em className={out ? 'is-out' : low ? 'is-low' : ''}>{out ? 'Out of stock' : low ? `${product.stock} low` : `${product.stock} in stock`}</em>
+                      </span>
+                      {Object.keys(branchNames).length > 1 && <span className="pos-tile-meta">{branchNames[product.branchId]}</span>}
+                    </span>
                   </span>
-                </span>
-              </button>
+                </button>
+                {onTicket > 0 && (
+                  <TileQty
+                    name={product.name}
+                    qty={onTicket}
+                    canAdd={onTicket < product.stock}
+                    onDecrease={() => onChangeQty(product.id, 'product', onTicket - 1)}
+                    onIncrease={() => { onAddProduct(product.id); confirmAdd(product.id, product.name); }}
+                  />
+                )}
+              </div>
             );
           })}
           {showServices && visibleServices.map((service, index) => {
             const onTicket = cart.find((item) => item.itemType === 'service' && item.itemId === service.id)?.qty || 0;
             return (
-              <button key={service.id} type="button" className={`pos-tile is-service ${onTicket ? 'is-in-cart' : ''} ${addedId === service.id ? 'is-just-added' : ''}`} style={{ '--enter-delay': `${Math.min(pageProducts.length + index, 15) * 18}ms` } as React.CSSProperties} onClick={() => { onAddService(service.id); confirmAdd(service.id, service.name); }}>
-                <span className="pos-tile-motion">
-                  <span className="pos-photo" aria-hidden="true">
-                    <span>S</span>
-                    {onTicket > 0 && <em className="pos-photo-qty">{onTicket}</em>}
+              <div key={service.id} className={`pos-tile is-service ${onTicket ? 'is-in-cart' : ''} ${addedId === service.id ? 'is-just-added' : ''}`} style={{ '--enter-delay': `${Math.min(pageProducts.length + index, 15) * 18}ms` } as React.CSSProperties}>
+                <button type="button" className="pos-tile-hit" onClick={() => { onAddService(service.id); confirmAdd(service.id, service.name); }}>
+                  <span className="pos-tile-motion">
+                    <span className="pos-photo" aria-hidden="true"><span>S</span></span>
+                    <span className="pos-tile-copy">
+                      <span className="pos-tile-name">{service.name}</span>
+                      <span className="pos-tile-meta">Service</span>
+                      <span className="pos-tile-foot"><strong>{formatMoney(service.salePrice)}</strong></span>
+                    </span>
                   </span>
-                  <span className="pos-tile-copy">
-                    <span className="pos-tile-name">{service.name}</span>
-                    <span className="pos-tile-meta">Service</span>
-                    <span className="pos-tile-foot"><strong>{formatMoney(service.salePrice)}</strong></span>
-                  </span>
-                </span>
-              </button>
+                </button>
+                {onTicket > 0 && (
+                  <TileQty
+                    name={service.name}
+                    qty={onTicket}
+                    canAdd
+                    onDecrease={() => onChangeQty(service.id, 'service', onTicket - 1)}
+                    onIncrease={() => { onAddService(service.id); confirmAdd(service.id, service.name); }}
+                  />
+                )}
+              </div>
             );
           })}
           {visibleProducts.length === 0 && visibleServices.length === 0 && (
@@ -540,7 +575,7 @@ export default function RegisterDesk({
               </div>
               <div className="pos-line-controls">
                 <div className="pos-stepper">
-                  <button type="button" onClick={() => onChangeQty(item.itemId, item.itemType, item.qty - 1)} aria-label={`Decrease ${item.itemName}`}>−</button>
+                  <button type="button" onClick={() => onChangeQty(item.itemId, item.itemType, item.qty - 1)} aria-label={item.qty <= 1 ? `Remove ${item.itemName}` : `Remove one ${item.itemName}`}>−</button>
                   <input aria-label={`${item.itemName} quantity`} type="number" min={1} step="1" value={item.qty} onChange={(event) => onChangeQty(item.itemId, item.itemType, Number(event.target.value))} />
                   <button type="button" onClick={() => onChangeQty(item.itemId, item.itemType, item.qty + 1)} aria-label={`Increase ${item.itemName}`}>+</button>
                 </div>
@@ -591,7 +626,7 @@ export default function RegisterDesk({
           {showMargin && <div className={`pos-total-row is-muted${marginAfterTax < 0 ? ' is-negative' : ''}`}><span>Margin after tax</span><span>{formatMoney(marginAfterTax)}</span></div>}
           <div className="pos-total-row is-due"><span>Total due</span><strong>{formatMoney(settlement.total)}</strong></div>
           <div className="pos-actions">
-            <button type="button" className="edit-btn" disabled={cart.length === 0} onClick={onClear}>Clear</button>
+            <button type="button" className="edit-btn" disabled={cart.length === 0} onClick={() => setClearOpen(true)}>Clear</button>
             <button type="button" className="edit-btn" disabled={cart.length === 0} onClick={onHold}>Hold</button>
             <button type="button" className="primary pos-pay" disabled={cart.length === 0} onClick={openPay}>Take payment</button>
           </div>
@@ -627,7 +662,7 @@ export default function RegisterDesk({
             <div className="pos-pay-main">
             <div className="pos-methods">
               {(Object.keys(PAYMENT_METHOD_LABELS) as PaymentMethod[]).map((method) => (
-                <button key={method} type="button" className={payment.method === method ? 'active' : ''} aria-pressed={payment.method === method} onClick={() => setPayment((prev) => ({ ...prev, method, cashTendered: method === 'cash' ? String(total) : prev.cashTendered }))}>
+                <button key={method} type="button" className={payment.method === method ? 'active' : ''} aria-pressed={payment.method === method} onClick={() => setPayment((prev) => ({ ...prev, method, ...(method === 'cash' ? { cashTendered: String(total), cashTouched: false } : {}) }))}>
                   {payment.method === method && <span className="pos-method-mark" aria-hidden="true">✓</span>}
                   {PAYMENT_METHOD_LABELS[method]}
                 </button>
@@ -685,15 +720,13 @@ export default function RegisterDesk({
             {cashIsPrimary && (
               <div className="pos-cashbox">
                 <div className="pos-quick-cash">
-                  <button type="button" onClick={() => setPayment((prev) => ({ ...prev, cashTendered: String(primaryAmount) }))}>Exact</button>
-                  {cashNumbers.map((note) => <button key={note} type="button" onClick={() => setPayment((prev) => ({ ...prev, cashTendered: String(Number(prev.cashTendered || 0) + Number(note)) }))}>{formatMoney(Number(note))}</button>)}
+                  <button type="button" onClick={() => setPayment((prev) => ({ ...prev, cashTendered: String(primaryAmount), cashTouched: false }))}>Exact</button>
+                  {cashNumbers.map((note) => <button key={note} type="button" onClick={() => setPayment((prev) => withCashEntry(prev, Number(note)))}>{formatMoney(Number(note))}</button>)}
                 </div>
+                <p className="pos-pay-note">The amount due starts filled in. The first note or digit replaces it. Another note adds to the cash received.</p>
                 <div className="pos-numpad">
                   {['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '00', '←'].map((key) => (
-                    <button key={key} type="button" aria-label={key === '←' ? 'Delete last digit' : undefined} onClick={() => setPayment((prev) => {
-                      if (key === '←') return { ...prev, cashTendered: prev.cashTendered.slice(0, -1) };
-                      return { ...prev, cashTendered: `${prev.cashTendered === '0' ? '' : prev.cashTendered}${key}`.slice(0, 9) };
-                    })}>{key === '←' ? 'Del' : key}</button>
+                    <button key={key} type="button" aria-label={key === '←' ? 'Delete last digit' : undefined} onClick={() => setPayment((prev) => withCashEntry(prev, key))}>{key === '←' ? 'Del' : key}</button>
                   ))}
                 </div>
               </div>
@@ -762,6 +795,25 @@ export default function RegisterDesk({
         </div>
       )}
 
+      {clearOpen && (
+        <div className="pos-overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) setClearOpen(false); }}>
+          <div className="pos-sheet pos-sheet-small" role="dialog" aria-modal="true" aria-labelledby="clear-sale-title">
+            <header>
+              <div>
+                <p>Current sale</p>
+                <h3 id="clear-sale-title">Clear this sale?</h3>
+              </div>
+              <button type="button" className="modal-close" onClick={() => setClearOpen(false)} aria-label="Keep this sale">×</button>
+            </header>
+            <p className="pos-pay-note">{cart.length === 1 ? `${cart[0].itemName} leaves this ticket.` : `${cart.reduce((sum, item) => sum + item.qty, 0)} items leave this ticket.`} Stock stays as it is, and nothing is charged.</p>
+            <div className="pos-confirm-actions">
+              <button type="button" className="edit-btn" onClick={() => setClearOpen(false)}>Keep sale</button>
+              <button type="button" className="primary" onClick={() => { onClear(); setClearOpen(false); }}>Clear sale</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {heldOpen && (
         <div className="pos-overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) setHeldOpen(false); }}>
           <div className="pos-sheet pos-sheet-small" role="dialog" aria-modal="true" aria-labelledby="held-title">
@@ -787,6 +839,16 @@ export default function RegisterDesk({
         </div>
       )}
     </section>
+  );
+}
+
+function TileQty({ name, qty, canAdd, onDecrease, onIncrease }: { name: string; qty: number; canAdd: boolean; onDecrease: () => void; onIncrease: () => void }) {
+  return (
+    <div className="pos-tile-qty">
+      <button type="button" aria-label={qty <= 1 ? `Remove ${name}` : `Remove one ${name}`} onClick={onDecrease}>−</button>
+      <span>{qty}</span>
+      <button type="button" aria-label={`Add one ${name}`} disabled={!canAdd} onClick={onIncrease}>+</button>
+    </div>
   );
 }
 

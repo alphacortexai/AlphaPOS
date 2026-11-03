@@ -2080,6 +2080,51 @@ button.edit-btn:active:not(:disabled),
   font-weight: 500;
   line-height: 1.4;
 }
+.pos-tile-hit {
+  display: flex;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.pos-tile-hit:disabled { cursor: not-allowed; }
+.pos-tile-qty {
+  display: grid;
+  grid-template-columns: 36px 1fr 36px;
+  align-items: center;
+  gap: 6px;
+  margin: 0 8px 8px;
+}
+.pos-tile-qty button {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--text);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+.pos-tile-qty button:disabled { opacity: 0.35; cursor: default; }
+.pos-tile-qty span {
+  text-align: center;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+.pos-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+.pos-confirm-actions .primary { min-height: 44px; padding: 0 16px; }
 .pos-category-nav:active:not(:disabled) { transform: scale(0.96); }
 .pos-category-nav:focus-visible {
   outline: none;

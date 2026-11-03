@@ -3399,7 +3399,7 @@ export default function Page() {
             onRecall={recallHeldSale}
             onOpenDrawer={openDrawer}
             onCloseDrawer={closeDrawer}
-            onClear={() => { if (cart.length === 0 || window.confirm('Clear this sale?')) clearRegister(); }}
+            onClear={clearRegister}
             onPay={completeRegisterSale}
             onCreateProduct={() => openProductForm(blankProductForm(branches[0]?.id || ''))}
           />
