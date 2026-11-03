@@ -76,6 +76,30 @@ test('a sale on the chart still counts when it falls before Monday and before th
   assert.equal(broken.netProfit, 0);
 });
 
+test('Saturday evening receipts from 31 October stay on the 100-day chart and out of Tuesday, the Monday week, and November', () => {
+  const now = new Date('2026-11-03T05:48:00.000Z');
+  const sales = [
+    { id: 'r3', amount: 2800, cost: 1680, taxAmount: 0, createdAt: '2026-10-31T18:42:12.000Z' },
+    { id: 'r2', amount: 400, cost: 250, taxAmount: 0, createdAt: '2026-10-31T17:21:07.000Z' },
+    { id: 'r1', amount: 1000, cost: 500, taxAmount: 0, createdAt: '2026-10-31T16:17:31.000Z' },
+  ];
+  for (const clock of [kampala, { timezoneOffsetMinutes: 0, dayStartTime: '00:00' }]) {
+    assert.equal(businessDayKey(now, clock), '2026-11-03');
+    assert.equal(businessDayKey(new Date(sales[0].createdAt), clock), '2026-10-31');
+    const days = recentBusinessDays(100, now, clock);
+    assert.equal(days[0], '2026-07-27');
+    assert.equal(days[days.length - 1], '2026-11-03');
+    const windowTotals = summarizeBusinessDays(sales, [], clock, days);
+    assert.equal(windowTotals.revenue, 4200);
+    assert.equal(windowTotals.netProfit, 1770);
+    assert.equal(summarizeBusinessDays(sales, [], clock, ['2026-11-03']).revenue, 0);
+    const monthKeys = businessDaysThrough('2026-11-01', formatDayKey(2026, 11, 0));
+    assert.equal(summarizeBusinessDays(sales, [], clock, monthKeys).revenue, 0);
+    const week = reportPeriodRange('weekly', 0, now, clock);
+    assert.equal(summarizePeriod(sales, [], week.start, week.end).revenue, 0);
+  }
+});
+
 test('a monthly service accrual already stored as an expense is not subtracted again', () => {
   const start = new Date('2026-11-01T21:00:00.000Z');
   const end = new Date('2026-11-02T21:00:00.000Z');
