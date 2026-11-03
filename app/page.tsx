@@ -2956,6 +2956,8 @@ export default function Page() {
     </div>
   ) : null;
 
+  const sellLabel = registerSettings.mode === 'drawer' ? 'Register' : 'Make a sale';
+
   return (
     <div className="app">
       <div className={`sidebar-overlay ${isSidebarOpen ? 'show' : ''}`} onClick={() => setIsSidebarOpen(false)}></div>
@@ -2976,7 +2978,7 @@ export default function Page() {
         </div>
 
         <button type="button" className={`sell-launch${view === 'sales' ? ' active' : ''}`} onClick={() => { setView('sales'); setIsSidebarOpen(false); }}>
-          <span>Register</span>
+          <span>{sellLabel}</span>
           <small>{registerSettings.mode === 'drawer' ? (openCashSession ? 'Drawer open' : 'Drawer closed') : 'Tap a product'}</small>
         </button>
 
@@ -3042,7 +3044,7 @@ export default function Page() {
             <div>
               <h1>
                 {view === 'dashboard' ? 'Today' :
-                 view === 'sales' ? 'Register' :
+                 view === 'sales' ? sellLabel :
                  view === 'sales_history' ? 'Sales' :
                  view === 'customers' ? 'Customers' :
                  view === 'products' ? 'Products' :
@@ -3085,7 +3087,7 @@ export default function Page() {
                         <option value="monthly">This month</option>
                         <option value="yearly">This year</option>
                       </select>
-                      <button className="primary" onClick={() => setView('sales')}>Register</button>
+                      <button className="primary" onClick={() => setView('sales')}>{sellLabel}</button>
                     </div>
                   </div>
                   <div className="today-numbers">
