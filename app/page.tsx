@@ -2856,7 +2856,7 @@ export default function Page() {
           <div className="auth-layout">
             <Logo variant="stacked" />
             <div className="auth-copy">
-              <h1>The counter, ready when the shop opens.</h1>
+              <h1 className="bubble-line">The counter, ready when the shop opens.</h1>
               <p>Sell, take payment, and keep the books in one place.</p>
             </div>
             <section className="auth-card" aria-label="Sign in">

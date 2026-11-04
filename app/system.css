@@ -2132,6 +2132,35 @@ button.edit-btn:active:not(:disabled),
     inset 0 1px 0 rgba(255, 255, 255, 0.9),
     0 0 0 4px rgba(0, 113, 227, 0.28);
 }
+.auth-copy h1.bubble-line {
+  background-image: linear-gradient(
+    105deg,
+    #6ec8ff 0%,
+    #b794f6 14%,
+    #ff9ec8 28%,
+    #ffe08a 42%,
+    #8eefc8 56%,
+    #7ad7ff 70%,
+    #c4b5fd 84%,
+    #6ec8ff 100%
+  ) !important;
+  background-size: 280% 100% !important;
+  background-repeat: no-repeat !important;
+  -webkit-background-clip: text !important;
+  background-clip: text !important;
+  -webkit-text-fill-color: transparent !important;
+  color: transparent !important;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .auth-copy h1.bubble-line {
+    animation: glass-rise 560ms var(--ease-glass) 60ms both, bubble-wash 14s ease-in-out infinite !important;
+  }
+}
+@keyframes bubble-wash {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
 @media (prefers-reduced-motion: reduce) {
   .pos-categories { scroll-behavior: auto; }
 }
