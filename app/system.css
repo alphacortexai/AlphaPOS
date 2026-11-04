@@ -2134,17 +2134,23 @@ button.edit-btn:active:not(:disabled),
 }
 .auth-copy h1.bubble-line {
   background-image: linear-gradient(
-    105deg,
-    #6ec8ff 0%,
-    #b794f6 14%,
-    #ff9ec8 28%,
-    #ffe08a 42%,
-    #8eefc8 56%,
-    #7ad7ff 70%,
-    #c4b5fd 84%,
-    #6ec8ff 100%
+    96deg,
+    #ffe200 0%,
+    #fff15a 5%,
+    #ff3ec8 12%,
+    #9b4dff 18%,
+    #1a2bff 26%,
+    #00124d 32%,
+    #00e7ff 40%,
+    #b6ff3c 48%,
+    #ffe200 56%,
+    #ff3ec8 66%,
+    #1a2bff 76%,
+    #00e7ff 86%,
+    #b6ff3c 94%,
+    #ffe200 100%
   ) !important;
-  background-size: 280% 100% !important;
+  background-size: 190% 160% !important;
   background-repeat: no-repeat !important;
   -webkit-background-clip: text !important;
   background-clip: text !important;
@@ -2153,13 +2159,13 @@ button.edit-btn:active:not(:disabled),
 }
 @media (prefers-reduced-motion: no-preference) {
   .auth-copy h1.bubble-line {
-    animation: glass-rise 560ms var(--ease-glass) 60ms both, bubble-wash 14s ease-in-out infinite !important;
+    animation: glass-rise 560ms var(--ease-glass) 60ms both, bubble-wash 11s ease-in-out infinite !important;
   }
 }
 @keyframes bubble-wash {
-  0% { background-position: 0% 50%; }
-  50% { background-position: 100% 50%; }
-  100% { background-position: 0% 50%; }
+  0% { background-position: 0% 35%; }
+  50% { background-position: 100% 65%; }
+  100% { background-position: 0% 35%; }
 }
 @media (prefers-reduced-motion: reduce) {
   .pos-categories { scroll-behavior: auto; }
