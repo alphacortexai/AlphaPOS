@@ -160,6 +160,7 @@ button.brand-home .logo-word { height: 15px; transform: translateY(1px); }
 .sell-launch.active,
 .sell-launch:hover {
   display: flex;
+  flex: 0 0 auto !important;
   flex-direction: column;
   align-items: flex-start;
   gap: 1px;
@@ -172,6 +173,13 @@ button.brand-home .logo-word { height: 15px; transform: translateY(1px); }
   color: #fff !important;
   box-shadow: none !important;
   text-align: left;
+  line-height: 1.15;
+}
+.sell-launch span,
+.sell-launch small {
+  display: block;
+  line-height: 1.15;
+  white-space: nowrap;
 }
 .sell-launch span { font-size: 14px; font-weight: 600; }
 .sell-launch small { color: rgba(255, 255, 255, 0.82) !important; font-size: 12px; font-weight: 500; }
@@ -1307,9 +1315,9 @@ button.primary.pos-charge {
   .logo-stack .logo-word { height: 22px; }
   .rail-shop strong { font-size: 15px !important; }
   .rail-shop span { font-size: 13px !important; }
-  .sell-launch { margin: 4px 4px 8px !important; }
-  .sell-launch span { font-size: 17px; font-weight: 600; letter-spacing: -0.022em; }
-  .sell-launch small { font-size: 13px; font-weight: 400; }
+  .sell-launch { margin: 4px 4px 8px !important; flex: 0 0 auto !important; }
+  .sell-launch span { font-size: 16px; font-weight: 600; letter-spacing: -0.022em; line-height: 1.15; }
+  .sell-launch small { font-size: 13px; font-weight: 400; line-height: 1.15; }
   .sidebar-nav {
     flex: 1 1 auto !important;
     min-height: 0 !important;
