@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type Dispatch, type SetStateAction } from 'react';
 import { firebaseApp } from '../lib.firebase';
-import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
+import { getAuth, onAuthStateChanged, signOut } from 'firebase/auth';
 import { collection, deleteDoc, doc, getDoc, getDocs, getFirestore, query, runTransaction, serverTimestamp, setDoc, where } from 'firebase/firestore';
 import Logo from '../components/brand/Logo';
 import CatalogAssistant, { type CatalogCategoryRow, type CatalogCreateRow, type CatalogPriceRow } from '../components/pos/CatalogAssistant';
@@ -19,6 +19,7 @@ import { LOCAL_OPERATOR_ID, readLocalShop, writeLocalShop } from '../lib/pos/loc
 import { nextSku, reservedProductCodes } from '../lib/pos/sku';
 import { attachProductImages, compressProductPhoto, imageMapChars, isProductImage, PRODUCT_IMAGE_DOC_MAX_CHARS, readLocalProductImages, splitProductImages, writeLocalProductImages } from '../lib/pos/productImage';
 import { beginSalesEmailSend, buildSalesDigest, defaultSalesEmailSettings, finishSalesEmailSend, normalizeSalesEmailSettings, previousSalesPeriod, type SalesDigest, type SalesEmailSettings } from '../lib/pos/salesEmail';
+import { completeGoogleRedirect, googleSignInError, startGoogleSignIn } from '../lib/pos/googleSignIn';
 import { completeEmailLinkSignIn, createStaffInviteLink, rememberInviteFromUrl, staffSignInError, takeInvitedShopId } from '../lib/pos/staffInvite';
 import {
   customerAccountBalance,
@@ -370,6 +371,7 @@ export default function Page() {
   const [settingsTab, setSettingsTab] = useState<'shop' | 'branches' | 'time' | 'backup' | 'tax' | 'receipt' | 'register' | 'email' | 'assistant'>('shop');
   const [salesEmailSettings, setSalesEmailSettings] = useState<SalesEmailSettings>(defaultSalesEmailSettings);
   const [signInNotice, setSignInNotice] = useState('');
+  const [signingIn, setSigningIn] = useState(false);
   const [invitedEmail, setInvitedEmail] = useState('');
   const [sendingSalesEmail, setSendingSalesEmail] = useState(false);
   const [recipientDraft, setRecipientDraft] = useState('');
@@ -467,6 +469,11 @@ export default function Page() {
         await completeEmailLinkSignIn(auth);
       } catch (error) {
         if (!cancelled) setSignInNotice(staffSignInError(error));
+      }
+      try {
+        await completeGoogleRedirect(auth);
+      } catch (error) {
+        if (!cancelled) setSignInNotice(googleSignInError(error));
       }
       if (cancelled) return;
       unsubscribe = onAuthStateChanged(auth, (user) => {
@@ -770,13 +777,13 @@ export default function Page() {
   const handleLogin = async () => {
     if (!firebaseApp) return;
     const auth = getAuth(firebaseApp);
-    const provider = new GoogleAuthProvider();
-    if (invitedEmail) provider.setCustomParameters({ login_hint: invitedEmail });
+    setSignInNotice('');
+    setSigningIn(true);
     try {
-      await signInWithPopup(auth, provider);
-      setStatus('Logged in successfully!');
+      await startGoogleSignIn(auth, invitedEmail);
     } catch (error) {
-      setStatus(`Login failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      setSigningIn(false);
+      setSignInNotice(googleSignInError(error));
     }
   };
 
@@ -2866,7 +2873,7 @@ export default function Page() {
               {invitedEmail && <p className="auth-local-note">This invite is for {invitedEmail}. Sign in with Google using that address.</p>}
               {firebaseApp ? (
                 <>
-                  <button className="auth-action" type="button" onClick={handleLogin}>Sign in with Google</button>
+                  <button className="auth-action" type="button" onClick={handleLogin} disabled={signingIn}>{signingIn ? 'Opening Google…' : 'Sign in with Google'}</button>
                   <p className="auth-fine">Staff open the link in their invite, or sign in with the same email.</p>
                 </>
               ) : (
