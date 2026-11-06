@@ -333,7 +333,8 @@ button.primary:hover,
 }
 button.primary:active:not(:disabled),
 .auth-action:active:not(:disabled) { transform: scale(0.98) !important; }
-button.primary:disabled { opacity: 0.38 !important; }
+button.primary:disabled,
+.auth-action:disabled { opacity: 0.38 !important; }
 button.edit-btn {
   min-height: 32px;
   padding: 0 12px !important;
