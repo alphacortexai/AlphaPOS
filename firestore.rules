@@ -1,0 +1,83 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+    function email() {
+      return request.auth.token.email.lower();
+    }
+    function member(owner) {
+      return get(/databases/$(database)/documents/shopMemberships/$(owner + '_' + email()));
+    }
+    function role(owner) {
+      return request.auth.uid == owner
+        ? 'shop_owner'
+        : (!member(owner).exists ? '' : member(owner).data.role);
+    }
+    function isStaff(owner) {
+      return signedIn() && (request.auth.uid == owner || (member(owner).exists && member(owner).data.email == email()));
+    }
+    function seesBooks(owner) {
+      return role(owner) in ['shop_owner', 'admin', 'manager'];
+    }
+    function editsShelf(owner) {
+      return role(owner) in ['shop_owner', 'admin', 'manager', 'stock'];
+    }
+    function cashierPatch() {
+      return request.resource.data.diff(resource.data).affectedKeys()
+        .hasOnly(['customers', 'heldTickets', 'cashSessions', 'revision', 'updatedAt', 'ledgerSplit']);
+    }
+
+    match /shopMemberships/{id} {
+      allow read: if signedIn() && (resource.data.ownerUid == request.auth.uid || resource.data.email == email());
+      allow create, update: if signedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow delete: if signedIn() && resource.data.ownerUid == request.auth.uid;
+    }
+
+    match /users/{owner}/pos/data {
+      allow read: if isStaff(owner);
+      allow create: if signedIn() && request.auth.uid == owner;
+      allow update: if editsShelf(owner) || (isStaff(owner) && role(owner) == 'cashier' && cashierPatch());
+      allow delete: if signedIn() && request.auth.uid == owner;
+    }
+    match /users/{owner}/pos/stock/{productId} {
+      allow read: if isStaff(owner);
+      allow create, update: if isStaff(owner)
+        && request.resource.data.qty is number
+        && request.resource.data.qty >= 0;
+    }
+    match /users/{owner}/pos/sales/{saleId} {
+      allow read: if isStaff(owner);
+      allow create: if isStaff(owner);
+      allow update: if seesBooks(owner) || editsShelf(owner);
+      allow delete: if false;
+    }
+    match /users/{owner}/pos/expenses/{expenseId} {
+      allow read: if seesBooks(owner);
+      allow write: if seesBooks(owner);
+    }
+    match /users/{owner}/pos/payments/{paymentId} {
+      allow read: if isStaff(owner) && role(owner) != 'stock';
+      allow create, update: if isStaff(owner) && role(owner) != 'stock';
+      allow delete: if seesBooks(owner);
+    }
+    match /users/{owner}/pos/supplierBills/{billId} {
+      allow read, write: if editsShelf(owner);
+    }
+    match /users/{owner}/pos/supplierPayments/{paymentId} {
+      allow read, write: if seesBooks(owner);
+    }
+    match /users/{owner}/pos/activity {
+      allow read: if isStaff(owner);
+      allow write: if isStaff(owner);
+    }
+    match /users/{owner}/pos/images {
+      allow read: if isStaff(owner);
+      allow write: if editsShelf(owner);
+    }
+    match /users/{owner}/pos/secrets {
+      allow read, write: if signedIn() && request.auth.uid == owner;
+    }
+  }
+}

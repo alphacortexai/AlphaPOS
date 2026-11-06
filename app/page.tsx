@@ -18,7 +18,9 @@ import { catalogKeyError, readOwnerCatalogKey, writeOwnerCatalogKey } from '../l
 import { LOCAL_OPERATOR_ID, readLocalShop, writeLocalShop } from '../lib/pos/localShop';
 import { nextSku, reservedProductCodes } from '../lib/pos/sku';
 import { attachProductImages, compressProductPhoto, imageMapChars, isProductImage, PRODUCT_IMAGE_DOC_MAX_CHARS, readLocalProductImages, splitProductImages, writeLocalProductImages } from '../lib/pos/productImage';
+import { commitStockAndRecords, migrateShopLedger, readNamedRecords, readStockMap, setStockQty, writeRecords } from '../lib/pos/ledger';
 import { beginSalesEmailSend, buildSalesDigest, defaultSalesEmailSettings, finishSalesEmailSend, normalizeSalesEmailSettings, previousSalesPeriod, type SalesDigest, type SalesEmailSettings } from '../lib/pos/salesEmail';
+import { billForReceipt, countVariance, creditAllows, dayClose, discountNeedsManager, hashPin, needsReorder, overlayStock, pinIsValid, preferRemote, productForReturn, rankProducts, sellingPrice, shopDocumentBody, stockFallback, supplierOwed, tenderTotals, tendersNeedReference, type SupplierBill, type SupplierPayment } from '../lib/pos/shopMath';
 import { completeGoogleRedirect, googleSignInError, startGoogleSignIn } from '../lib/pos/googleSignIn';
 import { completeEmailLinkSignIn, createStaffInviteLink, rememberInviteFromUrl, staffSignInError, takeInvitedShopId } from '../lib/pos/staffInvite';
 import {
@@ -33,6 +35,7 @@ import {
   normalizeRegisterSettings,
   normalizeTaxSettings,
   PAYMENT_METHOD_LABELS,
+  printPlain,
   receiptPrefix,
   returnableQuantity,
   roundMoney,
@@ -70,7 +73,7 @@ type AuditStamp = {
   updatedByEmail?: string;
 };
 
-type Product = { id: string; name: string; branchId: string; stock: number; purchasePrice: number; salePrice: number; sku?: string; barcode?: string; category?: string; image?: string; reorderPoint?: number } & AuditStamp;
+type Product = { id: string; name: string; branchId: string; stock: number; purchasePrice: number; salePrice: number; sku?: string; barcode?: string; category?: string; image?: string; reorderPoint?: number; unit?: 'piece' | 'kg' | 'litre'; wholesalePrice?: number; variant?: string; expiryDate?: string } & AuditStamp;
 type ServiceType = 'direct_cost' | 'shared_cost';
 type Service = { id: string; name: string; branchId: string; salePrice: number; serviceType: ServiceType; directCost: number; monthlySharedCost: number; expenseGroupId?: string } & AuditStamp;
 type Sale = {
@@ -94,12 +97,18 @@ type Sale = {
   returnOfTransactionId?: string;
   tenders?: Tender[];
   cashSessionId?: string;
+  productId?: string;
+  customerId?: string;
+  voidedAt?: string;
+  voidReason?: string;
+  moneyStatus?: 'unconfirmed' | 'confirmed';
+  cashierEmail?: string;
 } & AuditStamp;
 type ExpenseGroup = { id: string; name: string } & AuditStamp;
 type Expense = { id: string; title: string; branchId: string; amount: number; expenseGroupId?: string; accountId?: string; cashSessionId?: string } & AuditStamp;
 type Supplier = SupplierRecord;
 type CustomerPayment = CustomerPaymentRecord;
-type StaffUser = { id: string; name: string; email: string; role: Role; branchId: string } & AuditStamp;
+type StaffUser = { id: string; name: string; email: string; role: Role; branchId: string; pinHash?: string } & AuditStamp;
 type ShopMembership = { ownerUid: string; shopName: string; role: Role };
 type HeldTicket = {
   id: string;
@@ -137,6 +146,8 @@ type ShopBackupPayload = {
     receiptSettings?: ReceiptSettings;
     registerSettings?: RegisterSettings;
     salesEmailSettings?: SalesEmailSettings;
+    supplierBills?: SupplierBill[];
+    supplierPayments?: SupplierPayment[];
   };
 };
 type StockMovementReason = 'sale' | 'opening_stock' | 'restock' | 'count_correction' | 'damaged' | 'customer_return' | 'branch_transfer' | 'product_removed';
@@ -172,6 +183,7 @@ type CartItem = {
   unitCost: number;
   branchId: string;
   maxQty?: number;
+  unit?: 'piece' | 'kg' | 'litre';
   discountMode?: CartDiscountMode;
   discountedUnitPrice?: number;
   discountPercent?: number;
@@ -197,6 +209,10 @@ const blankProductForm = (branchId = '') => ({
   category: '',
   image: '',
   reorderPoint: DEFAULT_REORDER_POINT,
+  unit: 'piece' as 'piece' | 'kg' | 'litre',
+  wholesalePrice: 0,
+  variant: '',
+  expiryDate: '',
 });
 
 type StockReceiptLine = { productId: string; quantity: string; unitCost: string };
@@ -228,7 +244,7 @@ const removeUndefinedDeep = <T,>(value: T): T => {
   return value;
 };
 
-const emptyCheckout = { customerName: '', customerPhone: '', paymentMethod: 'cash' as PaymentMethod, paymentReference: '' };
+const emptyCheckout = { customerName: '', customerPhone: '', customerId: '', priceList: 'retail' as 'retail' | 'wholesale', paymentMethod: 'cash' as PaymentMethod, paymentReference: '' };
 const roleLabels: Record<Role, string> = { shop_owner: 'Owner', admin: 'Admin', manager: 'Manager', cashier: 'Cashier', stock: 'Stock' };
 const OPENED_SHOP_KEY = 'alphapos.openedShop';
 
@@ -340,8 +356,8 @@ export default function Page() {
   const [insightTrendRange, setInsightTrendRange] = useState<InsightTrendRange>(7);
   const [productSearchQuery, setProductSearchQuery] = useState('');
   const [productBranchFilter, setProductBranchFilter] = useState('');
-  const [productStockFilter, setProductStockFilter] = useState<'all' | 'low' | 'out'>('all');
-  const [productPane, setProductPane] = useState<'shelf' | 'movements'>('shelf');
+  const [productStockFilter, setProductStockFilter] = useState<'all' | 'low' | 'out' | 'reorder'>('all');
+  const [productPane, setProductPane] = useState<'shelf' | 'movements' | 'count'>('shelf');
   const [expensePane, setExpensePane] = useState<'list' | 'groups'>('list');
   const [showServiceModal, setShowServiceModal] = useState(false);
 
@@ -354,7 +370,7 @@ export default function Page() {
   const [stockAdjustmentForm, setStockAdjustmentForm] = useState(emptyStockForm);
   const [serviceForm, setServiceForm] = useState({ name: '', branchId: '', amount: 0, serviceType: 'direct_cost' as ServiceType, directCost: 0, monthlySharedCost: 0, expenseGroupId: '' });
   const [saleForm, setSaleForm] = useState({ productId: '', qty: 1 });
-  const [checkoutDetails, setCheckoutDetails] = useState({ customerName: '', customerPhone: '', paymentMethod: 'cash' as PaymentMethod, paymentReference: '' });
+  const [checkoutDetails, setCheckoutDetails] = useState(emptyCheckout);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [selectedBranchForSale, setSelectedBranchForSale] = useState('');
   const [expenseForm, setExpenseForm] = useState({ id: '', title: '', branchId: '', amount: 0, expenseGroupId: '', accountId: '' });
@@ -366,12 +382,23 @@ export default function Page() {
   const [editingExpenseGroupId, setEditingExpenseGroupId] = useState('');
   const [editingExpenseGroupName, setEditingExpenseGroupName] = useState('');
   const [expenseChartRange, setExpenseChartRange] = useState<ExpenseChartRange>('month');
-  const [userForm, setUserForm] = useState({ id: '', name: '', email: '', role: 'cashier' as Role, branchId: '' });
+  const [userForm, setUserForm] = useState({ id: '', name: '', email: '', role: 'cashier' as Role, branchId: '', pin: '' });
+  const [customerDraft, setCustomerDraft] = useState({ name: '', phone: '', creditLimit: '', priceList: 'retail' as 'retail' | 'wholesale', notes: '' });
   const [shopNameForm, setShopNameForm] = useState('');
   const [settingsTab, setSettingsTab] = useState<'shop' | 'branches' | 'time' | 'backup' | 'tax' | 'receipt' | 'register' | 'email' | 'assistant'>('shop');
   const [salesEmailSettings, setSalesEmailSettings] = useState<SalesEmailSettings>(defaultSalesEmailSettings);
   const [signInNotice, setSignInNotice] = useState('');
   const [signingIn, setSigningIn] = useState(false);
+  const [supplierBills, setSupplierBills] = useState<SupplierBill[]>([]);
+  const [supplierPayments, setSupplierPayments] = useState<SupplierPayment[]>([]);
+  const [operator, setOperator] = useState<{ id: string; name: string; email: string } | null>(null);
+  const [pinPrompt, setPinPrompt] = useState<'switch' | 'discount' | null>(null);
+  const [pinDraft, setPinDraft] = useState('');
+  const [discountApproved, setDiscountApproved] = useState(false);
+  const [closeOpen, setCloseOpen] = useState(false);
+  const [countDraft, setCountDraft] = useState<Record<string, string>>({});
+  const [supplierPayName, setSupplierPayName] = useState('');
+  const [supplierPayAmount, setSupplierPayAmount] = useState('');
   const [invitedEmail, setInvitedEmail] = useState('');
   const [sendingSalesEmail, setSendingSalesEmail] = useState(false);
   const [recipientDraft, setRecipientDraft] = useState('');
@@ -403,8 +430,10 @@ export default function Page() {
   ), [authUser]);
   const currentShop = availableShops.find((s) => s.ownerUid === activeShopOwnerUid);
   const isShopOwner = activeShopOwnerUid === authUser?.uid;
+  const actingRole = operator ? (users.find((person) => person.id === operator.id)?.role || role) : role;
   const seesBooks = role === 'shop_owner' || role === 'admin' || role === 'manager';
   const seesCost = seesBooks || role === 'stock';
+  const canEditCatalog = role === 'shop_owner' || role === 'admin' || role === 'manager' || role === 'stock';
   const canOpenView = useCallback((next: View) => {
     if (next === 'profile' || next === 'sales' || next === 'dashboard' || next === 'products' || next === 'services') return true;
     if (next === 'sales_history' || next === 'customers') return role !== 'stock';
@@ -556,6 +585,8 @@ export default function Page() {
             setActivityLogs(trimActivity(Array.isArray(localActivity) ? localActivity as ActivityLog[] : (Array.isArray(data.activityLogs) ? data.activityLogs as ActivityLog[] : [])));
             setSuppliers(normalizeSuppliers(data.suppliers));
             setCustomerPayments(normalizeCustomerPayments(data.customerPayments));
+            setSupplierBills(Array.isArray(data.supplierBills) ? data.supplierBills as SupplierBill[] : []);
+            setSupplierPayments(Array.isArray(data.supplierPayments) ? data.supplierPayments as SupplierPayment[] : []);
             shopRevisionRef.current = Number(data.revision) || 0;
             setAccounts(ensureDefaultCashAccount(Array.isArray(data.accounts) ? data.accounts as Account[] : []));
             const time = data.shopTimeSettings as Partial<ShopTimeSettings> | undefined;
@@ -647,16 +678,50 @@ export default function Page() {
           return true;
         }
         const data = snap.data();
+        const embeddedProducts = attachProductImages(Array.isArray(data.products) ? data.products : [], imageSnap.exists() ? imageSnap.data().images : {});
+        const embeddedSales = Array.isArray(data.sales) ? data.sales as Sale[] : [];
+        const embeddedExpenses = Array.isArray(data.expenses) ? data.expenses as Expense[] : [];
+        const embeddedPayments = normalizeCustomerPayments(data.customerPayments);
+        let stockMap: Record<string, number> = {};
+        let ledgerSales = embeddedSales;
+        let ledgerExpenses = embeddedExpenses;
+        let ledgerPayments = embeddedPayments;
+        try {
+          if (data.ledgerSplit !== true) {
+            await migrateShopLedger(db, selectedShopOwnerUid, {
+              sales: embeddedSales,
+              expenses: embeddedExpenses,
+              payments: embeddedPayments,
+              products: embeddedProducts,
+            });
+          }
+          const [remoteSales, remoteExpenses, remotePayments, remoteBills, remoteSupplierPayments, remoteStock] = await Promise.all([
+            readNamedRecords<Sale>(db, selectedShopOwnerUid, 'sales'),
+            readNamedRecords<Expense>(db, selectedShopOwnerUid, 'expenses'),
+            readNamedRecords<CustomerPayment>(db, selectedShopOwnerUid, 'payments'),
+            readNamedRecords<SupplierBill>(db, selectedShopOwnerUid, 'supplierBills'),
+            readNamedRecords<SupplierPayment>(db, selectedShopOwnerUid, 'supplierPayments'),
+            readStockMap(db, selectedShopOwnerUid),
+          ]);
+          stockMap = remoteStock;
+          ledgerSales = preferRemote(embeddedSales, remoteSales);
+          ledgerExpenses = preferRemote(embeddedExpenses, remoteExpenses);
+          ledgerPayments = preferRemote(embeddedPayments, remotePayments);
+          setSupplierBills(remoteBills);
+          setSupplierPayments(remoteSupplierPayments);
+        } catch (error) {
+          setStatus(`Shop records could not be split yet: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
         setBranches(Array.isArray(data.branches) ? data.branches : []);
-        setProducts(attachProductImages(Array.isArray(data.products) ? data.products : [], imageSnap.exists() ? imageSnap.data().images : {}));
+        setProducts(overlayStock(embeddedProducts, stockMap));
         setServices(Array.isArray(data.services) ? data.services : []);
-        setSales(Array.isArray(data.sales) ? data.sales : []);
-        setExpenses(Array.isArray(data.expenses) ? data.expenses : []);
+        setSales(ledgerSales);
+        setExpenses(ledgerExpenses);
         setAccounts(ensureDefaultCashAccount(Array.isArray(data.accounts) ? data.accounts : []));
         setExpenseGroups(Array.isArray(data.expenseGroups) ? data.expenseGroups : []);
         setUsers(Array.isArray(data.users) ? data.users : []);
         setSuppliers(normalizeSuppliers(data.suppliers));
-        setCustomerPayments(normalizeCustomerPayments(data.customerPayments));
+        setCustomerPayments(ledgerPayments);
         shopRevisionRef.current = Number(data.revision) || 0;
         setRole(selectedShop?.role || (data.role as Role) || 'shop_owner');
         setShopTimeSettings({
@@ -705,8 +770,6 @@ export default function Page() {
           branches,
           products: stored.products,
           services,
-          sales,
-          expenses,
           expenseGroups,
           users,
           activityLogs: [] as ActivityLog[],
@@ -714,7 +777,6 @@ export default function Page() {
           accounts,
           customers,
           suppliers,
-          customerPayments,
           heldTickets,
           cashSessions,
           taxSettings,
@@ -725,7 +787,7 @@ export default function Page() {
         if (authUser.uid === LOCAL_OPERATOR_ID) {
           const nextRevision = (shopRevisionRef.current || 0) + 1;
           writeLocalActivity(trimmedLogs);
-          writeLocalShop(removeUndefinedDeep({ ...shopPayload, revision: nextRevision }));
+          writeLocalShop(removeUndefinedDeep({ ...shopPayload, sales, expenses, customerPayments, supplierBills, supplierPayments, revision: nextRevision }));
           writeLocalProductImages(stored.images);
           shopRevisionRef.current = nextRevision;
           return;
@@ -734,13 +796,35 @@ export default function Page() {
         const userDataRef = doc(db, 'users', activeShopOwnerUid, 'pos', 'data');
         const activityDocRef = doc(db, 'users', activeShopOwnerUid, 'pos', 'activity');
         let nextRevision = shopRevisionRef.current;
+        if (role === 'cashier') {
+          await runTransaction(db, async (transaction) => {
+            const snap = await transaction.get(userDataRef);
+            const remoteRevision = snap.exists() ? Number(snap.data().revision) || 0 : 0;
+            if (snap.exists() && remoteRevision !== shopRevisionRef.current) throw new Error('SHOP_CONFLICT');
+            nextRevision = remoteRevision + 1;
+            transaction.set(userDataRef, {
+              customers: removeUndefinedDeep(customers),
+              heldTickets: removeUndefinedDeep(heldTickets),
+              cashSessions: removeUndefinedDeep(cashSessions),
+              ledgerSplit: true,
+              revision: nextRevision,
+              updatedAt: serverTimestamp(),
+            }, { merge: true });
+            transaction.set(activityDocRef, {
+              activityLogs: removeUndefinedDeep(trimmedLogs),
+              updatedAt: serverTimestamp(),
+            });
+          });
+          shopRevisionRef.current = nextRevision;
+          return;
+        }
         await runTransaction(db, async (transaction) => {
           const snap = await transaction.get(userDataRef);
           const remoteRevision = snap.exists() ? Number(snap.data().revision) || 0 : 0;
           if (snap.exists() && remoteRevision !== shopRevisionRef.current) throw new Error('SHOP_CONFLICT');
           nextRevision = remoteRevision + 1;
           transaction.set(userDataRef, {
-            ...removeUndefinedDeep({ ...shopPayload, revision: nextRevision }),
+            ...removeUndefinedDeep(shopDocumentBody({ ...shopPayload, revision: nextRevision })),
             updatedAt: serverTimestamp(),
           }, { merge: true });
           transaction.set(activityDocRef, {
@@ -764,7 +848,7 @@ export default function Page() {
       }
     };
     void saveUserData();
-  }, [activeShopOwnerUid, authUser, customerPayments, db, loadUserData, role, branches, products, services, sales, expenses, expenseGroups, users, activityLogs, shopTimeSettings, accounts, customers, suppliers, heldTickets, cashSessions, taxSettings, receiptSettings, registerSettings, salesEmailSettings, currentShop?.shopName]);
+  }, [activeShopOwnerUid, authUser, customerPayments, db, loadUserData, role, branches, products, services, sales, expenses, expenseGroups, users, activityLogs, shopTimeSettings, accounts, customers, suppliers, supplierBills, supplierPayments, heldTickets, cashSessions, taxSettings, receiptSettings, registerSettings, salesEmailSettings, currentShop?.shopName]);
 
   const startLocalCounter = () => {
     hasLoadedUserDataRef.current = false;
@@ -834,11 +918,11 @@ export default function Page() {
     setShowStockAdjustmentModal(false);
     setServiceForm({ name: '', branchId: '', amount: 0, serviceType: 'direct_cost', directCost: 0, monthlySharedCost: 0, expenseGroupId: '' });
     setSaleForm({ productId: '', qty: 1 });
-    setCheckoutDetails({ customerName: '', customerPhone: '', paymentMethod: 'cash', paymentReference: '' });
+    setCheckoutDetails(emptyCheckout);
     setCart([]);
     setSaleAccountId('');
     setExpenseForm({ id: '', title: '', branchId: '', amount: 0, expenseGroupId: '', accountId: '' });
-    setUserForm({ id: '', name: '', email: '', role: 'cashier', branchId: '' });
+    setUserForm({ id: '', name: '', email: '', role: 'cashier', branchId: '', pin: '' });
   };
 
   const handleShopSwitch = (nextOwnerUid: string) => {
@@ -1012,6 +1096,7 @@ export default function Page() {
       const matchesStock = 
         productStockFilter === 'all' ? true :
         productStockFilter === 'low' ? stockIsLow(p) :
+        productStockFilter === 'reorder' ? needsReorder(p) :
         p.stock === 0;
       return matchesSearch && matchesBranch && matchesStock;
     });
@@ -1206,6 +1291,10 @@ export default function Page() {
 
   const saveProduct = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canEditCatalog) {
+      showNotification('Cashiers sell. A manager changes the shelf.', 'error');
+      return;
+    }
     const name = productForm.name.trim();
     const barcode = productForm.barcode.trim();
     const previousProduct = products.find((product) => product.id === productForm.id);
@@ -1233,7 +1322,23 @@ export default function Page() {
     const reorderPoint = !seesCost && previousProduct
       ? (previousProduct.reorderPoint ?? DEFAULT_REORDER_POINT)
       : (Number.isFinite(productForm.reorderPoint) && productForm.reorderPoint >= 0 ? productForm.reorderPoint : DEFAULT_REORDER_POINT);
-    const productDetails = { ...productForm, name, sku: sku || undefined, barcode: barcode || undefined, category, image, purchasePrice, reorderPoint };
+    const variant = productForm.variant.trim();
+    const wholesalePrice = Number(productForm.wholesalePrice);
+    const productDetails = {
+      ...productForm,
+      name,
+      sku: sku || undefined,
+      barcode: barcode || undefined,
+      category,
+      image,
+      purchasePrice,
+      reorderPoint,
+      unit: productForm.unit || 'piece',
+      ...(variant ? { variant } : { variant: undefined }),
+      ...(productForm.expiryDate ? { expiryDate: productForm.expiryDate } : { expiryDate: undefined }),
+      ...(Number.isFinite(wholesalePrice) && wholesalePrice > 0 ? { wholesalePrice: roundMoney(wholesalePrice) } : { wholesalePrice: undefined }),
+    };
+    let savedId = productForm.id;
     if (productForm.id) {
       setProducts((prev) => prev.map((p) => (p.id === productForm.id ? { ...p, ...productDetails, ...updatedAuditStamp() } : p)));
       if (previousProduct) {
@@ -1248,10 +1353,14 @@ export default function Page() {
       logActivity('edit_inventory', `Updated product "${name}"`);
     } else {
       const newProduct: Product = { ...productDetails, id: crypto.randomUUID(), ...currentAuditStamp() };
+      savedId = newProduct.id;
       setProducts((prev) => [...prev, newProduct]);
       if (newProduct.stock > 0) logStockMovement(newProduct, newProduct.stock, 'opening_stock');
       setStatus('Product added.');
       logActivity('add_inventory', `Added product "${name}"`);
+    }
+    if (db && authUser && authUser.uid !== LOCAL_OPERATOR_ID && savedId) {
+      void setStockQty(db, activeShopOwnerUid, savedId, productForm.stock).catch(() => undefined);
     }
     setProductForm(blankProductForm());
     setShowProductModal(false);
@@ -1259,6 +1368,10 @@ export default function Page() {
 
   const saveService = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canEditCatalog) {
+      showNotification('Cashiers sell. A manager changes services.', 'error');
+      return;
+    }
     if (!serviceForm.name || !serviceForm.branchId || serviceForm.amount <= 0) return;
     if (serviceForm.serviceType === 'direct_cost' && serviceForm.directCost < 0) return;
     if (serviceForm.serviceType === 'shared_cost' && serviceForm.monthlySharedCost <= 0) return;
@@ -1324,14 +1437,14 @@ export default function Page() {
     .filter((session) => session.status === 'closed')
     .sort((a, b) => new Date(b.closedAt || 0).getTime() - new Date(a.closedAt || 0).getTime())
     .slice(0, 5), [cashSessions]);
-  const customerBalance = (name: string, phone?: string) => (
-    customerAccountBalance(sales, name, phone) - customerPayments.filter((payment) => paymentMatchesCustomer(payment, name, phone)).reduce((sum, payment) => sum + payment.amount, 0)
+  const customerBalance = (name: string, phone?: string, customerId?: string) => (
+    customerAccountBalance(sales, name, phone, customerId) - customerPayments.filter((payment) => (customerId && payment.customerId === customerId) || (!payment.customerId && paymentMatchesCustomer(payment, name, phone))).reduce((sum, payment) => sum + payment.amount, 0)
   );
   const recordCustomerPayment = (event: React.FormEvent) => {
     event.preventDefault();
     if (!paymentCustomer) return;
     const amount = roundMoney(Number(paymentDraft.amount));
-    const owed = customerBalance(paymentCustomer.name, paymentCustomer.phone);
+    const owed = customerBalance(paymentCustomer.name, paymentCustomer.phone, paymentCustomer.id);
     if (!Number.isFinite(amount) || amount <= 0) {
       showNotification('Enter an amount greater than zero.', 'error');
       return;
@@ -1342,6 +1455,7 @@ export default function Page() {
     }
     const payment: CustomerPayment = {
       id: crypto.randomUUID(),
+      customerId: paymentCustomer.id,
       customerName: paymentCustomer.name,
       ...(paymentCustomer.phone ? { customerPhone: paymentCustomer.phone } : {}),
       amount,
@@ -1350,6 +1464,7 @@ export default function Page() {
       ...(paymentDraft.method === 'cash' && openCashSession ? { cashSessionId: openCashSession.id } : {}),
     };
     setCustomerPayments((prev) => [payment, ...prev]);
+    if (db && authUser && authUser.uid !== LOCAL_OPERATOR_ID) void writeRecords(db, activeShopOwnerUid, 'payments', [payment]).catch(() => undefined);
     logActivity('customer_payment', `${paymentCustomer.name} paid ${formatUGX(amount)} by ${PAYMENT_METHOD_LABELS[payment.method]}.`);
     showNotification('Payment recorded.', 'success');
     setPaymentCustomer(null);
@@ -1507,12 +1622,16 @@ export default function Page() {
       return;
     }
     if (expenseForm.id) {
-      setExpenses((prev) => prev.map((ex) => (ex.id === expenseForm.id ? { ...ex, ...expenseForm, accountId: selectedAccountId, ...updatedAuditStamp() } : ex)));
+      const updated = { ...expenseForm, accountId: selectedAccountId, id: expenseForm.id, ...updatedAuditStamp() };
+      setExpenses((prev) => prev.map((ex) => (ex.id === expenseForm.id ? { ...ex, ...updated } : ex)));
+      if (db && authUser && authUser.uid !== LOCAL_OPERATOR_ID) void writeRecords(db, activeShopOwnerUid, 'expenses', [updated as Expense]).catch(() => undefined);
       setStatus('Expense updated.');
       logActivity('edit_expense', `Updated expense "${expenseForm.title}"`);
     } else {
       const cashSessionId = selectedAccountId === defaultAccount?.id && openCashSession ? openCashSession.id : undefined;
-      setExpenses((prev) => [...prev, { ...expenseForm, accountId: selectedAccountId, ...(cashSessionId ? { cashSessionId } : {}), id: crypto.randomUUID(), ...currentAuditStamp() }]);
+      const created = { ...expenseForm, accountId: selectedAccountId, ...(cashSessionId ? { cashSessionId } : {}), id: crypto.randomUUID(), ...currentAuditStamp() };
+      setExpenses((prev) => [...prev, created]);
+      if (db && authUser && authUser.uid !== LOCAL_OPERATOR_ID) void writeRecords(db, activeShopOwnerUid, 'expenses', [created]).catch(() => undefined);
       setStatus('Expense recorded.');
       logActivity('add_expense', `Added expense "${expenseForm.title}"`);
     }
@@ -1577,40 +1696,58 @@ export default function Page() {
 
   const saveUser = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!userForm.email || !userForm.name || !userForm.branchId) return;
+    const name = userForm.name.trim();
     const email = userForm.email.trim();
+    if (!name || !userForm.branchId) return;
+    if (userForm.pin && !pinIsValid(userForm.pin)) {
+      showNotification('A till PIN is 4 digits.', 'error');
+      return;
+    }
+    if (!email && !pinIsValid(userForm.pin) && !users.find((user) => user.id === userForm.id)?.pinHash) {
+      showNotification('Add an email, or a 4-digit till PIN.', 'error');
+      return;
+    }
+    const staffId = userForm.id || crypto.randomUUID();
+    const pinHash = pinIsValid(userForm.pin) ? await hashPin(staffId, userForm.pin) : undefined;
+    const staffFields = { name, email, role: userForm.role, branchId: userForm.branchId, ...(pinHash ? { pinHash } : {}) };
+    const canEmail = Boolean(email && db && authUser && authUser.uid !== LOCAL_OPERATOR_ID);
 
     if (userForm.id) {
       const previous = users.find((user) => user.id === userForm.id);
-      setUsers((prev) => prev.map((u) => (u.id === userForm.id ? { ...u, ...userForm, email, ...updatedAuditStamp() } : u)));
-      if (db && previous && previous.email.toLowerCase().trim() !== email.toLowerCase()) {
+      setUsers((prev) => prev.map((u) => (u.id === userForm.id ? { ...u, ...staffFields, ...updatedAuditStamp() } : u)));
+      if (db && previous?.email && previous.email.toLowerCase().trim() !== email.toLowerCase()) {
         await deleteDoc(doc(db, 'shopMemberships', `${activeShopOwnerUid}_${previous.email.toLowerCase().trim()}`)).catch(() => undefined);
       }
-      await saveShopMembership(email, userForm.role).catch((error) => {
-        showNotification(error instanceof Error ? error.message : 'Could not update shop access.', 'error');
-      });
+      if (canEmail) {
+        await saveShopMembership(email, userForm.role).catch((error) => {
+          showNotification(error instanceof Error ? error.message : 'Could not update shop access.', 'error');
+        });
+      }
       setStatus('User updated.');
-      logActivity('edit_user', `Updated user "${email}"`);
+      logActivity('edit_user', `Updated user "${email || name}"`);
     } else {
       const newUser: StaffUser = {
-        id: crypto.randomUUID(),
-        name: userForm.name,
-        email,
-        role: userForm.role,
-        branchId: userForm.branchId,
+        id: staffId,
+        ...staffFields,
         ...currentAuditStamp(),
       };
       setUsers((prev) => [...prev, newUser]);
-      logActivity('add_user', `Added user "${email}" with role "${userForm.role}"`);
-      try {
-        await emailStaffSignInLink(email, userForm.role);
-      } catch (error) {
-        const message = `Staff saved, but the sign-in email was not sent. ${staffSignInError(error)}`;
+      logActivity('add_user', `Added user "${email || name}" with role "${userForm.role}"`);
+      if (canEmail) {
+        try {
+          await emailStaffSignInLink(email, userForm.role);
+        } catch (error) {
+          const message = `Staff saved, but the sign-in email was not sent. ${staffSignInError(error)}`;
+          setStatus(message);
+          showNotification(message, 'error', 7000);
+        }
+      } else {
+        const message = pinHash ? `${name} can take the till with that PIN.` : `${name} is saved on this till.`;
         setStatus(message);
-        showNotification(message, 'error', 7000);
+        showNotification(message, 'success');
       }
     }
-    setUserForm({ id: '', name: '', email: '', role: 'cashier', branchId: '' });
+    setUserForm({ id: '', name: '', email: '', role: 'cashier', branchId: '', pin: '' });
     setShowUserModal(false);
   };
 
@@ -1696,9 +1833,11 @@ export default function Page() {
       showNotification('Product out of stock', 'error');
       return;
     }
+    const priceList = checkoutDetails.priceList;
+    const unitPrice = sellingPrice(product, priceList);
     const existingItem = cart.find(item => item.itemType === 'product' && item.itemId === productId);
     if (existingItem) {
-      if (existingItem.qty + 1 > product.stock) {
+      if (existingItem.qty + 1 > product.stock + 0.0001) {
         showNotification('Insufficient stock for this quantity', 'error');
         return;
       }
@@ -1709,12 +1848,13 @@ export default function Page() {
       setCart(prev => [...prev, {
         itemId: product.id,
         itemType: 'product',
-        itemName: product.name,
+        itemName: product.variant ? `${product.name} (${product.variant})` : product.name,
         qty: 1,
-        unitPrice: product.salePrice,
+        unitPrice,
         unitCost: product.purchasePrice,
         branchId: product.branchId,
-        maxQty: product.stock
+        maxQty: product.stock,
+        unit: product.unit || 'piece',
       }]);
     }
     if (!silent) showNotification(`${product.name} added to cart`, 'success', 2000);
@@ -1795,17 +1935,56 @@ export default function Page() {
     unitCost: item.unitCost,
   })), cartDiscount, taxSettings), [cart, cartDiscount, getEffectiveUnitPrice, taxSettings]);
 
-  const rememberCustomer = (name: string, phone: string) => {
+  const addCustomer = (event: React.FormEvent) => {
+    event.preventDefault();
+    const name = customerDraft.name.trim();
+    const phone = customerDraft.phone.trim();
+    if (!name) {
+      showNotification('Enter the customer’s name.', 'error');
+      return;
+    }
+    const rawLimit = customerDraft.creditLimit.trim();
+    const creditLimit = rawLimit === '' ? undefined : roundMoney(Number(rawLimit));
+    if (rawLimit !== '' && !Number.isFinite(creditLimit)) {
+      showNotification('Enter a credit limit in shillings, or leave it empty.', 'error');
+      return;
+    }
+    const existing = customers.find((customer) => (
+      (phone && customer.phone === phone) || customer.name.toLowerCase() === name.toLowerCase()
+    ));
+    const fields = {
+      name,
+      ...(phone ? { phone } : {}),
+      ...(customerDraft.notes.trim() ? { notes: customerDraft.notes.trim() } : {}),
+      ...(creditLimit === undefined ? {} : { creditLimit }),
+      priceList: customerDraft.priceList,
+    };
+    if (existing) {
+      setCustomers((prev) => prev.map((customer) => customer.id === existing.id ? { ...customer, ...fields } : customer));
+      showNotification(`${name} is already on the list. The limit was updated.`, 'info');
+    } else {
+      setCustomers((prev) => [{ id: crypto.randomUUID(), ...fields, createdAt: new Date().toISOString() }, ...prev]);
+      showNotification(`${name} can buy on account${creditLimit === undefined ? '' : ` up to ${formatUGX(creditLimit)}`}.`, 'success');
+    }
+    setCustomerDraft({ name: '', phone: '', creditLimit: '', priceList: 'retail', notes: '' });
+  };
+
+  const rememberCustomer = (name: string, phone: string, customerId = '') => {
     const trimmedName = name.trim();
     const trimmedPhone = phone.trim();
-    if (!trimmedName && !trimmedPhone) return;
-    setCustomers((prev) => {
-      const existing = prev.find((customer) => (trimmedPhone && customer.phone === trimmedPhone) || customer.name.toLowerCase() === trimmedName.toLowerCase());
-      if (existing) {
-        return prev.map((customer) => customer.id === existing.id ? { ...customer, name: trimmedName || customer.name, ...(trimmedPhone ? { phone: trimmedPhone } : {}) } : customer);
-      }
-      return [{ id: crypto.randomUUID(), name: trimmedName || 'Customer', ...(trimmedPhone ? { phone: trimmedPhone } : {}), createdAt: new Date().toISOString() }, ...prev];
-    });
+    if (!trimmedName && !trimmedPhone && !customerId) return '';
+    const existing = customers.find((customer) => (
+      (customerId && customer.id === customerId)
+      || (trimmedPhone && customer.phone === trimmedPhone)
+      || (trimmedName && customer.name.toLowerCase() === trimmedName.toLowerCase())
+    ));
+    if (existing) {
+      setCustomers((prev) => prev.map((customer) => customer.id === existing.id ? { ...customer, name: trimmedName || customer.name, ...(trimmedPhone ? { phone: trimmedPhone } : {}) } : customer));
+      return existing.id;
+    }
+    const id = crypto.randomUUID();
+    setCustomers((prev) => [{ id, name: trimmedName || 'Customer', ...(trimmedPhone ? { phone: trimmedPhone } : {}), priceList: checkoutDetails.priceList, createdAt: new Date().toISOString() }, ...prev]);
+    return id;
   };
 
   const receiptFromSaleLines = (lines: Sale[], kind: 'sale' | 'return' = lines.some((line) => line.saleKind === 'return') ? 'return' : 'sale'): ReceiptModel => {
@@ -1832,7 +2011,7 @@ export default function Page() {
       ...(receiptSettings.address ? { address: receiptSettings.address } : {}),
       ...(receiptSettings.phone ? { phone: receiptSettings.phone } : {}),
       ...(receiptSettings.footer ? { footer: receiptSettings.footer } : {}),
-      cashier: authUser?.email || 'Cashier',
+      cashier: operator?.name || authUser?.email || 'Cashier',
       ...(first?.customerName ? { customerName: first.customerName } : {}),
       ...(first?.customerPhone ? { customerPhone: first.customerPhone } : {}),
       lines: lines.map((line) => ({ name: line.itemName, qty: line.qty, amount: line.amount })),
@@ -1927,7 +2106,7 @@ export default function Page() {
     setHeldTickets((prev) => prev.filter((item) => item.id !== ticketId));
   };
 
-  const completeRegisterSale = (tenders: Tender[]) => {
+  const completeRegisterSale = async (tenders: Tender[]) => {
     if (cart.length === 0) {
       showNotification('Cart is empty', 'error');
       return false;
@@ -1949,8 +2128,25 @@ export default function Page() {
       showNotification('The payment does not match the amount due.', 'error');
       return false;
     }
+    if (tendersNeedReference(tenders)) {
+      showNotification('Enter the mobile money or bank transaction code.', 'error');
+      return false;
+    }
     if (tenders.some((tender) => tender.method === 'on_account') && !checkoutDetails.customerName.trim()) {
       showNotification('Enter a customer name for an on-account sale.', 'error');
+      return false;
+    }
+    const onAccount = tenders.filter((tender) => tender.method === 'on_account').reduce((sum, tender) => sum + tender.amount, 0);
+    const namedCustomer = customers.find((customer) => customer.id === checkoutDetails.customerId)
+      || customers.find((customer) => checkoutDetails.customerPhone.trim() && customer.phone === checkoutDetails.customerPhone.trim())
+      || customers.find((customer) => customer.name.toLowerCase() === checkoutDetails.customerName.trim().toLowerCase());
+    if (onAccount > 0 && namedCustomer && !creditAllows(customerBalance(namedCustomer.name, namedCustomer.phone, namedCustomer.id), namedCustomer.creditLimit, onAccount)) {
+      showNotification(`${namedCustomer.name} would go over the ${formatUGX(namedCustomer.creditLimit || 0)} account limit.`, 'error');
+      return false;
+    }
+    if (discountNeedsManager(actingRole, registerQuote.discount) && !discountApproved) {
+      setPinPrompt('discount');
+      showNotification('A manager PIN is required for this discount.', 'info');
       return false;
     }
     const insufficientItem = cart.find((item) => item.itemType === 'product' && (products.find((product) => product.id === item.itemId)?.stock ?? 0) < item.qty);
@@ -1964,6 +2160,9 @@ export default function Page() {
     const primaryTender = [...tenders].sort((a, b) => b.amount - a.amount)[0];
     const customerName = checkoutDetails.customerName.trim();
     const customerPhone = checkoutDetails.customerPhone.trim();
+    const customerId = rememberCustomer(customerName, customerPhone, checkoutDetails.customerId);
+    const needsMoneyConfirm = tenders.some((tender) => tender.method === 'mobile_money' || tender.method === 'bank_transfer');
+    const sellerEmail = operator?.email || authUser?.email || 'unknown';
     const newSales: Sale[] = registerQuote.lines.flatMap((line) => {
       const item = cart.find((cartItem) => `${cartItem.itemType}:${cartItem.itemId}` === line.key);
       if (!item) return [];
@@ -1972,6 +2171,7 @@ export default function Page() {
         type: item.itemType,
         itemName: item.itemName,
         branchId: item.branchId,
+        ...(item.itemType === 'product' ? { productId: item.itemId } : {}),
         qty: line.qty,
         amount: line.amount,
         cost: line.cost,
@@ -1983,24 +2183,35 @@ export default function Page() {
         saleKind: 'sale' as const,
         paymentMethod: primaryTender.method,
         ...(primaryTender.reference ? { paymentReference: primaryTender.reference } : {}),
+        ...(needsMoneyConfirm ? { moneyStatus: 'unconfirmed' as const } : {}),
         tenders,
+        cashierEmail: sellerEmail,
         ...(countDrawer && openCashSession ? { cashSessionId: openCashSession.id } : {}),
+        ...(customerId ? { customerId } : {}),
         ...(customerName ? { customerName } : {}),
         ...(customerPhone ? { customerPhone } : {}),
         ...currentAuditStamp(),
       }];
     });
+    const deltas = newSales.filter((line) => line.productId).map((line) => ({ productId: line.productId as string, delta: -line.qty }));
+    try {
+      if (db && authUser && authUser.uid !== LOCAL_OPERATOR_ID) {
+        await commitStockAndRecords(db, activeShopOwnerUid, 'sales', newSales, deltas, stockFallback(products));
+      }
+    } catch (error) {
+      showNotification(error instanceof Error ? error.message : 'The sale was not saved.', 'error');
+      return false;
+    }
     setSales((prev) => [...newSales, ...prev]);
     setProducts((prev) => prev.map((product) => {
       const cartItem = cart.find((item) => item.itemType === 'product' && item.itemId === product.id);
-      return cartItem ? { ...product, stock: product.stock - cartItem.qty } : product;
+      return cartItem ? { ...product, stock: Math.round((product.stock - cartItem.qty) * 1000) / 1000 } : product;
     }));
     cart.forEach((item) => {
       if (item.itemType !== 'product') return;
       const product = products.find((record) => record.id === item.itemId);
       if (product) logStockMovement(product, -item.qty, 'sale', `Receipt ${receiptNumber}`);
     });
-    rememberCustomer(customerName, customerPhone);
     const saleMargin = roundMoney(registerQuote.total - registerQuote.tax - registerQuote.lines.reduce((sum, line) => sum + line.cost, 0));
     logActivity('sale', `Completed ${receiptNumber} for ${formatUGX(registerQuote.total)} (${cart.length} item(s)).`);
     setActiveReceipt(receiptFromSaleLines(newSales, 'sale'));
@@ -2013,7 +2224,7 @@ export default function Page() {
     return true;
   };
 
-  const issueReturn = (quantities: Record<string, number>, method: PaymentMethod, reference: string) => {
+  const issueReturn = async (quantities: Record<string, number>, method: PaymentMethod, reference: string) => {
     const countDrawer = registerSettings.mode === 'drawer';
     if (countDrawer && !openCashSession) {
       showNotification('Open the drawer before refunding.', 'error');
@@ -2036,7 +2247,7 @@ export default function Page() {
       const ratio = qty / sale.qty;
       const amount = -roundMoney(sale.amount * ratio);
       if (sale.type === 'product') {
-        const product = products.find((item) => item.branchId === sale.branchId && item.name === sale.itemName);
+        const product = productForReturn(products, sale);
         if (product) stockChanges.push({ product, qty });
       }
       return {
@@ -2044,6 +2255,7 @@ export default function Page() {
         type: sale.type,
         itemName: sale.itemName,
         branchId: sale.branchId,
+        ...(sale.productId ? { productId: sale.productId } : {}),
         qty: -qty,
         amount,
         cost: -roundMoney(sale.cost * ratio),
@@ -2064,6 +2276,14 @@ export default function Page() {
     });
     if (stockChanges.length !== selected.filter((sale) => sale.type === 'product').length) {
       showNotification('A returned product is no longer in inventory, so its stock was not added back.', 'info', 5000);
+    }
+    try {
+      if (db && authUser && authUser.uid !== LOCAL_OPERATOR_ID) {
+        await commitStockAndRecords(db, activeShopOwnerUid, 'sales', creditLines, stockChanges.map((change) => ({ productId: change.product.id, delta: change.qty })), stockFallback(products));
+      }
+    } catch (error) {
+      showNotification(error instanceof Error ? error.message : 'The return was not saved.', 'error');
+      return;
     }
     setProducts((prev) => prev.map((product) => {
       const change = stockChanges.find((item) => item.product.id === product.id);
@@ -2101,6 +2321,7 @@ export default function Page() {
       type: 'product',
       itemName: p.name,
       branchId: p.branchId,
+      productId: p.id,
       qty: saleForm.qty,
       amount: quickLine?.amount ?? p.salePrice * saleForm.qty,
       cost: quickLine?.cost ?? p.purchasePrice * saleForm.qty,
@@ -2114,10 +2335,15 @@ export default function Page() {
     };
     setSales((prev) => [newSale, ...prev]);
     setProducts((prev) => prev.map((x) => (x.id === p.id ? { ...x, stock: x.stock - saleForm.qty } : x)));
+    if (db && authUser && authUser.uid !== LOCAL_OPERATOR_ID) {
+      void commitStockAndRecords(db, activeShopOwnerUid, 'sales', [newSale], [{ productId: p.id, delta: -saleForm.qty }], stockFallback(products)).catch((error) => {
+        showNotification(error instanceof Error ? error.message : 'The sale was not saved to the shop record.', 'error');
+      });
+    }
     logStockMovement(p, -saleForm.qty, 'sale', `Sale ${newSale.id.slice(0, 8)}`);
     logActivity('sale', `Sold ${saleForm.qty} of "${p.name}"`);
     setSaleForm({ productId: '', qty: 1 });
-    setCheckoutDetails({ customerName: '', customerPhone: '', paymentMethod: 'cash', paymentReference: '' });
+    setCheckoutDetails(emptyCheckout);
     setStatus('Sale recorded.');
     return true;
   };
@@ -2348,6 +2574,14 @@ export default function Page() {
         });
       });
       rememberSupplier(supplierName);
+      const bill = billForReceipt(supplierName, prepared, reference, new Date().toISOString());
+      if (bill) {
+        setSupplierBills((prev) => [bill, ...prev]);
+        if (db && authUser && authUser.uid !== LOCAL_OPERATOR_ID) void writeRecords(db, activeShopOwnerUid, 'supplierBills', [bill]).catch(() => undefined);
+      }
+      if (db && authUser && authUser.uid !== LOCAL_OPERATOR_ID) {
+        void commitStockAndRecords(db, activeShopOwnerUid, 'supplierBills', [], [...grouped.entries()].map(([productId, change]) => ({ productId, delta: change.qty })), stockFallback(products)).catch(() => undefined);
+      }
       setStatus(`Received ${prepared.length} line${prepared.length === 1 ? '' : 's'}.`);
       showNotification('Stock received.', 'success');
       setShowStockAdjustmentModal(false);
@@ -2452,6 +2686,7 @@ export default function Page() {
       customerName: lines.find((line) => line.customerName)?.customerName,
       paymentMethod: lines[0].paymentMethod,
       saleKind: lines.some((line) => line.saleKind === 'return') ? 'return' as const : 'sale' as const,
+      voided: lines.some((line) => line.voidedAt),
     })).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }, [filteredSales]);
   const salesHistoryTotalPages = Math.max(1, Math.ceil(groupedSales.length / salesHistoryPageSize));
@@ -2525,49 +2760,49 @@ export default function Page() {
   const canManageUsers = (role === 'shop_owner' || role === 'admin') && activeShopOwnerUid === authUser?.uid;
   const canManageSalesAndExpenses = role === 'shop_owner' || role === 'admin' || role === 'manager';
 
-  const deleteTransaction = (ids: string[]) => {
+  const deleteTransaction = async (ids: string[]) => {
     if (!canManageSalesAndExpenses) {
-      setStatus('Only the shop owner or admin can delete sales.');
+      setStatus('Only the shop owner, admin, or manager can void a sale.');
       return;
     }
-    const lines = sales.filter((sale) => ids.includes(sale.id));
+    const lines = sales.filter((sale) => ids.includes(sale.id) && !sale.voidedAt);
     if (lines.length === 0) return;
-    if (!window.confirm('Delete this receipt? Stock from its product lines will be reversed.')) return;
+    const reason = window.prompt('Why is this receipt void?');
+    if (!reason || !reason.trim()) return;
     const deltas = new Map<string, number>();
-    const missing: string[] = [];
     lines.forEach((line) => {
-      if (line.type !== 'product') return;
-      const product = products.find((item) => item.branchId === line.branchId && item.name === line.itemName);
-      if (!product) {
-        if (!missing.includes(line.itemName)) missing.push(line.itemName);
-        return;
-      }
+      const product = productForReturn(products, line);
+      if (!product) return;
       deltas.set(product.id, (deltas.get(product.id) || 0) + line.qty);
     });
-    const short = [...deltas.entries()].find(([productId, delta]) => {
-      const product = products.find((item) => item.id === productId);
-      return Boolean(product && product.stock + delta < 0);
-    });
-    if (short) {
-      showNotification('Not enough stock to reverse a return on this receipt.', 'error');
+    const voidedAt = new Date().toISOString();
+    const voided = lines.map((line) => ({ ...line, voidedAt, voidReason: reason.trim() }));
+    try {
+      if (db && authUser && authUser.uid !== LOCAL_OPERATOR_ID) {
+        await commitStockAndRecords(
+          db,
+          activeShopOwnerUid,
+          'sales',
+          voided,
+          [...deltas.entries()].map(([productId, delta]) => ({ productId, delta })),
+          stockFallback(products),
+        );
+      }
+    } catch (error) {
+      showNotification(error instanceof Error ? error.message : 'The receipt was not voided.', 'error');
       return;
     }
     setProducts((prev) => prev.map((product) => {
       const delta = deltas.get(product.id);
-      return delta ? { ...product, stock: product.stock + delta, ...updatedAuditStamp() } : product;
+      return delta ? { ...product, stock: Math.round((product.stock + delta) * 1000) / 1000, ...updatedAuditStamp() } : product;
     }));
     deltas.forEach((delta, productId) => {
       const product = products.find((item) => item.id === productId);
-      if (product && delta !== 0) logStockMovement(product, delta, 'count_correction', 'Receipt deleted');
+      if (product && delta !== 0) logStockMovement(product, delta, 'count_correction', `Void: ${reason.trim()}`);
     });
-    setSales((prev) => prev.filter((sale) => !ids.includes(sale.id)));
-    const missingNote = missing.length > 0 ? ` Could not find ${missing.join(', ')}.` : '';
-    logActivity('delete_sale', `Deleted a receipt and reversed its stock.${missingNote}`);
-    showNotification(
-      missing.length > 0 ? `Receipt deleted. Stock was put back, except ${missing.join(', ')}.` : 'Receipt deleted. Stock was put back.',
-      missing.length > 0 ? 'info' : 'success',
-      missing.length > 0 ? 5000 : 3000,
-    );
+    setSales((prev) => prev.map((sale) => ids.includes(sale.id) ? { ...sale, voidedAt, voidReason: reason.trim() } : sale));
+    logActivity('void_sale', `Voided a receipt. ${reason.trim()}`);
+    showNotification('Receipt voided. It stays in the book, and the stock was put back.', 'success');
   };
 
   const editExpense = (expense: Expense) => {
@@ -2683,6 +2918,8 @@ export default function Page() {
       receiptSettings,
       registerSettings,
       salesEmailSettings,
+      supplierBills,
+      supplierPayments,
     },
   });
 
@@ -2823,6 +3060,14 @@ export default function Page() {
       setCustomers(restoredCustomers);
       setSuppliers(restoredSuppliers);
       setCustomerPayments(restoredCustomerPayments);
+      setSupplierBills(Array.isArray(parsed.data.supplierBills) ? parsed.data.supplierBills as SupplierBill[] : []);
+      setSupplierPayments(Array.isArray(parsed.data.supplierPayments) ? parsed.data.supplierPayments as SupplierPayment[] : []);
+      if (db && authUser && authUser.uid !== LOCAL_OPERATOR_ID) {
+        void writeRecords(db, activeShopOwnerUid, 'sales', restoredSales).catch(() => undefined);
+        void writeRecords(db, activeShopOwnerUid, 'expenses', restoredExpenses).catch(() => undefined);
+        void writeRecords(db, activeShopOwnerUid, 'payments', restoredCustomerPayments).catch(() => undefined);
+        void writeRecords(db, activeShopOwnerUid, 'stock', restoredProducts.map((product) => ({ id: product.id, qty: product.stock }))).catch(() => undefined);
+      }
       setHeldTickets(restoredHeldTickets);
       setCashSessions(restoredCashSessions);
       setTaxSettings(restoredTaxSettings);
@@ -3163,6 +3408,7 @@ export default function Page() {
                     )}
                   </div>
                   {seesBooks && <button type="button" className="edit-btn today-more" onClick={() => setView('reports')}>Open reports</button>}
+                  <button type="button" className="edit-btn" onClick={() => setCloseOpen(true)}>Close of day</button>
                 </>
               );
             })()}
@@ -3188,8 +3434,9 @@ export default function Page() {
               <div className="pane-switch" role="tablist" aria-label="Products">
                 <button type="button" className={productPane === 'shelf' ? 'active' : ''} onClick={() => setProductPane('shelf')}>Shelf</button>
                 <button type="button" className={productPane === 'movements' ? 'active' : ''} onClick={() => setProductPane('movements')}>Movements</button>
+                <button type="button" className={productPane === 'count' ? 'active' : ''} onClick={() => setProductPane('count')}>Count</button>
               </div>
-              {productPane === 'shelf' && (
+              {productPane === 'shelf' && canEditCatalog && (
                 <div className="page-tools-actions">
                   <button className="edit-btn" disabled={products.length === 0} onClick={() => {
                     setStockAdjustmentForm({ ...emptyStockForm(), lines: [{ productId: '', quantity: '', unitCost: '' }] });
@@ -3229,6 +3476,14 @@ export default function Page() {
                 <button type="button" className={productStockFilter === 'all' ? 'active' : ''} onClick={() => setProductStockFilter('all')}>All</button>
                 <button type="button" className={productStockFilter === 'low' ? 'active' : ''} onClick={() => setProductStockFilter('low')}>Low</button>
                 <button type="button" className={productStockFilter === 'out' ? 'active' : ''} onClick={() => setProductStockFilter('out')}>Out</button>
+                <button type="button" className={productStockFilter === 'reorder' ? 'active' : ''} onClick={() => setProductStockFilter('reorder')}>Reorder</button>
+                <button type="button" className="edit-btn" onClick={() => {
+                  const lines = products.filter((product) => needsReorder(product)).map((product) => `${product.name}${product.variant ? ` (${product.variant})` : ''}: ${product.stock} left, reorder at ${product.reorderPoint ?? 10}`);
+                  const text = lines.length ? `Reorder\n${lines.join('\n')}` : 'Nothing to reorder.';
+                  if (navigator.share) void navigator.share({ title: 'Reorder', text }).catch(() => undefined);
+                  else void navigator.clipboard.writeText(text);
+                  showNotification(lines.length ? 'Reorder list ready to send.' : 'Nothing to reorder.', 'info');
+                }}>Send list</button>
               </div>
             </div>
 
@@ -3261,14 +3516,14 @@ export default function Page() {
                     </div>
                     <div className="shelf-body">
                       <h3>{p.name}</h3>
-                      {p.category && <p className="shelf-meta">{p.category}</p>}
+                      {p.category && <p className="shelf-meta">{p.category}{p.variant ? ` · ${p.variant}` : ''}{p.unit && p.unit !== 'piece' ? ` · ${p.unit}` : ''}{p.expiryDate ? ` · exp ${p.expiryDate}` : ''}</p>}
                       <div className="shelf-prices">
                         <strong>{formatUGX(p.salePrice)}</strong>
                         <span>{p.stock === 0 ? 'Out of stock' : stockIsLow(p) ? `${p.stock} low` : `${p.stock} in stock`}</span>
                       </div>
                       {seesCost && p.purchasePrice > 0 && <p className="shelf-cost">Cost {formatUGX(p.purchasePrice)}</p>}
                     </div>
-                    <div className="shelf-actions">
+                    {canEditCatalog && <div className="shelf-actions">
                       <button className="edit-btn" onClick={() => openProductForm({ ...blankProductForm(p.branchId), ...p, sku: p.sku || '', barcode: p.barcode || '', category: p.category || '', image: p.image || '', reorderPoint: p.reorderPoint ?? DEFAULT_REORDER_POINT })}>Edit</button>
                       <button className="edit-btn" onClick={() => restockProduct(p.id)}>Stock</button>
                       <button className="delete-btn" onClick={() => {
@@ -3277,7 +3532,7 @@ export default function Page() {
                         setProducts(prev => prev.filter(x => x.id !== p.id));
                         logActivity('delete_inventory', `Deleted product "${p.name}"`);
                       }}>Delete</button>
-                    </div>
+                    </div>}
                   </article>
                   );
                 })}
@@ -3299,6 +3554,55 @@ export default function Page() {
               onNext={() => setProductsPage((prev) => Math.min(productsPagination.totalPages, prev + 1))}
             />
             </>
+            )}
+            {productPane === 'count' && canEditCatalog && (
+              <div className="card">
+                <h3>Count the shelf</h3>
+                <p className="muted-copy">Enter what you can see. Posting sets the shelf to that count and keeps the difference as a stock movement.</p>
+                <div className="table-wrap">
+                  <table className="data-table">
+                    <thead><tr><th>Product</th><th className="num">Expected</th><th className="num">Counted</th><th className="num">Difference</th></tr></thead>
+                    <tbody>
+                      {products.map((product) => {
+                        const counted = countDraft[product.id];
+                        const difference = counted === undefined || counted === '' ? null : countVariance(product.stock, Number(counted));
+                        return (
+                          <tr key={product.id}>
+                            <td data-label="Product">{product.name}{product.variant ? ` (${product.variant})` : ''}</td>
+                            <td data-label="Expected" className="num">{product.stock}</td>
+                            <td data-label="Counted"><input type="number" min="0" step="0.001" value={counted ?? ''} onChange={(event) => setCountDraft((prev) => ({ ...prev, [product.id]: event.target.value }))} /></td>
+                            <td data-label="Difference" className="num">{difference === null || Number.isNaN(difference) ? '—' : difference}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <button type="button" className="primary" onClick={() => {
+                  const changes = products.flatMap((product) => {
+                    const raw = countDraft[product.id];
+                    if (raw === undefined || raw === '') return [];
+                    const counted = Number(raw);
+                    if (!Number.isFinite(counted) || counted < 0) return [];
+                    const delta = countVariance(product.stock, counted);
+                    return delta === 0 ? [] : [{ product, counted, delta }];
+                  });
+                  if (changes.length === 0) {
+                    showNotification('Enter a count that differs from the shelf.', 'info');
+                    return;
+                  }
+                  setProducts((prev) => prev.map((product) => {
+                    const change = changes.find((item) => item.product.id === product.id);
+                    return change ? { ...product, stock: change.counted, ...updatedAuditStamp() } : product;
+                  }));
+                  changes.forEach((change) => logStockMovement(change.product, change.delta, 'count_correction', 'Shelf count'));
+                  if (db && authUser && authUser.uid !== LOCAL_OPERATOR_ID) {
+                    void Promise.all(changes.map((change) => setStockQty(db, activeShopOwnerUid, change.product.id, change.counted))).catch(() => undefined);
+                  }
+                  setCountDraft({});
+                  showNotification('Shelf count posted.', 'success');
+                }}>Post count</button>
+              </div>
             )}
             {productPane === 'movements' && (
             <div className="table-wrap">
@@ -3364,6 +3668,10 @@ export default function Page() {
         )}
 
         {view === 'sales' && (
+          <>
+          <div className="page-tools">
+            <button type="button" className="edit-btn" onClick={() => { setPinDraft(''); setPinPrompt('switch'); }}>{operator ? `Selling as ${operator.name}` : 'Who is selling?'}</button>
+          </div>
           <RegisterDesk
             products={products}
             services={services}
@@ -3403,22 +3711,25 @@ export default function Page() {
             onRemove={removeFromCart}
             onCartDiscount={setCartDiscount}
             onCustomer={(patch) => setCheckoutDetails((prev) => ({ ...prev, ...patch }))}
-            onSelectCustomer={(customer) => setCheckoutDetails((prev) => ({ ...prev, customerName: customer.name, customerPhone: customer.phone || '' }))}
+            onSelectCustomer={(customer) => setCheckoutDetails((prev) => ({ ...prev, customerId: customer.id, customerName: customer.name, customerPhone: customer.phone || '', priceList: customer.priceList || 'retail' }))}
+            discountLocked={actingRole === 'cashier' && !discountApproved}
+            onAskApproval={() => { setPinDraft(''); setPinPrompt('discount'); }}
             onHold={holdRegisterSale}
             onRecall={recallHeldSale}
             onOpenDrawer={openDrawer}
             onCloseDrawer={closeDrawer}
             onClear={clearRegister}
             onPay={completeRegisterSale}
-            onCreateProduct={() => openProductForm(blankProductForm(branches[0]?.id || ''))}
+            onCreateProduct={() => { if (!canEditCatalog) { showNotification('Cashiers sell. A manager adds products.', 'error'); return; } openProductForm(blankProductForm(branches[0]?.id || '')); }}
           />
+          </>
         )}
 
         {view === 'services' && (
           <section>
             <div className="page-tools">
               <p className="muted-copy">Photocopy, scanning, lamination, printing, and typing. Sell them from the register. They do not reduce shelf stock.</p>
-              <button className="primary" type="button" onClick={() => { setServiceForm({ name: '', branchId: branches[0]?.id || '', amount: 0, serviceType: 'direct_cost', directCost: 0, monthlySharedCost: 0, expenseGroupId: '' }); setShowServiceModal(true); }}>Add service</button>
+              <button className="primary" type="button" disabled={!canEditCatalog} onClick={() => { if (!canEditCatalog) return; setServiceForm({ name: '', branchId: branches[0]?.id || '', amount: 0, serviceType: 'direct_cost', directCost: 0, monthlySharedCost: 0, expenseGroupId: '' }); setShowServiceModal(true); }}>Add service</button>
             </div>
 
             <div className="table-wrap">
@@ -3446,6 +3757,7 @@ export default function Page() {
                           : `${formatUGX(service.monthlySharedCost)} / month`}
                       </td>
                       <td data-label="">
+                        {canEditCatalog && <>
                         <button className="edit-btn" onClick={() => { setServiceForm({
                           name: service.name,
                           branchId: service.branchId,
@@ -3456,6 +3768,7 @@ export default function Page() {
                           expenseGroupId: service.expenseGroupId || ''
                         }); setShowServiceModal(true); }}>Edit</button>
                         <button className="delete-btn" onClick={() => { if (!window.confirm(`Delete ${service.name}?`)) return; setServices((prev) => prev.filter((item) => item.id !== service.id)); logActivity('delete_service', `Deleted service "${service.name}"`); }}>Delete</button>
+                        </>}
                       </td>
                     </tr>
                   )) : (
@@ -3586,11 +3899,11 @@ export default function Page() {
               <p className="period-summary">
                 {groupedSales.length} receipt{groupedSales.length === 1 ? '' : 's'}
                 <span>·</span>
-                {formatUGX(groupedSales.reduce((sum, sale) => sum + sale.total, 0))}
+                {formatUGX(groupedSales.filter((sale) => !sale.voided).reduce((sum, sale) => sum + sale.total, 0))}
                 {showRegisterMargin && (
                   <>
                     <span>·</span>
-                    <span className={groupedSales.reduce((sum, sale) => sum + sale.profit, 0) < 0 ? 'is-negative' : ''}>margin {formatUGX(groupedSales.reduce((sum, sale) => sum + sale.profit, 0))}</span>
+                    <span className={groupedSales.filter((sale) => !sale.voided).reduce((sum, sale) => sum + sale.profit, 0) < 0 ? 'is-negative' : ''}>margin {formatUGX(groupedSales.filter((sale) => !sale.voided).reduce((sum, sale) => sum + sale.profit, 0))}</span>
                   </>
                 )}
               </p>
@@ -3630,10 +3943,18 @@ export default function Page() {
                           <td data-label="Margin" className={`num${saleGroup.profit < 0 ? ' is-negative' : ''}`}>{showRegisterMargin ? formatUGX(saleGroup.profit) : '—'}</td>
                           <td data-label="">
                             <button className="edit-btn" onClick={() => setActiveReceipt(receiptFromSaleLines(saleGroup.lines))}>Receipt</button>
-                            {saleGroup.saleKind !== 'return' && <button className="edit-btn" onClick={() => setReturnTransactionId(saleGroup.id)}>Return</button>}
-                            {canManageSalesAndExpenses ? (
-                              <button className="delete-btn" onClick={() => deleteTransaction(saleGroup.lines.map((line) => line.id))}>Delete</button>
-                            ) : null}
+                            {saleGroup.saleKind !== 'return' && !saleGroup.lines.some((line) => line.voidedAt) && <button className="edit-btn" onClick={() => setReturnTransactionId(saleGroup.id)}>Return</button>}
+                            {saleGroup.lines.some((line) => line.moneyStatus === 'unconfirmed') && canManageSalesAndExpenses && (
+                              <button className="edit-btn" onClick={() => {
+                                const ids = saleGroup.lines.map((line) => line.id);
+                                const next = sales.filter((sale) => ids.includes(sale.id)).map((sale) => ({ ...sale, moneyStatus: 'confirmed' as const }));
+                                setSales((prev) => prev.map((sale) => ids.includes(sale.id) ? { ...sale, moneyStatus: 'confirmed' } : sale));
+                                if (db && authUser && authUser.uid !== LOCAL_OPERATOR_ID) void writeRecords(db, activeShopOwnerUid, 'sales', next).catch(() => undefined);
+                              }}>Money arrived</button>
+                            )}
+                            {canManageSalesAndExpenses && !saleGroup.lines.some((line) => line.voidedAt) ? (
+                              <button className="delete-btn" onClick={() => deleteTransaction(saleGroup.lines.map((line) => line.id))}>Void</button>
+                            ) : saleGroup.lines.some((line) => line.voidedAt) ? <span className="badge">Void</span> : null}
                           </td>
                         </tr>
                       ))
@@ -3813,15 +4134,15 @@ export default function Page() {
             <div className="page-header">
               <h2>Staff</h2>
               {canManageUsers && (
-                <button className="primary" onClick={() => { setUserForm({ id: '', name: '', email: '', role: 'cashier', branchId: branches[0]?.id || '' }); setShowUserModal(true); }}>
-                  + Invite Staff
+                <button className="primary" onClick={() => { setUserForm({ id: '', name: '', email: '', role: 'cashier', branchId: branches[0]?.id || '', pin: '' }); setShowUserModal(true); }}>
+                  Add staff
                 </button>
               )}
             </div>
             
             {canManageUsers ? (
               <>
-                <p className="muted-copy">Invite someone by email. AlphaPOS sends the link from the shop address. They open it and sign in with Google using that same address, as the role you chose.</p>
+                <p className="muted-copy">Give each person a 4-digit PIN for this shared till. Add an email when they should also sign in with Google on their own phone.</p>
             <div className="table-wrap">
                   <table className="data-table">
                     <thead>
@@ -3846,14 +4167,14 @@ export default function Page() {
                               </span>
                             </td>
                             <td data-label="Branch">{branchMap[u.branchId]}</td>
-                            <td data-label="Added">{new Date(u.createdAt).toLocaleDateString()}</td>
+                            <td data-label="Added">{new Date(u.createdAt).toLocaleDateString()}{u.pinHash ? ' · PIN set' : ''}</td>
                             <td data-label="">
-                              <button className="edit-btn" onClick={() => { setUserForm(u); setShowUserModal(true); }}>Edit</button>
-                              <button className="edit-btn" onClick={() => { void emailStaffSignInLink(u.email, u.role).catch((error) => showNotification(staffSignInError(error), 'error', 7000)); }}>Email link</button>
+                              <button className="edit-btn" onClick={() => { setUserForm({ ...u, pin: '' }); setShowUserModal(true); }}>Edit</button>
+                              {u.email && authUser?.uid !== LOCAL_OPERATOR_ID && <button className="edit-btn" onClick={() => { void emailStaffSignInLink(u.email, u.role).catch((error) => showNotification(staffSignInError(error), 'error', 7000)); }}>Email link</button>}
                               <button className="delete-btn" onClick={() => {
                                 if (!window.confirm(`Remove ${u.name || u.email}? They lose access to this shop.`)) return;
                                 setUsers(prev => prev.filter(x => x.id !== u.id));
-                                if (db) void deleteDoc(doc(db, 'shopMemberships', `${activeShopOwnerUid}_${u.email.toLowerCase().trim()}`)).catch(() => undefined);
+                                if (db && u.email.trim()) void deleteDoc(doc(db, 'shopMemberships', `${activeShopOwnerUid}_${u.email.toLowerCase().trim()}`)).catch(() => undefined);
                                 logActivity('delete_user', `Removed user "${u.email}"`);
                               }}>Remove</button>
                             </td>
@@ -3952,7 +4273,30 @@ export default function Page() {
                   <div><span>At cost</span><strong>{formatUGX(shopStockWorth.atCost)}</strong></div>
                   <div><span>At selling price</span><strong>{formatUGX(shopStockWorth.atSalePrice)}</strong></div>
                 </div>
-                <p className="muted-copy stock-worth-note">{formatCount(shopStockWorth.units)} on the shelf. {products.filter((product) => stockIsLow(product)).length} below reorder.</p>
+                <p className="muted-copy stock-worth-note">{formatCount(shopStockWorth.units)} on the shelf. {products.filter((product) => needsReorder(product)).length} to reorder, including empty.</p>
+              </div>
+            </div>
+            <div className="card">
+              <h3>What sold</h3>
+              <div className="table-wrap">
+                <table className="data-table">
+                  <thead><tr><th>Product</th><th className="num">Qty</th><th className="num">Amount</th></tr></thead>
+                  <tbody>
+                    {rankProducts(sales.filter((sale) => !sale.voidedAt)).slice(0, 8).map((row) => (
+                      <tr key={row.name}><td>{row.name}</td><td className="num">{row.qty}</td><td className="num">{formatUGX(row.amount)}</td></tr>
+                    ))}
+                    {rankProducts(sales.filter((sale) => !sale.voidedAt)).length === 0 && <tr><td colSpan={3}>No product sales yet.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div className="card">
+              <h3>How it was paid</h3>
+              <div className="fact-list">
+                {tenderTotals(sales).map((row) => (
+                  <div key={row.method}><span>{PAYMENT_METHOD_LABELS[row.method]}</span><strong>{formatUGX(row.amount)}</strong></div>
+                ))}
+                {tenderTotals(sales).length === 0 && <p className="muted-copy">No payments yet.</p>}
               </div>
             </div>
           </section>
@@ -3998,6 +4342,24 @@ export default function Page() {
             <div className="page-header">
               <h2>Customers</h2>
             </div>
+            {seesBooks && (
+              <form className="card" onSubmit={addCustomer}>
+                <h3>Add a customer</h3>
+                <p className="muted-copy">One person, one balance. Leave the limit empty for no cap. Zero means they cannot buy on account.</p>
+                <div className="form">
+                  <label className="field"><span>Name</span><input value={customerDraft.name} onChange={(event) => setCustomerDraft((prev) => ({ ...prev, name: event.target.value }))} required /></label>
+                  <label className="field"><span>Phone</span><input value={customerDraft.phone} onChange={(event) => setCustomerDraft((prev) => ({ ...prev, phone: event.target.value }))} /></label>
+                  <label className="field"><span>Credit limit (UGX)</span><input type="number" min="0" step="1" placeholder="No limit" value={customerDraft.creditLimit} onChange={(event) => setCustomerDraft((prev) => ({ ...prev, creditLimit: event.target.value }))} /></label>
+                  <label className="field"><span>Price</span>
+                    <select value={customerDraft.priceList} onChange={(event) => setCustomerDraft((prev) => ({ ...prev, priceList: event.target.value as 'retail' | 'wholesale' }))}>
+                      <option value="retail">Retail</option>
+                      <option value="wholesale">Wholesale</option>
+                    </select>
+                  </label>
+                </div>
+                <div className="modal-footer"><button type="submit" className="primary">Save customer</button></div>
+              </form>
+            )}
             <div className="filter-bar">
               <div className="filter-group" style={{ flex: 1 }}>
                 <label>Search</label>
@@ -4012,6 +4374,7 @@ export default function Page() {
                     <th>Customer</th>
                     <th>Phone</th>
                     <th className="num">On account</th>
+                    <th className="num">Limit</th>
                     <th>Notes</th>
                     <th></th>
                   </tr>
@@ -4021,19 +4384,28 @@ export default function Page() {
                     const needle = customerQuery.trim().toLowerCase();
                     return !needle || customer.name.toLowerCase().includes(needle) || customer.phone?.toLowerCase().includes(needle);
                   }).map((customer) => {
-                    const owed = customerBalance(customer.name, customer.phone);
+                    const owed = customerBalance(customer.name, customer.phone, customer.id);
                     return (
                     <tr key={customer.id}>
                       <td data-label="Customer" style={{ fontWeight: 700 }}>{customer.name}</td>
                       <td data-label="Phone">{customer.phone || '—'}</td>
                       <td data-label="On account" className="num">{owed > 0 ? <span className="badge badge-warning">Due {formatUGX(owed)}</span> : formatUGX(owed)}</td>
-                      <td data-label="Notes">{customer.notes || '—'}</td>
+                      <td data-label="Limit">
+                        {canEditCatalog ? (
+                          <input type="number" min="0" defaultValue={customer.creditLimit ?? ''} placeholder="No limit" onBlur={(event) => {
+                            const raw = event.target.value.trim();
+                            const creditLimit = raw === '' ? undefined : roundMoney(Number(raw));
+                            setCustomers((prev) => prev.map((item) => item.id === customer.id ? { ...item, ...(creditLimit === undefined ? {} : { creditLimit }), ...(raw === '' ? { creditLimit: undefined } : {}) } : item));
+                          }} />
+                        ) : (customer.creditLimit === undefined ? 'No limit' : formatUGX(customer.creditLimit))}
+                      </td>
+                      <td data-label="Notes">{customer.notes || '—'}{customer.priceList === 'wholesale' ? ' · Wholesale' : ''}</td>
                       <td data-label="">{owed > 0 && <button type="button" className="edit-btn" onClick={() => { setPaymentCustomer(customer); setPaymentDraft({ amount: String(owed), method: 'cash' }); }}>Record payment</button>}</td>
                     </tr>
                     );
                   })}
                   {customers.length === 0 && (
-                    <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>Customers appear here after a named sale.</td></tr>
+                    <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>Add a customer here, or name them on a sale.</td></tr>
                   )}
                 </tbody>
               </table>
@@ -4364,6 +4736,43 @@ export default function Page() {
                 </table>
               </div>
             </div>
+            {seesBooks && (
+              <div className="card" style={{ marginTop: 16 }}>
+                <h3>Suppliers</h3>
+                <p className="muted-copy">A bill is recorded when stock is received with a supplier and a unit cost.</p>
+                <div className="table-wrap">
+                  <table className="data-table">
+                    <thead><tr><th>Supplier</th><th className="num">Owed</th><th></th></tr></thead>
+                    <tbody>
+                      {suppliers.map((supplier) => (
+                        <tr key={supplier.id}>
+                          <td>{supplier.name}</td>
+                          <td className="num">{formatUGX(supplierOwed(supplier.name, supplierBills, supplierPayments))}</td>
+                          <td><button type="button" className="edit-btn" onClick={() => { setSupplierPayName(supplier.name); setSupplierPayAmount(String(supplierOwed(supplier.name, supplierBills, supplierPayments))); }}>Pay</button></td>
+                        </tr>
+                      ))}
+                      {suppliers.length === 0 && <tr><td colSpan={3}>No suppliers yet.</td></tr>}
+                    </tbody>
+                  </table>
+                </div>
+                {supplierPayName && (
+                  <form className="form" onSubmit={(event) => {
+                    event.preventDefault();
+                    const amount = roundMoney(Number(supplierPayAmount));
+                    if (!Number.isFinite(amount) || amount <= 0) return;
+                    const payment: SupplierPayment = { id: crypto.randomUUID(), supplierName: supplierPayName, amount, method: 'cash', createdAt: new Date().toISOString() };
+                    setSupplierPayments((prev) => [payment, ...prev]);
+                    if (db && authUser && authUser.uid !== LOCAL_OPERATOR_ID) void writeRecords(db, activeShopOwnerUid, 'supplierPayments', [payment]).catch(() => undefined);
+                    setSupplierPayName('');
+                    showNotification(`Paid ${supplierPayName}.`, 'success');
+                  }}>
+                    <p className="muted-copy">Pay {supplierPayName}</p>
+                    <label className="field"><span>Amount</span><input type="number" min="1" value={supplierPayAmount} onChange={(event) => setSupplierPayAmount(event.target.value)} /></label>
+                    <button type="submit" className="primary">Record payment</button>
+                  </form>
+                )}
+              </div>
+            )}
           </section>
         )}
 
@@ -4383,6 +4792,72 @@ export default function Page() {
         )}
 
         {activeReceipt && <ReceiptDialog receipt={activeReceipt} formatMoney={formatUGX} onClose={() => setActiveReceipt(null)} />}
+        {pinPrompt && (
+          <div className="modal-overlay">
+            <div className="modal-content">
+              <div className="modal-header">
+                <h3>{pinPrompt === 'discount' ? 'Manager PIN' : 'Who is selling?'}</h3>
+                <button type="button" className="modal-close" onClick={() => setPinPrompt(null)}>&times;</button>
+              </div>
+              <form className="modal-body" onSubmit={(event) => {
+                event.preventDefault();
+                void (async () => {
+                  for (const person of users) {
+                    if (!person.pinHash || !pinIsValid(pinDraft)) continue;
+                    const hash = await hashPin(person.id, pinDraft);
+                    if (hash !== person.pinHash) continue;
+                    if (pinPrompt === 'discount' && person.role === 'cashier') {
+                      showNotification('A cashier PIN cannot approve a discount.', 'error');
+                      return;
+                    }
+                    if (pinPrompt === 'discount') setDiscountApproved(true);
+                    else {
+                      setDiscountApproved(false);
+                      setOperator({ id: person.id, name: person.name, email: person.email });
+                    }
+                    setPinPrompt(null);
+                    setPinDraft('');
+                    showNotification(pinPrompt === 'discount' ? 'Discount approved.' : `${person.name} is on the till.`, 'success');
+                    return;
+                  }
+                  showNotification(users.some((person) => person.pinHash) ? 'That PIN does not match.' : 'Set a 4-digit PIN on a staff member first.', 'error');
+                })();
+              }}>
+                <label className="field"><span>4-digit PIN</span><input value={pinDraft} inputMode="numeric" maxLength={4} onChange={(event) => setPinDraft(event.target.value.replace(/\D/g, '').slice(0, 4))} autoFocus /></label>
+                <div className="modal-footer"><button type="submit" className="primary">Continue</button></div>
+              </form>
+            </div>
+          </div>
+        )}
+        {closeOpen && (
+          <div className="modal-overlay">
+            <div className="modal-content">
+              <div className="modal-header">
+                <h3>Close of day</h3>
+                <button type="button" className="modal-close" onClick={() => setCloseOpen(false)}>&times;</button>
+              </div>
+              <div className="modal-body">
+                <p className="muted-copy">{businessDayKey(new Date(), shopClock)}</p>
+                {(() => {
+                  const close = dayClose(sales, expenses, businessDayKey(new Date(), shopClock), (iso) => businessDayKey(new Date(iso), shopClock));
+                  const text = [`Close of day ${businessDayKey(new Date(), shopClock)}`, `Sales ${formatUGX(close.salesTotal)}`, `Expenses ${formatUGX(close.expenseTotal)}`, `Net ${formatUGX(close.net)}`, ...close.tenders.map((tender) => `${PAYMENT_METHOD_LABELS[tender.method]} ${formatUGX(tender.amount)}`), ...close.unconfirmed.map((row) => `Unconfirmed ${row.receiptNumber} ${formatUGX(row.amount)} ${row.reference}`)].join('\n');
+                  return (
+                    <>
+                      <div className="fact-list">
+                        <div><span>Sales</span><strong>{formatUGX(close.salesTotal)}</strong></div>
+                        <div><span>Expenses</span><strong>{formatUGX(close.expenseTotal)}</strong></div>
+                        <div><span>Net</span><strong>{formatUGX(close.net)}</strong></div>
+                        {close.tenders.map((tender) => <div key={tender.method}><span>{PAYMENT_METHOD_LABELS[tender.method]}</span><strong>{formatUGX(tender.amount)}</strong></div>)}
+                      </div>
+                      {close.unconfirmed.length > 0 && <p className="muted-copy">{close.unconfirmed.length} mobile money or bank receipt{close.unconfirmed.length === 1 ? '' : 's'} still waiting for the money to be marked as arrived.</p>}
+                      <div className="modal-footer"><button type="button" className="primary" onClick={() => printPlain(businessDayKey(new Date(), shopClock), text)}>Print slip</button></div>
+                    </>
+                  );
+                })()}
+              </div>
+            </div>
+          </div>
+        )}
         {returnTransactionId && (
           <ReturnDialog
             receiptNumber={sales.find((sale) => transactionKey(sale) === returnTransactionId)?.receiptNumber || `#${returnTransactionId.slice(0, 8)}`}
@@ -4556,6 +5031,26 @@ export default function Page() {
                     <label className="field">
                       <span>Selling Price (UGX)</span>
                       <input type="number" min="0" step="0.01" value={productForm.salePrice} onChange={(e) => setProductForm({ ...productForm, salePrice: Number(e.target.value) })} required />
+                    </label>
+                    <label className="field">
+                      <span>Wholesale price (UGX)</span>
+                      <input type="number" min="0" step="0.01" value={productForm.wholesalePrice} onChange={(e) => setProductForm({ ...productForm, wholesalePrice: Number(e.target.value) })} />
+                    </label>
+                    <label className="field">
+                      <span>Unit</span>
+                      <select value={productForm.unit} onChange={(e) => setProductForm({ ...productForm, unit: e.target.value as 'piece' | 'kg' | 'litre' })}>
+                        <option value="piece">Piece</option>
+                        <option value="kg">Kilogram</option>
+                        <option value="litre">Litre</option>
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Size or colour</span>
+                      <input value={productForm.variant} onChange={(e) => setProductForm({ ...productForm, variant: e.target.value.slice(0, 40) })} placeholder="Optional" />
+                    </label>
+                    <label className="field">
+                      <span>Expiry</span>
+                      <input type="date" value={productForm.expiryDate} onChange={(e) => setProductForm({ ...productForm, expiryDate: e.target.value })} />
                     </label>
                   </div>
                 </div>
@@ -4784,7 +5279,7 @@ export default function Page() {
           <div className="modal-overlay">
             <div className="modal-content">
               <div className="modal-header">
-                <h3>{userForm.id ? 'Edit Staff Member' : 'Invite Staff Member'}</h3>
+                <h3>{userForm.id ? 'Edit staff' : 'Add staff'}</h3>
                 <button className="modal-close" onClick={() => setShowUserModal(false)}>&times;</button>
               </div>
               <form onSubmit={saveUser}>
@@ -4796,9 +5291,9 @@ export default function Page() {
                     </label>
                     <label className="field">
                       <span>Email Address</span>
-                      <input type="email" value={userForm.email} onChange={(e) => setUserForm({ ...userForm, email: e.target.value })} required />
+                      <input type="email" value={userForm.email} onChange={(e) => setUserForm({ ...userForm, email: e.target.value })} placeholder="Optional for a shared till" />
                     </label>
-                    {!userForm.id && <p className="muted-copy form-span">We email this address a link from the shop. They open it and sign in with Google using that same address as {roleLabels[userForm.role]}.</p>}
+                    {!userForm.id && <p className="muted-copy form-span">A PIN is enough for this till. An email is for someone who signs in with Google on their own phone. {authUser?.uid === LOCAL_OPERATOR_ID ? 'This counter cannot send that email until the shop is signed in.' : 'AlphaPOS emails the link from the shop address.'}</p>}
                     <label className="field">
                       <span>Role</span>
                       <select value={userForm.role} onChange={(e) => setUserForm({ ...userForm, role: e.target.value as Role })} required>
@@ -4815,11 +5310,16 @@ export default function Page() {
                         {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
                       </select>
                     </label>
+                    <label className="field">
+                      <span>Till PIN</span>
+                      <input value={userForm.pin} inputMode="numeric" maxLength={4} placeholder="4 digits, optional" onChange={(e) => setUserForm({ ...userForm, pin: e.target.value.replace(/\D/g, '').slice(0, 4) })} />
+                    </label>
+                    <p className="muted-copy form-span">A PIN lets this person take the shared till, and lets a manager approve a cashier’s discount. Leave it blank to keep the current PIN.</p>
                   </div>
                 </div>
                 <div className="modal-footer">
                   <button type="button" className="edit-btn" onClick={() => setShowUserModal(false)}>Cancel</button>
-                  <button type="submit" className="primary">{userForm.id ? 'Update' : 'Send invite email'}</button>
+                  <button type="submit" className="primary">{userForm.id ? 'Update' : userForm.email.trim() && authUser?.uid !== LOCAL_OPERATOR_ID ? 'Save and email link' : 'Save'}</button>
                 </div>
               </form>
             </div>

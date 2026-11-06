@@ -5,6 +5,7 @@ import { reorderLevel } from '../../lib/pos/books';
 import { compareRegisterCatalog, unitsSoldByProduct, type CatalogSaleLine } from '../../lib/pos/catalogOrder';
 import type { CartDiscount, CashSession, Customer, PaymentMethod, Settlement, Tender } from '../../lib/pos/retail';
 import { PAYMENT_METHOD_LABELS } from '../../lib/pos/retail';
+import { referenceRequired } from '../../lib/pos/shopMath';
 
 export const REGISTER_PAGE_SIZE = 16;
 
@@ -19,6 +20,10 @@ export type RegisterProduct = {
   category?: string;
   image?: string;
   reorderPoint?: number;
+  unit?: 'piece' | 'kg' | 'litre';
+  wholesalePrice?: number;
+  variant?: string;
+  expiryDate?: string;
 };
 
 export type RegisterService = {
@@ -39,6 +44,7 @@ export type RegisterCartItem = {
   discountMode?: 'none' | 'price' | 'percent';
   discountedUnitPrice?: number;
   discountPercent?: number;
+  unit?: 'piece' | 'kg' | 'litre';
 };
 
 export type HeldTicketView = {
@@ -116,6 +122,8 @@ export default function RegisterDesk({
   onCloseDrawer,
   onClear,
   onPay,
+  discountLocked = false,
+  onAskApproval,
   onCreateProduct,
 }: {
   products: RegisterProduct[];
@@ -150,7 +158,9 @@ export default function RegisterDesk({
   onOpenDrawer: (openingFloat: number) => void;
   onCloseDrawer: (countedCash: number, note: string) => void;
   onClear: () => void;
-  onPay: (tenders: Tender[]) => boolean;
+  onPay: (tenders: Tender[]) => boolean | Promise<boolean>;
+  discountLocked?: boolean;
+  onAskApproval?: () => void;
   onCreateProduct: () => void;
 }) {
   const searchRef = useRef<HTMLInputElement>(null);
@@ -172,6 +182,60 @@ export default function RegisterDesk({
   const [heldOpen, setHeldOpen] = useState(false);
   const [clearOpen, setClearOpen] = useState(false);
   const [customerOpen, setCustomerOpen] = useState(false);
+  const [cameraOn, setCameraOn] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const guardDiscount = (apply: () => void) => {
+    if (discountLocked) {
+      onAskApproval?.();
+      return;
+    }
+    apply();
+  };
+  useEffect(() => {
+    if (!cameraOn) return;
+    let stream: MediaStream | undefined;
+    let timer = 0;
+    let stopped = false;
+    const stop = () => {
+      stopped = true;
+      window.clearTimeout(timer);
+      stream?.getTracks().forEach((track) => track.stop());
+    };
+    void (async () => {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+        if (stopped || !videoRef.current) return;
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+        const Detector = (window as unknown as { BarcodeDetector?: new (options: { formats: string[] }) => { detect: (source: HTMLVideoElement) => Promise<{ rawValue: string }[]> } }).BarcodeDetector;
+        if (!Detector) {
+          setNotice({ message: 'This browser cannot read a barcode from the camera. Type it, or use a scanner.', tone: 'warn' });
+          return;
+        }
+        const detector = new Detector({ formats: ['ean_13', 'ean_8', 'code_128', 'code_39', 'upc_a', 'upc_e', 'qr_code'] });
+        const tick = async () => {
+          if (stopped || !videoRef.current) return;
+          const codes = await detector.detect(videoRef.current).catch(() => []);
+          const value = codes[0]?.rawValue?.trim().toLowerCase();
+          if (value) {
+            const product = products.find((item) => item.barcode?.trim().toLowerCase() === value || item.sku?.trim().toLowerCase() === value);
+            if (product) {
+              onAddProduct(product.id);
+              setCameraOn(false);
+              return;
+            }
+            setNotice({ message: `No product for ${codes[0].rawValue}.`, tone: 'warn' });
+          }
+          timer = window.setTimeout(() => { void tick(); }, 280);
+        };
+        timer = window.setTimeout(() => { void tick(); }, 300);
+      } catch {
+        setNotice({ message: 'The camera could not open.', tone: 'warn' });
+        setCameraOn(false);
+      }
+    })();
+    return stop;
+  }, [cameraOn, onAddProduct, products]);
 
   const categories = useMemo(() => {
     const names = new Set(products.map((product) => product.category?.trim()).filter((value): value is string => Boolean(value)));
@@ -351,6 +415,10 @@ export default function RegisterDesk({
   const buildTenders = (): Tender[] | null => {
     if (!canCharge) return null;
     const reference = payment.reference.trim();
+    if ((referenceRequired(payment.method) || (payment.split && referenceRequired(payment.secondMethod))) && !reference) {
+      setNotice({ message: 'Enter the mobile money or bank transaction code.', tone: 'warn' });
+      return null;
+    }
     const primary: Tender = {
       method: payment.method,
       amount: primaryAmount,
@@ -380,6 +448,7 @@ export default function RegisterDesk({
               onKeyDown={(event) => searchKeyDown(event.key)}
             />
           </label>
+          <button type="button" className="edit-btn" onClick={() => setCameraOn((open) => !open)}>{cameraOn ? 'Stop camera' : 'Camera'}</button>
           {(drawerEnabled || cashSession) && (
             <div className="pos-session">
               {cashSession ? (
@@ -398,6 +467,11 @@ export default function RegisterDesk({
             </div>
           )}
         </div>
+        {cameraOn && (
+          <div className="pos-camera">
+            <video ref={videoRef} muted playsInline />
+          </div>
+        )}
         <div className={`pos-category-rail${categoryEnds.left ? ' can-left' : ''}${categoryEnds.right ? ' can-right' : ''}`}>
           <button type="button" className="pos-category-nav is-prev" aria-label="Previous categories" hidden={!categoryEnds.left && !categoryEnds.right} disabled={!categoryEnds.left} onClick={() => nudgeCategories(-1)}>
             <CategoryChevron direction="left" />
@@ -576,26 +650,26 @@ export default function RegisterDesk({
               <div className="pos-line-controls">
                 <div className="pos-stepper">
                   <button type="button" onClick={() => onChangeQty(item.itemId, item.itemType, item.qty - 1)} aria-label={item.qty <= 1 ? `Remove ${item.itemName}` : `Remove one ${item.itemName}`}>−</button>
-                  <input aria-label={`${item.itemName} quantity`} type="number" min={1} step="1" value={item.qty} onChange={(event) => onChangeQty(item.itemId, item.itemType, Number(event.target.value))} />
+                  <input aria-label={`${item.itemName} quantity`} type="number" min={item.unit === 'kg' || item.unit === 'litre' ? 0.001 : 1} step={item.unit === 'kg' || item.unit === 'litre' ? 0.001 : 1} value={item.qty} onChange={(event) => onChangeQty(item.itemId, item.itemType, Number(event.target.value))} />
                   <button type="button" onClick={() => onChangeQty(item.itemId, item.itemType, item.qty + 1)} aria-label={`Increase ${item.itemName}`}>+</button>
                 </div>
                 <strong>{formatMoney((settlement.lines.find((line) => line.key === `${item.itemType}:${item.itemId}`)?.amount) || 0)}</strong>
               </div>
               <div className="pos-line-discount">
                 {(item.discountMode || 'none') === 'none' ? (
-                  <button type="button" className="edit-btn" onClick={() => onDiscountMode(item.itemId, item.itemType, 'percent')}>Discount</button>
+                  <button type="button" className="edit-btn" onClick={() => guardDiscount(() => onDiscountMode(item.itemId, item.itemType, 'percent'))}>Discount</button>
                 ) : (
                   <>
-                    <select value={item.discountMode || 'none'} aria-label={`${item.itemName} discount`} onChange={(event) => onDiscountMode(item.itemId, item.itemType, event.target.value as 'none' | 'price' | 'percent')}>
+                    <select value={item.discountMode || 'none'} aria-label={`${item.itemName} discount`} onChange={(event) => guardDiscount(() => onDiscountMode(item.itemId, item.itemType, event.target.value as 'none' | 'price' | 'percent'))}>
                       <option value="none">List {formatMoney(item.unitPrice)}</option>
                       <option value="price">Special price</option>
                       <option value="percent">Percent off</option>
                     </select>
                     {item.discountMode === 'price' && (
-                      <input type="number" min={0} max={item.unitPrice} value={item.discountedUnitPrice ?? item.unitPrice} onChange={(event) => onDiscountValue(item.itemId, item.itemType, Number(event.target.value))} />
+                      <input type="number" min={0} max={item.unitPrice} value={item.discountedUnitPrice ?? item.unitPrice} onChange={(event) => { const next = Number(event.target.value); guardDiscount(() => onDiscountValue(item.itemId, item.itemType, next)); }} />
                     )}
                     {item.discountMode === 'percent' && (
-                      <input type="number" min={0} max={100} value={item.discountPercent ?? 0} onChange={(event) => onDiscountValue(item.itemId, item.itemType, Number(event.target.value))} />
+                      <input type="number" min={0} max={100} value={item.discountPercent ?? 0} onChange={(event) => { const next = Number(event.target.value); guardDiscount(() => onDiscountValue(item.itemId, item.itemType, next)); }} />
                     )}
                   </>
                 )}
@@ -608,15 +682,15 @@ export default function RegisterDesk({
         <footer className="pos-ticket-foot">
           <div className="pos-cart-discount">
             {cartDiscount.mode === 'none' ? (
-              <button type="button" className="edit-btn" onClick={() => onCartDiscount({ mode: 'percent', value: 0 })}>Sale discount</button>
+              <button type="button" className="edit-btn" onClick={() => guardDiscount(() => onCartDiscount({ mode: 'percent', value: 0 }))}>Sale discount</button>
             ) : (
               <>
-                <select value={cartDiscount.mode} onChange={(event) => onCartDiscount({ mode: event.target.value as CartDiscount['mode'], value: cartDiscount.value })}>
+                <select value={cartDiscount.mode} onChange={(event) => guardDiscount(() => onCartDiscount({ mode: event.target.value as CartDiscount['mode'], value: cartDiscount.value }))}>
                   <option value="none">No sale discount</option>
                   <option value="amount">Amount off</option>
                   <option value="percent">Percent off</option>
                 </select>
-                <input type="number" min={0} max={cartDiscount.mode === 'percent' ? 100 : undefined} value={cartDiscount.value} onChange={(event) => onCartDiscount({ ...cartDiscount, value: Number(event.target.value) })} />
+                <input type="number" min={0} max={cartDiscount.mode === 'percent' ? 100 : undefined} value={cartDiscount.value} onChange={(event) => { const next = Number(event.target.value); guardDiscount(() => onCartDiscount({ ...cartDiscount, value: next })); }} />
               </>
             )}
           </div>
@@ -711,11 +785,11 @@ export default function RegisterDesk({
             )}
             {payment.method !== 'cash' && (
               <label className="pos-reference">
-                Reference (optional, recorded only)
-                <input value={payment.reference} maxLength={80} placeholder="Approval or transaction code" onChange={(event) => setPayment((prev) => ({ ...prev, reference: event.target.value }))} />
+                Reference {referenceRequired(payment.method) ? '(required)' : '(optional)'}
+                <input value={payment.reference} maxLength={80} placeholder={referenceRequired(payment.method) ? 'Mobile money or bank code' : 'Approval or transaction code'} onChange={(event) => setPayment((prev) => ({ ...prev, reference: event.target.value }))} />
               </label>
             )}
-            <p className="pos-pay-note">Card, mobile money, and bank payments are saved on the sale. AlphaPOS does not charge the customer’s account or card.</p>
+            <p className="pos-pay-note">Mobile money and bank codes are saved so the shop can confirm the money arrived. AlphaPOS does not charge the customer’s phone or card.</p>
             </div>
             {cashIsPrimary && (
               <div className="pos-cashbox">
@@ -737,9 +811,10 @@ export default function RegisterDesk({
               const tenders = buildTenders();
               if (!tenders) return;
               payLock.current = true;
-              const completed = onPay(tenders);
-              payLock.current = false;
-              if (completed) setPaymentOpen(false);
+              void Promise.resolve(onPay(tenders)).then((completed) => {
+                payLock.current = false;
+                if (completed) setPaymentOpen(false);
+              }).catch(() => { payLock.current = false; });
             }}>Complete sale</button>
           </div>
         </div>
