@@ -128,6 +128,8 @@ export default function RegisterDesk({
   onSwitchSeller,
   onCreateProduct,
   canAddProduct = true,
+  onReloadShop,
+  emptyNote,
 }: {
   products: RegisterProduct[];
   services: RegisterService[];
@@ -168,6 +170,8 @@ export default function RegisterDesk({
   onSwitchSeller?: () => void;
   onCreateProduct: () => void;
   canAddProduct?: boolean;
+  onReloadShop?: () => void;
+  emptyNote?: string;
 }) {
   const searchRef = useRef<HTMLInputElement>(null);
   const categoryStripRef = useRef<HTMLDivElement>(null);
@@ -583,8 +587,9 @@ export default function RegisterDesk({
           {visibleProducts.length === 0 && visibleServices.length === 0 && (
             <div className="pos-empty">
               <h3>{products.length === 0 ? 'No products yet' : 'Nothing matches'}</h3>
-              <p>{products.length === 0 ? (canAddProduct ? 'Add a product with a price and opening stock, then sell it from this register.' : 'Products added by the shop owner show here. If the owner can see them and this register cannot, reload the shop.') : 'Try another category, name, SKU, or barcode.'}</p>
+              <p>{products.length === 0 ? (emptyNote || (canAddProduct ? 'Add a product with a price and opening stock, then sell it from this register.' : 'Products saved by the shop owner show here as tiles you can tap.')) : 'Try another category, name, SKU, or barcode.'}</p>
               {products.length === 0 && canAddProduct && <button type="button" className="primary" onClick={onCreateProduct}>Add a product</button>}
+              {products.length === 0 && !canAddProduct && onReloadShop && <button type="button" className="primary" onClick={onReloadShop}>Reload the shop</button>}
             </div>
           )}
         </div>
