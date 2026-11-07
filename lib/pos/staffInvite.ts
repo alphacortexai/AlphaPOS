@@ -3,6 +3,7 @@ import { firebaseApp } from '../../lib.firebase';
 
 const EMAIL_FOR_SIGN_IN = 'emailForSignIn';
 const INVITE_SHOP = 'alphapos.inviteShop';
+const INVITE_EMAIL = 'alphapos.inviteEmail';
 
 let emailLinkAttempt: Promise<void> | null = null;
 
@@ -35,6 +36,8 @@ export const completeEmailLinkSignIn = (auth: Auth) => {
       await signInWithEmailLink(auth, email.trim(), window.location.href);
       window.localStorage.removeItem(EMAIL_FOR_SIGN_IN);
       const shop = params.get('shop');
+      const invited = email.trim().toLowerCase();
+      if (invited.includes('@')) window.sessionStorage.setItem(INVITE_EMAIL, invited);
       if (shop) window.sessionStorage.setItem(INVITE_SHOP, shop);
       window.history.replaceState({}, '', window.location.pathname);
     })().catch((error) => {
@@ -48,10 +51,16 @@ export const completeEmailLinkSignIn = (auth: Auth) => {
 export const rememberInviteFromUrl = () => {
   if (typeof window === 'undefined' || !firebaseApp) return;
   const params = new URLSearchParams(window.location.search);
+  const email = params.get('email')?.trim().toLowerCase() || '';
+  if (email.includes('@')) window.sessionStorage.setItem(INVITE_EMAIL, email);
   const shop = params.get('shop');
   if (!shop || isSignInWithEmailLink(getAuth(firebaseApp), window.location.href)) return;
   window.sessionStorage.setItem(INVITE_SHOP, shop);
 };
+
+export const readInvitedShopId = () => (typeof window === 'undefined' ? '' : window.sessionStorage.getItem(INVITE_SHOP) || '');
+
+export const readInvitedEmail = () => (typeof window === 'undefined' ? '' : window.sessionStorage.getItem(INVITE_EMAIL) || '');
 
 export const takeInvitedShopId = () => {
   if (typeof window === 'undefined') return '';

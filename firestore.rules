@@ -18,65 +18,84 @@ service cloud.firestore {
     function isStaff(owner) {
       return signedIn() && (request.auth.uid == owner || (member(owner).exists && member(owner).data.email == email()));
     }
-    function seesBooks(owner) {
-      return role(owner) in ['shop_owner', 'admin', 'manager'];
+    function roleHas(owner, key) {
+      let r = role(owner);
+      return r == 'shop_owner'
+        || (r == 'admin' && key in ['sell', 'salesHistory', 'customers', 'products', 'editCatalog', 'seeCost', 'expenses', 'reports', 'accounts', 'activity', 'manageStaff', 'allBranches'])
+        || (r == 'manager' && key in ['sell', 'salesHistory', 'customers', 'products', 'editCatalog', 'seeCost', 'expenses', 'reports', 'accounts', 'activity', 'allBranches'])
+        || (r == 'cashier' && key in ['sell', 'salesHistory', 'customers', 'products'])
+        || (r == 'stock' && key in ['products', 'editCatalog', 'seeCost']);
     }
-    function editsShelf(owner) {
-      return role(owner) in ['shop_owner', 'admin', 'manager', 'stock'];
+    function hasPerm(owner, key) {
+      return request.auth.uid == owner
+        || (member(owner).exists && member(owner).data.email == email() && (
+          (member(owner).data.permissions is list && key in member(owner).data.permissions)
+          || (!(member(owner).data.permissions is list) && roleHas(owner, key))
+        ));
     }
-    function cashierPatch() {
-      return request.resource.data.diff(resource.data).affectedKeys()
-        .hasOnly(['customers', 'heldTickets', 'cashSessions', 'revision', 'updatedAt', 'ledgerSplit']);
+    function changedKeys() {
+      return request.resource.data.diff(resource.data).affectedKeys();
+    }
+    function shopPatchAllowed(owner) {
+      let changed = changedKeys();
+      return changed.hasOnly([
+        'products', 'services', 'suppliers', 'expenseGroups',
+        'customers', 'heldTickets', 'cashSessions',
+        'revision', 'updatedAt', 'ledgerSplit'
+      ])
+      && (!changed.hasAny(['products', 'services', 'suppliers', 'expenseGroups']) || hasPerm(owner, 'editCatalog'))
+      && (!changed.hasAny(['customers', 'heldTickets', 'cashSessions']) || hasPerm(owner, 'sell') || hasPerm(owner, 'customers'));
     }
 
     match /shopMemberships/{id} {
       allow get: if signedIn() && (resource.data.ownerUid == request.auth.uid || resource.data.email == email());
       allow list: if signedIn() && resource.data.email == email();
       allow list: if signedIn() && resource.data.ownerUid == request.auth.uid;
-      allow create, update: if signedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow create, update: if signedIn()
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.role in ['admin', 'manager', 'cashier', 'stock']
+        && (!('permissions' in request.resource.data) || request.resource.data.permissions is list);
       allow delete: if signedIn() && resource.data.ownerUid == request.auth.uid;
     }
 
     match /users/{owner}/pos/data {
       allow read: if isStaff(owner);
       allow create: if signedIn() && request.auth.uid == owner;
-      allow update: if editsShelf(owner) || (isStaff(owner) && role(owner) == 'cashier' && cashierPatch());
+      allow update: if (signedIn() && request.auth.uid == owner) || (isStaff(owner) && shopPatchAllowed(owner));
       allow delete: if signedIn() && request.auth.uid == owner;
     }
     match /users/{owner}/pos/data/stock/{productId} {
-      allow read: if isStaff(owner);
-      allow create, update: if isStaff(owner)
-        && request.resource.data.qty is number
-        && request.resource.data.qty >= 0;
+      allow read: if hasPerm(owner, 'products') || hasPerm(owner, 'sell') || hasPerm(owner, 'editCatalog');
+      allow create, update: if hasPerm(owner, 'sell') || hasPerm(owner, 'editCatalog');
     }
     match /users/{owner}/pos/data/sales/{saleId} {
-      allow read: if isStaff(owner);
-      allow create: if isStaff(owner);
-      allow update: if seesBooks(owner) || editsShelf(owner);
+      allow read: if hasPerm(owner, 'sell') || hasPerm(owner, 'salesHistory') || hasPerm(owner, 'reports');
+      allow create: if hasPerm(owner, 'sell');
+      allow update: if hasPerm(owner, 'reports');
       allow delete: if false;
     }
     match /users/{owner}/pos/data/expenses/{expenseId} {
-      allow read: if seesBooks(owner);
-      allow write: if seesBooks(owner);
+      allow read: if hasPerm(owner, 'expenses') || hasPerm(owner, 'reports');
+      allow write: if hasPerm(owner, 'expenses');
     }
     match /users/{owner}/pos/data/payments/{paymentId} {
-      allow read: if isStaff(owner) && role(owner) != 'stock';
-      allow create, update: if isStaff(owner) && role(owner) != 'stock';
-      allow delete: if seesBooks(owner);
+      allow read, create, update: if hasPerm(owner, 'customers');
+      allow delete: if signedIn() && request.auth.uid == owner;
     }
     match /users/{owner}/pos/data/supplierBills/{billId} {
-      allow read, write: if editsShelf(owner);
+      allow read: if hasPerm(owner, 'editCatalog') || hasPerm(owner, 'seeCost');
+      allow write: if hasPerm(owner, 'editCatalog');
     }
     match /users/{owner}/pos/data/supplierPayments/{paymentId} {
-      allow read, write: if seesBooks(owner);
+      allow read: if hasPerm(owner, 'expenses') || hasPerm(owner, 'accounts');
+      allow write: if hasPerm(owner, 'expenses');
     }
     match /users/{owner}/pos/activity {
-      allow read: if isStaff(owner);
-      allow write: if isStaff(owner);
+      allow read, write: if signedIn() && (request.auth.uid == owner || hasPerm(owner, 'activity'));
     }
     match /users/{owner}/pos/images {
       allow read: if isStaff(owner);
-      allow write: if editsShelf(owner);
+      allow write: if hasPerm(owner, 'editCatalog');
     }
     match /users/{owner}/pos/secrets {
       allow read, write: if signedIn() && request.auth.uid == owner;

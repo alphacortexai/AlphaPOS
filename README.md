@@ -9,7 +9,7 @@ AlphaPOS is a Next.js retail point-of-sale and back-office application. The coun
 - Returns that restore stock and leave the original receipt unchanged
 - Customers, including an on-account balance
 - Multi-branch business operations
-- Role-based access (Owner/Admin, Branch Manager, Cashier/Sales, Stock Manager)
+- Role-based access, with switches the owner can turn on or off for each person (sale, past sales, customers, products, stock edits, cost and profit, expenses, reports, balances, activity, staff list, and all branches). Settings, backup, and the assistant stay with the owner. An invited person is not a second owner.
 - Product, service, stock, sales, expense, user and branch workflows
 - Stock deduction after product sales
 - Stock receipts with optional supplier/invoice reference and latest unit-cost capture
@@ -28,7 +28,7 @@ This app now reads either **Next.js** or **Vite-style** public env names:
 
 If all five values are present, Firebase is initialized automatically.
 
-Staff invites email a sign-in link. In Firebase Authentication, open Sign-in method → Email/Password and turn on both **Email/Password** and **Email link (passwordless sign-in)**, then Save. Also add this site under Authentication → Settings → Authorized domains. The person opens that link, or signs in with Google using the same address, and the shop opens with the role you saved.
+Staff invites email a sign-in link. In Firebase Authentication, open Sign-in method → Email/Password and turn on both **Email/Password** and **Email link (passwordless sign-in)**, then Save. Also add this site under Authentication → Settings → Authorized domains. The person opens that link, or signs in with Google using the same address, and the shop opens with the role and the functions you left on. They do not become the owner. Publish the latest `firestore.rules` so those limits are also enforced in the database.
 
 Sales emails (daily, weekly, or monthly) are sent with [Resend](https://resend.com) when `RESEND_API_KEY` and `EMAIL_FROM` are set. AlphaPOS sends the previous completed period the next time an owner or admin opens the shop. It does not send while the app is closed.
 
