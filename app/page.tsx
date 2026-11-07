@@ -458,11 +458,11 @@ export default function Page() {
     if (next === 'expenses') return allow('expenses');
     if (next === 'reports') return allow('reports');
     if (next === 'accounts') return allow('accounts');
-    if (next === 'users') return isShopOwner || allow('manageStaff');
+    if (next === 'users') return isShopOwner || (shopRole === 'admin' && allow('manageStaff'));
     if (next === 'activity_logs') return allow('activity');
     if (next === 'settings' || next === 'branches' || next === 'assistant') return isShopOwner;
     return false;
-  }, [allow, canSeeShelf, isShopOwner]);
+  }, [allow, canSeeShelf, isShopOwner, shopRole]);
   useEffect(() => {
     if (!authUser) return;
     if (!canOpenView(view)) setView(allow('sell') ? 'sales' : canSeeShelf ? 'products' : 'dashboard');
@@ -697,6 +697,18 @@ export default function Page() {
             return shop;
           }
         }));
+        if (invitedShop && invitedShop !== authUser.uid && !namedMemberships.some((shop) => shop.ownerUid === invitedShop) && !ownShopIsReal(ownData)) {
+          setRole('cashier');
+          setAvailableShops([]);
+          setBranches([]);
+          setProducts([]);
+          setServices([]);
+          setShopsResolved(true);
+          hasLoadedUserDataRef.current = false;
+          isSwitchingShopRef.current = false;
+          setStatus('This invite is not on your sign-in yet. Sign out, open the link again, and choose the Google account for that email.');
+          return true;
+        }
         const rememberedShop = readOpenedShop(authUser.uid);
         const invitedMatch = invitedShop && namedMemberships.some((shop) => shop.ownerUid === invitedShop) ? invitedShop : '';
         const rememberedMatch = rememberedShop && namedMemberships.some((shop) => shop.ownerUid === rememberedShop) ? rememberedShop : '';
@@ -712,7 +724,7 @@ export default function Page() {
         }
         setAwaitingShopChoice(false);
         const selectedShopOwnerUid = chooseShopId(namedMemberships, { invited: invitedMatch, remembered: rememberedMatch, active: activeMatch });
-        if (!openedOwnerUid && selectedShopOwnerUid) {
+        if (selectedShopOwnerUid && activeShopOwnerUidRef.current !== selectedShopOwnerUid) {
           activeShopOwnerUidRef.current = selectedShopOwnerUid;
           setActiveShopOwnerUid(selectedShopOwnerUid);
         }
@@ -933,6 +945,8 @@ export default function Page() {
           const remoteRevision = snap.exists() ? Number(snap.data().revision) || 0 : 0;
           if (snap.exists() && remoteRevision !== shopRevisionRef.current) throw new Error('SHOP_CONFLICT');
           nextRevision = remoteRevision + 1;
+          const remoteShelf = shopCatalog(snap.exists() ? snap.data() as Record<string, unknown> : undefined);
+          const keepRemoteShelf = !ownsDocument && stored.products.length === 0 && remoteShelf.products.length > 0;
           const patch: Record<string, unknown> = ownsDocument
             ? { ...removeUndefinedDeep(shopDocumentBody({ ...shopPayload, revision: nextRevision })), updatedAt: serverTimestamp() }
             : {
@@ -944,7 +958,7 @@ export default function Page() {
                 heldTickets: removeUndefinedDeep(heldTickets),
                 cashSessions: removeUndefinedDeep(cashSessions),
               } : {}),
-              ...(canWriteCatalog ? {
+              ...(canWriteCatalog && !keepRemoteShelf ? {
                 products: removeUndefinedDeep(stored.products),
                 services: removeUndefinedDeep(services),
                 suppliers: removeUndefinedDeep(suppliers),
@@ -1058,6 +1072,7 @@ export default function Page() {
 
   const handleShopSwitch = (nextOwnerUid: string) => {
     if (!nextOwnerUid || nextOwnerUid === activeShopOwnerUid) return;
+    takeInvitedShopId();
     isSwitchingShopRef.current = true;
     hasLoadedUserDataRef.current = false;
     resetShopScopedState();
@@ -2902,7 +2917,7 @@ export default function Page() {
   );
 
   const canManageUsers = isShopOwner;
-  const canViewStaff = isShopOwner || allow('manageStaff');
+  const canViewStaff = isShopOwner || (shopRole === 'admin' && allow('manageStaff'));
   const canManageSalesAndExpenses = isShopOwner || allow('reports');
   const canEditExpenses = isShopOwner || allow('expenses');
 
@@ -3625,6 +3640,7 @@ export default function Page() {
 
             {productPane === 'shelf' && (
             <>
+            {branches.length > 0 && <p className="pos-branches">Branches: {branches.map((branch) => branch.name).filter(Boolean).join(', ')}</p>}
             <div className="filter-bar inventory-filter-bar">
               <div className="filter-group">
                 <label>Search</label>
@@ -3635,7 +3651,7 @@ export default function Page() {
                   onChange={(e) => setProductSearchQuery(e.target.value)}
                 />
               </div>
-              {branches.length > 1 && (
+              {branches.length > 0 && (
                 <div className="filter-group">
                   <label>Branch</label>
                   <select value={productBranchFilter} onChange={(e) => setProductBranchFilter(e.target.value)}>
@@ -3681,6 +3697,7 @@ export default function Page() {
             {filteredProducts.length > 0 ? (
               <div className="shelf-grid">
                 {productsPagination.rows.map((p) => {
+                  const shelfMeta = [branchMap[p.branchId], p.category, p.variant, p.unit && p.unit !== 'piece' ? p.unit : '', p.expiryDate ? `exp ${p.expiryDate}` : ''].filter(Boolean).join(' · ');
                   return (
                   <article key={p.id} className={`shelf-card${p.stock === 0 ? ' is-out' : ''}`}>
                     <div className="shelf-photo" aria-hidden="true">
@@ -3690,7 +3707,7 @@ export default function Page() {
                     </div>
                     <div className="shelf-body">
                       <h3>{p.name}</h3>
-                      {p.category && <p className="shelf-meta">{p.category}{p.variant ? ` · ${p.variant}` : ''}{p.unit && p.unit !== 'piece' ? ` · ${p.unit}` : ''}{p.expiryDate ? ` · exp ${p.expiryDate}` : ''}</p>}
+                      {shelfMeta && <p className="shelf-meta">{shelfMeta}</p>}
                       <div className="shelf-prices">
                         <strong>{formatUGX(p.salePrice)}</strong>
                         <span>{p.stock === 0 ? 'Out of stock' : stockIsLow(p) ? `${p.stock} low` : `${p.stock} in stock`}</span>
@@ -3714,7 +3731,7 @@ export default function Page() {
             ) : (
               <div className="shelf-empty">
                 <h3>{products.length === 0 ? 'No products yet' : 'Nothing matches'}</h3>
-                <p>{products.length === 0 ? 'Add a product, with a photo if you have one, then sell it from the register.' : 'Try another name, SKU, or stock filter.'}</p>
+                <p>{products.length === 0 ? (canEditCatalog ? 'Add a product, with a photo if you have one, then sell it from the register.' : 'Products added by the shop owner show up here.') : 'Try another name, SKU, or stock filter.'}</p>
               </div>
             )}
             <PaginationControls

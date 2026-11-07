@@ -67,6 +67,9 @@ test('a cashier, a stock manager, and anyone else invited sees every product on 
     const access = resolveStaffAccess({ userUid: role, shopOwnerUid: 'owner', membershipRole: role, membershipBranchId: 'closed' });
     assert.equal(access.permissions.includes('products') || access.permissions.includes('sell'), true);
   });
+  assert.equal(permissionsFor('cashier').includes('manageStaff'), false);
+  assert.equal(permissionsFor('manager').includes('manageStaff'), false);
+  assert.equal(permissionsFor('manager').includes('products'), true);
 });
 
 test('an empty permission list stays empty instead of falling back to the role', () => {

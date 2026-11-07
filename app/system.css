@@ -722,6 +722,7 @@ a:focus-visible,
 /* Register */
 .pos-register { background: var(--bg) !important; }
 .pos-toolbar { gap: 12px; padding: 12px 16px 6px !important; align-items: flex-end !important; }
+.pos-branches { margin: 0 16px 8px; color: var(--text-muted); font-size: 13px; font-weight: 600; }
 .pos-session { flex: 0 1 auto !important; height: 44px !important; align-self: flex-end !important; }
 .pos-search {
   color: var(--text-muted) !important;
