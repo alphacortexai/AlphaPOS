@@ -65,11 +65,11 @@ service cloud.firestore {
       allow delete: if signedIn() && request.auth.uid == owner;
     }
     match /users/{owner}/pos/data/stock/{productId} {
-      allow read: if hasPerm(owner, 'products') || hasPerm(owner, 'sell') || hasPerm(owner, 'editCatalog');
+      allow read: if isStaff(owner);
       allow create, update: if hasPerm(owner, 'sell') || hasPerm(owner, 'editCatalog');
     }
     match /users/{owner}/pos/data/sales/{saleId} {
-      allow read: if hasPerm(owner, 'sell') || hasPerm(owner, 'salesHistory') || hasPerm(owner, 'reports');
+      allow read: if isStaff(owner);
       allow create: if hasPerm(owner, 'sell');
       allow update: if hasPerm(owner, 'reports');
       allow delete: if false;
@@ -79,7 +79,8 @@ service cloud.firestore {
       allow write: if hasPerm(owner, 'expenses');
     }
     match /users/{owner}/pos/data/payments/{paymentId} {
-      allow read, create, update: if hasPerm(owner, 'customers');
+      allow read: if isStaff(owner);
+      allow create, update: if hasPerm(owner, 'customers');
       allow delete: if signedIn() && request.auth.uid == owner;
     }
     match /users/{owner}/pos/data/supplierBills/{billId} {

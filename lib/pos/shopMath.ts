@@ -52,6 +52,13 @@ export const overlayStock = <T extends { id: string; stock: number }>(products: 
   products.map((product) => (stock[product.id] === undefined ? product : { ...product, stock: stock[product.id] }))
 );
 
+/** The shelf is on the shop document. Receipts and live stock load after; they must not leave the register empty. */
+export const shopCatalog = (data: Record<string, unknown> | undefined) => ({
+  products: Array.isArray(data?.products) ? data.products : [],
+  services: Array.isArray(data?.services) ? data.services : [],
+  branches: Array.isArray(data?.branches) ? data.branches : [],
+});
+
 export const stockFallback = (products: { id: string; stock: number }[]) => (
   Object.fromEntries(products.map((product) => [product.id, product.stock]))
 );

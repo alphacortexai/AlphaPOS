@@ -20,7 +20,7 @@ import { nextSku, reservedProductCodes } from '../lib/pos/sku';
 import { attachProductImages, compressProductPhoto, imageMapChars, isProductImage, PRODUCT_IMAGE_DOC_MAX_CHARS, readLocalProductImages, splitProductImages, writeLocalProductImages } from '../lib/pos/productImage';
 import { commitStockAndRecords, migrateShopLedger, readNamedRecords, readStockMap, setStockQty, writeRecords } from '../lib/pos/ledger';
 import { beginSalesEmailSend, buildSalesDigest, defaultSalesEmailSettings, finishSalesEmailSend, normalizeSalesEmailSettings, previousSalesPeriod, type SalesDigest, type SalesEmailSettings } from '../lib/pos/salesEmail';
-import { billForReceipt, countVariance, creditAllows, dayClose, discountNeedsManager, hashPin, needsReorder, overlayStock, pinIsValid, productForReturn, rankProducts, sellingPrice, shopDocumentBody, stockFallback, supplierOwed, tenderTotals, tendersNeedReference, type SupplierBill, type SupplierPayment } from '../lib/pos/shopMath';
+import { billForReceipt, countVariance, creditAllows, dayClose, discountNeedsManager, hashPin, needsReorder, overlayStock, pinIsValid, productForReturn, rankProducts, sellingPrice, shopCatalog, shopDocumentBody, stockFallback, supplierOwed, tenderTotals, tendersNeedReference, type SupplierBill, type SupplierPayment } from '../lib/pos/shopMath';
 import { chooseShopId, ownShopIsReal, shopsForSignedInUser } from '../lib/pos/shopAccess';
 import { booksForPermissions, PERMISSION_LABELS, permissionsFor, permissionsMatchPreset, recordsForAccess, registerCatalog, resolveStaffAccess, rowsForBranch, STAFF_PERMISSIONS, type StaffPermission } from '../lib/pos/staffAccess';
 import { completeGoogleRedirect, googleSignInError, startGoogleSignIn } from '../lib/pos/googleSignIn';
@@ -305,6 +305,9 @@ export default function Page() {
   const hasLoadedUserDataRef = useRef(false);
   const isSwitchingShopRef = useRef(false);
   const shopRevisionRef = useRef(0);
+  const activeShopOwnerUidRef = useRef('');
+  const shopLoadGenRef = useRef(0);
+  const [shopEpoch, setShopEpoch] = useState(0);
   const notificationTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const backupFileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -528,11 +531,13 @@ export default function Page() {
       setLoading(false);
       hasLoadedUserDataRef.current = false;
       if (!user) {
+        shopLoadGenRef.current += 1;
         clearOpenedShop();
         setAwaitingShopChoice(false);
         setShopsResolved(false);
         setShopSwitchTarget('');
         setActiveShopOwnerUid('');
+        activeShopOwnerUidRef.current = '';
         setAvailableShops([]);
         setBranches([]);
         setProducts([]);
@@ -560,6 +565,8 @@ export default function Page() {
 
   const loadUserData = useCallback(async () => {
       if (!authUser) return false;
+      const loadGen = ++shopLoadGenRef.current;
+      const stale = () => loadGen !== shopLoadGenRef.current;
       const applyRetailCollections = (data?: Record<string, unknown>) => {
         setCustomers(normalizeCustomers(data?.customers));
         setHeldTickets(normalizeHeldTickets(data?.heldTickets));
@@ -574,7 +581,10 @@ export default function Page() {
           const data = readLocalShop();
           const shopName = typeof data?.shopName === 'string' && data.shopName.trim() ? data.shopName.trim() : 'My Shop';
           setAvailableShops([{ ownerUid: LOCAL_OPERATOR_ID, shopName, role: 'shop_owner' }]);
-          if (!activeShopOwnerUid) setActiveShopOwnerUid(LOCAL_OPERATOR_ID);
+          if (!activeShopOwnerUidRef.current) {
+            activeShopOwnerUidRef.current = LOCAL_OPERATOR_ID;
+            setActiveShopOwnerUid(LOCAL_OPERATOR_ID);
+          }
           if (!data) {
             setBranches([{ id: crypto.randomUUID(), name: 'Main Branch', location: 'Counter', createdAt: new Date().toISOString() }]);
             setProducts([]);
@@ -677,7 +687,8 @@ export default function Page() {
         const rememberedShop = readOpenedShop(authUser.uid);
         const invitedMatch = invitedShop && namedMemberships.some((shop) => shop.ownerUid === invitedShop) ? invitedShop : '';
         const rememberedMatch = rememberedShop && namedMemberships.some((shop) => shop.ownerUid === rememberedShop) ? rememberedShop : '';
-        const activeMatch = activeShopOwnerUid && namedMemberships.some((shop) => shop.ownerUid === activeShopOwnerUid) ? activeShopOwnerUid : '';
+        const openedOwnerUid = activeShopOwnerUidRef.current;
+        const activeMatch = openedOwnerUid && namedMemberships.some((shop) => shop.ownerUid === openedOwnerUid) ? openedOwnerUid : '';
         if (namedMemberships.length > 1 && !invitedMatch && !rememberedMatch && !activeMatch) {
           setAvailableShops(namedMemberships);
           setAwaitingShopChoice(true);
@@ -687,9 +698,11 @@ export default function Page() {
           return true;
         }
         setAwaitingShopChoice(false);
-        setShopsResolved(true);
         const selectedShopOwnerUid = chooseShopId(namedMemberships, { invited: invitedMatch, remembered: rememberedMatch, active: activeMatch });
-        if (!activeShopOwnerUid) setActiveShopOwnerUid(selectedShopOwnerUid);
+        if (!openedOwnerUid && selectedShopOwnerUid) {
+          activeShopOwnerUidRef.current = selectedShopOwnerUid;
+          setActiveShopOwnerUid(selectedShopOwnerUid);
+        }
         if (selectedShopOwnerUid) writeOpenedShop(authUser.uid, selectedShopOwnerUid);
         const selectedShop = namedMemberships.find((shop) => shop.ownerUid === selectedShopOwnerUid);
         const userDataRef = doc(db, 'users', selectedShopOwnerUid, 'pos', 'data');
@@ -700,6 +713,7 @@ export default function Page() {
           getDoc(imageRef).catch(() => null),
           getDoc(activityRef).catch(() => null),
         ]);
+        if (stale()) return false;
         const rawMembership = linked.find((entry) => entry.ownerUid === selectedShopOwnerUid);
         const applyAccess = (staffHit?: { role?: string; permissions?: unknown; branchId?: string }, shopName?: string) => {
           const access = resolveStaffAccess({
@@ -731,6 +745,7 @@ export default function Page() {
         };
         if (!snap.exists()) {
           const access = applyAccess();
+          setShopsResolved(true);
           if (selectedShopOwnerUid !== authUser.uid) {
             hasLoadedUserDataRef.current = false;
             isSwitchingShopRef.current = false;
@@ -759,10 +774,16 @@ export default function Page() {
           : undefined;
         const access = applyAccess(staffHit, typeof data.shopName === 'string' ? data.shopName.trim() : '');
         const resolvedRole = access.role;
-        const embeddedProducts = attachProductImages(Array.isArray(data.products) ? data.products : [], imageSnap?.exists() ? imageSnap.data().images : {});
+        const catalog = shopCatalog(data as Record<string, unknown>);
+        const embeddedProducts = attachProductImages(catalog.products as Product[], imageSnap?.exists() ? imageSnap.data().images : {});
         const embeddedSales = Array.isArray(data.sales) ? data.sales as Sale[] : [];
         const embeddedExpenses = Array.isArray(data.expenses) ? data.expenses as Expense[] : [];
         const embeddedPayments = normalizeCustomerPayments(data.customerPayments);
+        if (stale()) return false;
+        setBranches(catalog.branches as Branch[]);
+        setProducts(embeddedProducts);
+        setServices(catalog.services as Service[]);
+        setShopsResolved(true);
         let stockMap: Record<string, number> = {};
         const ledgerReads = booksForPermissions(access.permissions, authUser.uid === selectedShopOwnerUid);
         let ledgerSales = recordsForAccess(ledgerReads.sales, embeddedSales, []);
@@ -777,6 +798,7 @@ export default function Page() {
               products: embeddedProducts,
             });
           }
+          if (stale()) return false;
           const [remoteSales, remoteExpenses, remotePayments, remoteBills, remoteSupplierPayments, remoteStock] = await Promise.all([
             ledgerReads.sales ? readNamedRecords<Sale>(db, selectedShopOwnerUid, 'sales') : Promise.resolve([]),
             ledgerReads.expenses ? readNamedRecords<Expense>(db, selectedShopOwnerUid, 'expenses') : Promise.resolve([]),
@@ -785,6 +807,7 @@ export default function Page() {
             ledgerReads.supplierPayments ? readNamedRecords<SupplierPayment>(db, selectedShopOwnerUid, 'supplierPayments') : Promise.resolve([]),
             ledgerReads.stock ? readStockMap(db, selectedShopOwnerUid) : Promise.resolve({}),
           ]);
+          if (stale()) return false;
           stockMap = remoteStock;
           ledgerSales = recordsForAccess(ledgerReads.sales, embeddedSales, remoteSales);
           ledgerExpenses = recordsForAccess(ledgerReads.expenses, embeddedExpenses, remoteExpenses);
@@ -797,9 +820,8 @@ export default function Page() {
             ? 'The shop access rules are blocking receipts and stock. Publish the latest Firestore rules, then reload.'
             : `Shop records could not be split yet: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
-        setBranches(Array.isArray(data.branches) ? data.branches : []);
+        if (stale()) return false;
         setProducts(overlayStock(embeddedProducts, stockMap));
-        setServices(Array.isArray(data.services) ? data.services : []);
         setSales(ledgerSales);
         setExpenses(ledgerExpenses);
         setAccounts(ensureDefaultCashAccount(Array.isArray(data.accounts) ? data.accounts : []));
@@ -830,7 +852,7 @@ export default function Page() {
           : `Failed to load your data: ${error instanceof Error ? error.message : 'Unknown error'}`);
         return false;
       }
-    }, [activeShopOwnerUid, authUser, db, ensureDefaultCashAccount, invitedEmail]);
+    }, [authUser, db, ensureDefaultCashAccount, invitedEmail, shopEpoch]);
 
   useEffect(() => {
     void loadUserData();
@@ -964,6 +986,7 @@ export default function Page() {
     if (authUser?.uid === LOCAL_OPERATOR_ID) {
       hasLoadedUserDataRef.current = false;
       setAuthUser(null);
+      activeShopOwnerUidRef.current = '';
       setActiveShopOwnerUid('');
       setStatus('Counter closed on this device.');
       return;
@@ -1016,7 +1039,10 @@ export default function Page() {
     hasLoadedUserDataRef.current = false;
     resetShopScopedState();
     setShopSwitchTarget('');
+    setShopsResolved(false);
+    activeShopOwnerUidRef.current = nextOwnerUid;
     setActiveShopOwnerUid(nextOwnerUid);
+    setShopEpoch((epoch) => epoch + 1);
     setStatus('Switching shop...');
   };
 
