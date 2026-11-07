@@ -20,15 +20,20 @@ const strip = (value: unknown): unknown => {
   return value;
 };
 
-const recordPath = (ownerUid: string, name: string, id: string) => ['users', ownerUid, 'pos', name, id] as const;
+/** users/{owner}/pos/data/{name}/{id} — six segments, so Firestore accepts it as a document. */
+export const ledgerDocumentPath = (ownerUid: string, name: string, id: string) =>
+  ['users', ownerUid, 'pos', 'data', name, id] as const;
+
+export const ledgerCollectionPath = (ownerUid: string, name: string) =>
+  ['users', ownerUid, 'pos', 'data', name] as const;
 
 export const readNamedRecords = async <T,>(db: Firestore, ownerUid: string, name: string): Promise<T[]> => {
-  const snap = await getDocs(collection(db, 'users', ownerUid, 'pos', name));
+  const snap = await getDocs(collection(db, ...ledgerCollectionPath(ownerUid, name)));
   return snap.docs.map((entry) => entry.data() as T);
 };
 
 export const readStockMap = async (db: Firestore, ownerUid: string) => {
-  const snap = await getDocs(collection(db, 'users', ownerUid, 'pos', 'stock'));
+  const snap = await getDocs(collection(db, ...ledgerCollectionPath(ownerUid, 'stock')));
   const stock: Record<string, number> = {};
   snap.forEach((entry) => {
     const qty = Number(entry.data().qty);
@@ -52,7 +57,7 @@ export const commitStockAndRecords = async (
   deltas.forEach((delta) => merged.set(delta.productId, (merged.get(delta.productId) || 0) + delta.delta));
   const changes = [...merged.entries()].map(([productId, delta]) => ({ productId, delta }));
   return runTransaction(db, async (transaction) => {
-    const refs = changes.map((change) => doc(db, ...recordPath(ownerUid, 'stock', change.productId)));
+    const refs = changes.map((change) => doc(db, ...ledgerDocumentPath(ownerUid, 'stock', change.productId)));
     const snaps: DocumentSnapshot[] = [];
     for (const ref of refs) snaps.push(await transaction.get(ref));
     const next: Record<string, number> = {};
@@ -65,7 +70,7 @@ export const commitStockAndRecords = async (
       next[change.productId] = qty;
     });
     records.forEach((record) => {
-      transaction.set(doc(db, ...recordPath(ownerUid, collectionName, record.id)), strip(record));
+      transaction.set(doc(db, ...ledgerDocumentPath(ownerUid, collectionName, record.id)), strip(record));
     });
     return next;
   });
@@ -74,13 +79,13 @@ export const commitStockAndRecords = async (
 export const writeRecords = async (db: Firestore, ownerUid: string, name: string, records: { id: string }[]) => {
   for (const group of chunk(records, 400)) {
     const batch = writeBatch(db);
-    group.forEach((record) => batch.set(doc(db, ...recordPath(ownerUid, name, record.id)), strip(record)));
+    group.forEach((record) => batch.set(doc(db, ...ledgerDocumentPath(ownerUid, name, record.id)), strip(record)));
     await batch.commit();
   }
 };
 
 export const setStockQty = async (db: Firestore, ownerUid: string, productId: string, qty: number) => {
-  await setDoc(doc(db, ...recordPath(ownerUid, 'stock', productId)), { qty: roundedQty(qty), updatedAt: new Date().toISOString() });
+  await setDoc(doc(db, ...ledgerDocumentPath(ownerUid, 'stock', productId)), { qty: roundedQty(qty), updatedAt: new Date().toISOString() });
 };
 
 export const migrateShopLedger = async (
