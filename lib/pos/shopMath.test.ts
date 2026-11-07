@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { billForReceipt, creditAllows, dayClose, ledgerReadsForRole, needsReorder, overlayStock, productForReturn, rankProducts, shopCatalog, shopDocumentBody, supplierOwed, tenderTotals, tendersNeedReference } from './shopMath';
+import { billForReceipt, creditAllows, dayClose, ledgerReadsForRole, needsReorder, overlayStock, preferShopCatalog, productForReturn, rankProducts, shopCatalog, shopDocumentBody, supplierOwed, tenderTotals, tendersNeedReference } from './shopMath';
 
 test('a cashier loads the shelf and the receipts, not the books', () => {
   const cashier = ledgerReadsForRole('cashier');
@@ -35,6 +35,9 @@ test('the register shelf comes from the shop document even when receipts have no
   assert.equal(catalog.services.length, 1);
   assert.equal(shopCatalog({ shopName: 'Corner' }).products.length, 0);
   assert.equal(overlayStock(catalog.products as { id: string; stock: number }[], {}).length, 2);
+  assert.equal(shopCatalog({ products: { soap: { id: 'soap', name: 'Soap' } } }).products[0].id, 'soap');
+  const invited = preferShopCatalog({ shopName: 'C & E', products: [] }, { shopName: 'C & E', products: [{ id: 'soap' }] });
+  assert.equal(shopCatalog(invited).products[0].id, 'soap');
 });
 
 test('a credit limit stops the sale that would pass it', () => {
