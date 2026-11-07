@@ -855,8 +855,24 @@ a:focus-visible,
   box-shadow: none !important;
 }
 .pos-sale-bar { display: none; }
+.pos-ticket-head { align-items: flex-start !important; }
 .pos-ticket-head h2 { font-size: 20px !important; font-weight: 700 !important; letter-spacing: -0.03em; color: var(--text) !important; }
 .pos-ticket-head p { color: var(--text-muted) !important; font-size: 12px !important; font-weight: 600 !important; letter-spacing: 0.04em; text-transform: uppercase; }
+.pos-seller {
+  display: block;
+  margin-top: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--primary);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+  text-align: left;
+  cursor: pointer;
+}
+.pos-seller:hover { text-decoration: underline; }
 .pos-line,
 .pos-line-top,
 .pos-line-top strong { opacity: 1 !important; transform: none !important; color: var(--text); }
