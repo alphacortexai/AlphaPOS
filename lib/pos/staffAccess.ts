@@ -34,8 +34,8 @@ export const PERMISSION_LABELS: Record<StaffPermission, string> = {
 };
 
 const PRESETS: Record<Exclude<ShopAccessRole, 'shop_owner'>, readonly StaffPermission[]> = {
-  cashier: ['sell', 'salesHistory', 'customers', 'products'],
-  stock: ['products', 'editCatalog', 'seeCost'],
+  cashier: ['sell', 'salesHistory', 'customers', 'products', 'allBranches'],
+  stock: ['products', 'editCatalog', 'seeCost', 'allBranches'],
   manager: ['sell', 'salesHistory', 'customers', 'products', 'editCatalog', 'seeCost', 'expenses', 'reports', 'accounts', 'activity', 'allBranches'],
   admin: ['sell', 'salesHistory', 'customers', 'products', 'editCatalog', 'seeCost', 'expenses', 'reports', 'accounts', 'activity', 'manageStaff', 'allBranches'],
 };
@@ -129,6 +129,13 @@ export const recordsForAccess = <T extends { id: string }>(allowed: boolean, emb
   const map = new Map(embedded.map((item) => [item.id, item]));
   remote.forEach((item) => map.set(item.id, item));
   return [...map.values()];
+};
+
+/** One branch shows the whole shelf. Several branches show that person's branch, and the whole shelf when their branch has nothing. */
+export const rowsForBranch = <T extends { branchId?: string }>(rows: T[], branchId: string, branchCount: number): T[] => {
+  if (!branchId || branchCount < 2) return rows;
+  const own = rows.filter((row) => !row.branchId || row.branchId === branchId);
+  return own.length > 0 ? own : rows;
 };
 
 const CATALOG_FIELDS = new Set(['products', 'services', 'suppliers', 'expenseGroups']);
