@@ -50,15 +50,15 @@ export const chooseShopId = (
   return shops[0]?.ownerUid || '';
 };
 
-/** The shop document's saved role belongs to whoever last saved it. A cashier keeps the role they were invited as. */
+/** The shop document's saved role belongs to whoever last saved it. The invite grant decides, and it never makes a guest the owner. */
 export const openedRole = (input: {
   userUid: string;
   shopOwnerUid: string;
   membershipRole?: ShopAccessRole;
   staffRole?: unknown;
 }): ShopAccessRole => {
-  if (input.shopOwnerUid === input.userUid) return 'shop_owner';
-  if (STAFF_ROLES.has(input.staffRole as ShopAccessRole)) return input.staffRole as ShopAccessRole;
+  if (input.userUid && input.shopOwnerUid === input.userUid) return 'shop_owner';
   if (input.membershipRole && STAFF_ROLES.has(input.membershipRole)) return input.membershipRole;
+  if (STAFF_ROLES.has(input.staffRole as ShopAccessRole)) return input.staffRole as ShopAccessRole;
   return 'cashier';
 };

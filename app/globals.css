@@ -2458,6 +2458,10 @@ button.primary:hover, .dashboard-refresh-btn:hover:not(:disabled) { background: 
 .user-chip-text small { color: #a9c0af; font-size: 0.72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .badge { font-size: 0.72rem; padding: 0.22rem 0.55rem; border-radius: 999px; letter-spacing: 0.01em; }
 .filter-count { margin: 0 0 0.15rem auto; align-self: flex-end; color: var(--text-muted); font-size: 0.84rem; }
+.permission-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.55rem 0.9rem; }
+.permission-toggle { display: flex; align-items: flex-start; gap: 0.5rem; font-size: 0.92rem; line-height: 1.35; }
+.permission-toggle input { margin-top: 0.2rem; }
+@media (max-width: 640px) { .permission-grid { grid-template-columns: 1fr; } }
 .form > div:has(> button), .form > .form-span { grid-column: 1 / -1; }
 .form > div:has(> button) { display: flex; justify-content: flex-start; }
 .form > .form-span { margin: 0; }

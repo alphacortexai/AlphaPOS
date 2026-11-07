@@ -1,5 +1,7 @@
 import { reorderLevel } from './books';
 import { roundMoney, type PaymentMethod, type Tender } from './retail';
+import { booksForPermissions, permissionsFor } from './staffAccess';
+import type { ShopAccessRole } from './shopAccess';
 
 export type SaleBookLine = {
   id: string;
@@ -172,18 +174,22 @@ export const billForReceipt = (
   } satisfies SupplierBill;
 };
 
+const asShopRole = (role: string): ShopAccessRole => (
+  role === 'shop_owner' || role === 'admin' || role === 'manager' || role === 'cashier' || role === 'stock' ? role : 'cashier'
+);
+
 /** Which ledger collections this role may read. Cashiers sell; they do not open the books. */
 export const ledgerReadsForRole = (role: string) => {
-  const books = role === 'shop_owner' || role === 'admin' || role === 'manager';
-  const shelf = books || role === 'stock';
+  const named = asShopRole(role);
+  const reads = booksForPermissions(permissionsFor(named), named === 'shop_owner');
   return {
-    sales: role !== 'stock',
-    expenses: books,
-    payments: role !== 'stock',
-    supplierBills: shelf,
-    supplierPayments: books,
-    stock: true,
-    migrate: books,
+    sales: reads.sales,
+    expenses: reads.expenses,
+    payments: reads.payments,
+    supplierBills: reads.supplierBills,
+    supplierPayments: reads.supplierPayments,
+    stock: reads.stock,
+    migrate: reads.migrate,
   };
 };
 

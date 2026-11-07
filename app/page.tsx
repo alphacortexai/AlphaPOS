@@ -20,10 +20,11 @@ import { nextSku, reservedProductCodes } from '../lib/pos/sku';
 import { attachProductImages, compressProductPhoto, imageMapChars, isProductImage, PRODUCT_IMAGE_DOC_MAX_CHARS, readLocalProductImages, splitProductImages, writeLocalProductImages } from '../lib/pos/productImage';
 import { commitStockAndRecords, migrateShopLedger, readNamedRecords, readStockMap, setStockQty, writeRecords } from '../lib/pos/ledger';
 import { beginSalesEmailSend, buildSalesDigest, defaultSalesEmailSettings, finishSalesEmailSend, normalizeSalesEmailSettings, previousSalesPeriod, type SalesDigest, type SalesEmailSettings } from '../lib/pos/salesEmail';
-import { billForReceipt, countVariance, creditAllows, dayClose, discountNeedsManager, hashPin, ledgerReadsForRole, needsReorder, overlayStock, pinIsValid, preferRemote, productForReturn, rankProducts, sellingPrice, shopDocumentBody, stockFallback, supplierOwed, tenderTotals, tendersNeedReference, type SupplierBill, type SupplierPayment } from '../lib/pos/shopMath';
-import { chooseShopId, openedRole, ownShopIsReal, shopsForSignedInUser } from '../lib/pos/shopAccess';
+import { billForReceipt, countVariance, creditAllows, dayClose, discountNeedsManager, hashPin, needsReorder, overlayStock, pinIsValid, productForReturn, rankProducts, sellingPrice, shopDocumentBody, stockFallback, supplierOwed, tenderTotals, tendersNeedReference, type SupplierBill, type SupplierPayment } from '../lib/pos/shopMath';
+import { chooseShopId, ownShopIsReal, shopsForSignedInUser } from '../lib/pos/shopAccess';
+import { booksForPermissions, PERMISSION_LABELS, permissionsFor, permissionsMatchPreset, recordsForAccess, resolveStaffAccess, STAFF_PERMISSIONS, type StaffPermission } from '../lib/pos/staffAccess';
 import { completeGoogleRedirect, googleSignInError, startGoogleSignIn } from '../lib/pos/googleSignIn';
-import { completeEmailLinkSignIn, createStaffInviteLink, rememberInviteFromUrl, staffSignInError, takeInvitedShopId } from '../lib/pos/staffInvite';
+import { completeEmailLinkSignIn, createStaffInviteLink, readInvitedEmail, readInvitedShopId, rememberInviteFromUrl, staffSignInError, takeInvitedShopId } from '../lib/pos/staffInvite';
 import {
   customerAccountBalance,
   defaultReceiptSettings,
@@ -109,8 +110,8 @@ type ExpenseGroup = { id: string; name: string } & AuditStamp;
 type Expense = { id: string; title: string; branchId: string; amount: number; expenseGroupId?: string; accountId?: string; cashSessionId?: string } & AuditStamp;
 type Supplier = SupplierRecord;
 type CustomerPayment = CustomerPaymentRecord;
-type StaffUser = { id: string; name: string; email: string; role: Role; branchId: string; pinHash?: string } & AuditStamp;
-type ShopMembership = { ownerUid: string; shopName: string; role: Role };
+type StaffUser = { id: string; name: string; email: string; role: Role; branchId: string; permissions?: StaffPermission[]; pinHash?: string } & AuditStamp;
+type ShopMembership = { ownerUid: string; shopName: string; role: Role; permissions?: StaffPermission[]; branchId?: string };
 type HeldTicket = {
   id: string;
   label: string;
@@ -290,7 +291,8 @@ const normalizeHeldTickets = (value: unknown): HeldTicket[] => {
 export default function Page() {
   const [authUser, setAuthUser] = useState<SessionUser | null>(null);
   const [loading, setLoading] = useState(true);
-  const [role, setRole] = useState<Role>('shop_owner');
+  const [role, setRole] = useState<Role>('cashier');
+  const [inviteBlocked, setInviteBlocked] = useState('');
   const [activeShopOwnerUid, setActiveShopOwnerUid] = useState('');
   const [availableShops, setAvailableShops] = useState<ShopMembership[]>([]);
   const [awaitingShopChoice, setAwaitingShopChoice] = useState(false);
@@ -383,7 +385,7 @@ export default function Page() {
   const [editingExpenseGroupId, setEditingExpenseGroupId] = useState('');
   const [editingExpenseGroupName, setEditingExpenseGroupName] = useState('');
   const [expenseChartRange, setExpenseChartRange] = useState<ExpenseChartRange>('month');
-  const [userForm, setUserForm] = useState({ id: '', name: '', email: '', role: 'cashier' as Role, branchId: '', pin: '' });
+  const [userForm, setUserForm] = useState({ id: '', name: '', email: '', role: 'cashier' as Role, branchId: '', pin: '', permissions: permissionsFor('cashier') });
   const [customerDraft, setCustomerDraft] = useState({ name: '', phone: '', creditLimit: '', priceList: 'retail' as 'retail' | 'wholesale', notes: '' });
   const [shopNameForm, setShopNameForm] = useState('');
   const [settingsTab, setSettingsTab] = useState<'shop' | 'branches' | 'time' | 'backup' | 'tax' | 'receipt' | 'register' | 'email' | 'assistant'>('shop');
@@ -430,24 +432,38 @@ export default function Page() {
     }))
   ), [authUser]);
   const currentShop = availableShops.find((s) => s.ownerUid === activeShopOwnerUid);
-  const shopRole = currentShop?.role || role;
+  const claimedRole = currentShop?.role || role;
+  const shopRole: Role = authUser && activeShopOwnerUid && activeShopOwnerUid !== authUser.uid && claimedRole === 'shop_owner' ? 'cashier' : claimedRole;
   const isShopOwner = shopRole === 'shop_owner' && activeShopOwnerUid === authUser?.uid;
+  const granted = useMemo(
+    () => (isShopOwner ? permissionsFor('shop_owner') : (currentShop?.permissions ?? permissionsFor(shopRole === 'shop_owner' ? 'cashier' : shopRole))),
+    [currentShop?.permissions, isShopOwner, shopRole],
+  );
+  const allow = useCallback((key: StaffPermission) => granted.includes(key), [granted]);
+  const scopeBranchId = !isShopOwner && !allow('allBranches') ? (currentShop?.branchId || '') : '';
   const actingRole = operator ? (users.find((person) => person.id === operator.id)?.role || shopRole) : shopRole;
-  const seesBooks = shopRole === 'shop_owner' || shopRole === 'admin' || shopRole === 'manager';
-  const seesCost = seesBooks || shopRole === 'stock';
-  const canEditCatalog = shopRole === 'shop_owner' || shopRole === 'admin' || shopRole === 'manager' || shopRole === 'stock';
+  const seesBooks = allow('reports') || allow('expenses') || allow('accounts');
+  const seesCost = allow('seeCost');
+  const canEditCatalog = allow('editCatalog');
+  const canSeeShelf = allow('products') || allow('sell') || allow('editCatalog');
   const canOpenView = useCallback((next: View) => {
-    if (next === 'profile' || next === 'sales' || next === 'dashboard' || next === 'products' || next === 'services') return true;
-    if (next === 'sales_history' || next === 'customers') return shopRole !== 'stock';
-    if (next === 'expenses' || next === 'reports' || next === 'accounts') return seesBooks;
-    if (next === 'users' || next === 'activity_logs') return seesBooks;
+    if (next === 'profile' || next === 'dashboard') return true;
+    if (next === 'sales') return allow('sell');
+    if (next === 'products' || next === 'services') return canSeeShelf;
+    if (next === 'sales_history') return allow('salesHistory');
+    if (next === 'customers') return allow('customers');
+    if (next === 'expenses') return allow('expenses');
+    if (next === 'reports') return allow('reports');
+    if (next === 'accounts') return allow('accounts');
+    if (next === 'users') return isShopOwner || allow('manageStaff');
+    if (next === 'activity_logs') return allow('activity');
     if (next === 'settings' || next === 'branches' || next === 'assistant') return isShopOwner;
     return false;
-  }, [isShopOwner, shopRole, seesBooks]);
+  }, [allow, canSeeShelf, isShopOwner]);
   useEffect(() => {
     if (!authUser) return;
-    if (!canOpenView(view)) setView(shopRole === 'stock' ? 'products' : 'sales');
-  }, [authUser, canOpenView, shopRole, view]);
+    if (!canOpenView(view)) setView(allow('sell') ? 'sales' : canSeeShelf ? 'products' : 'dashboard');
+  }, [allow, authUser, canOpenView, canSeeShelf, view]);
 
   useEffect(() => {
     if (!authUser || authUser.uid !== activeShopOwnerUid) {
@@ -617,19 +633,29 @@ export default function Page() {
       }
       try {
         const normalizedEmail = authUser.email?.trim().toLowerCase() || '';
-        const invitedShop = takeInvitedShopId();
+        rememberInviteFromUrl();
+        const invitedShop = readInvitedShopId();
+        const expectedEmail = (readInvitedEmail() || invitedEmail).trim().toLowerCase();
+        setInviteBlocked('');
+        if (expectedEmail && normalizedEmail && expectedEmail !== normalizedEmail) {
+          setInviteBlocked(`This invite is for ${expectedEmail}. You are signed in as ${normalizedEmail}. Sign out, then open the link and choose that Google account.`);
+          setShopsResolved(true);
+          hasLoadedUserDataRef.current = false;
+          return false;
+        }
         const ownSnap = await getDoc(doc(db, 'users', authUser.uid, 'pos', 'data')).catch(() => null);
         const ownData = ownSnap?.exists() ? ownSnap.data() as Record<string, unknown> : undefined;
-        const linked: { ownerUid?: unknown; shopName?: unknown; role?: unknown }[] = [];
+        const linked: { ownerUid?: unknown; shopName?: unknown; role?: unknown; permissions?: unknown; branchId?: unknown }[] = [];
         if (normalizedEmail) {
           try {
             const membershipSnap = await getDocs(query(collection(db, 'shopMemberships'), where('email', '==', normalizedEmail)));
             membershipSnap.forEach((entry) => linked.push(entry.data()));
           } catch {
-            if (invitedShop && invitedShop !== authUser.uid) {
-              const memberSnap = await getDoc(doc(db, 'shopMemberships', `${invitedShop}_${normalizedEmail}`)).catch(() => null);
-              if (memberSnap?.exists()) linked.push(memberSnap.data());
-            }
+            // The direct invite document is loaded below when the list is blocked.
+          }
+          if (invitedShop && invitedShop !== authUser.uid && !linked.some((entry) => entry.ownerUid === invitedShop)) {
+            const memberSnap = await getDoc(doc(db, 'shopMemberships', `${invitedShop}_${normalizedEmail}`)).catch(() => null);
+            if (memberSnap?.exists()) linked.push(memberSnap.data());
           }
         }
         const memberships = shopsForSignedInUser({
@@ -674,7 +700,43 @@ export default function Page() {
           getDoc(imageRef).catch(() => null),
           getDoc(activityRef).catch(() => null),
         ]);
+        const rawMembership = linked.find((entry) => entry.ownerUid === selectedShopOwnerUid);
+        const applyAccess = (staffHit?: { role?: string; permissions?: unknown; branchId?: string }, shopName?: string) => {
+          const access = resolveStaffAccess({
+            userUid: authUser.uid,
+            shopOwnerUid: selectedShopOwnerUid,
+            membershipRole: rawMembership?.role ?? selectedShop?.role,
+            membershipPermissions: rawMembership?.permissions,
+            membershipBranchId: rawMembership?.branchId,
+            staffRole: staffHit?.role,
+            staffBranchId: staffHit?.branchId,
+          });
+          setRole(access.role);
+          setAvailableShops(namedMemberships.map((shop) => {
+            if (shop.ownerUid !== selectedShopOwnerUid) {
+              const other = linked.find((entry) => entry.ownerUid === shop.ownerUid);
+              const otherAccess = resolveStaffAccess({
+                userUid: authUser.uid,
+                shopOwnerUid: shop.ownerUid,
+                membershipRole: other?.role ?? shop.role,
+                membershipPermissions: other?.permissions,
+                membershipBranchId: other?.branchId,
+              });
+              return { ...shop, role: otherAccess.role, permissions: otherAccess.permissions, branchId: otherAccess.branchId };
+            }
+            return { ...shop, role: access.role, permissions: access.permissions, branchId: access.branchId, ...(shopName ? { shopName } : {}) };
+          }));
+          if (invitedShop && invitedShop === selectedShopOwnerUid) takeInvitedShopId();
+          return access;
+        };
         if (!snap.exists()) {
+          const access = applyAccess();
+          if (selectedShopOwnerUid !== authUser.uid) {
+            hasLoadedUserDataRef.current = false;
+            isSwitchingShopRef.current = false;
+            setStatus(`${selectedShop?.shopName || 'This shop'} is not open yet. Ask the owner to sign in once, then try again.`);
+            return true;
+          }
           const defaultBranch = { id: crypto.randomUUID(), name: 'Main Branch', location: 'HQ', createdAt: new Date().toISOString() };
           setBranches([defaultBranch]);
           const defaultCashAccount = ensureDefaultCashAccount([]);
@@ -686,38 +748,26 @@ export default function Page() {
           setCustomerPayments([]);
           shopRevisionRef.current = 0;
           applyRetailCollections();
-          const emptyRole = openedRole({
-            userUid: authUser.uid,
-            shopOwnerUid: selectedShopOwnerUid,
-            membershipRole: selectedShop?.role,
-          });
-          setRole(emptyRole);
-          setAvailableShops(namedMemberships.map((shop) => shop.ownerUid === selectedShopOwnerUid ? { ...shop, role: emptyRole } : shop));
           hasLoadedUserDataRef.current = true;
           isSwitchingShopRef.current = false;
-          setStatus(`Viewing ${selectedShop?.shopName || 'selected shop'} as ${roleLabels[emptyRole]}.`);
+          setStatus(`Viewing ${selectedShop?.shopName || 'selected shop'} as ${roleLabels[access.role]}.`);
           return true;
         }
         const data = snap.data();
-        const staffHit = (Array.isArray(data.users) ? data.users as { email?: string; role?: string }[] : []).find((person) => person.email?.trim().toLowerCase() === normalizedEmail);
-        const resolvedRole = openedRole({
-          userUid: authUser.uid,
-          shopOwnerUid: selectedShopOwnerUid,
-          membershipRole: selectedShop?.role,
-          staffRole: staffHit?.role,
-        });
-        const shopsWithRole = namedMemberships.map((shop) => shop.ownerUid === selectedShopOwnerUid ? { ...shop, role: resolvedRole, ...(typeof data.shopName === 'string' && data.shopName.trim() ? { shopName: data.shopName.trim() } : {}) } : shop);
-        setAvailableShops(shopsWithRole);
-        setRole(resolvedRole);
+        const staffHit = normalizedEmail
+          ? (Array.isArray(data.users) ? data.users as { email?: string; role?: string; permissions?: unknown; branchId?: string }[] : []).find((person) => person.email?.trim().toLowerCase() === normalizedEmail)
+          : undefined;
+        const access = applyAccess(staffHit, typeof data.shopName === 'string' ? data.shopName.trim() : '');
+        const resolvedRole = access.role;
         const embeddedProducts = attachProductImages(Array.isArray(data.products) ? data.products : [], imageSnap?.exists() ? imageSnap.data().images : {});
         const embeddedSales = Array.isArray(data.sales) ? data.sales as Sale[] : [];
         const embeddedExpenses = Array.isArray(data.expenses) ? data.expenses as Expense[] : [];
         const embeddedPayments = normalizeCustomerPayments(data.customerPayments);
         let stockMap: Record<string, number> = {};
-        let ledgerSales = embeddedSales;
-        let ledgerExpenses = embeddedExpenses;
-        let ledgerPayments = embeddedPayments;
-        const ledgerReads = ledgerReadsForRole(resolvedRole);
+        const ledgerReads = booksForPermissions(access.permissions, authUser.uid === selectedShopOwnerUid);
+        let ledgerSales = recordsForAccess(ledgerReads.sales, embeddedSales, []);
+        let ledgerExpenses = recordsForAccess(ledgerReads.expenses, embeddedExpenses, []);
+        let ledgerPayments = recordsForAccess(ledgerReads.payments, embeddedPayments, []);
         try {
           if (data.ledgerSplit !== true && ledgerReads.migrate) {
             await migrateShopLedger(db, selectedShopOwnerUid, {
@@ -736,11 +786,11 @@ export default function Page() {
             ledgerReads.stock ? readStockMap(db, selectedShopOwnerUid) : Promise.resolve({}),
           ]);
           stockMap = remoteStock;
-          ledgerSales = preferRemote(embeddedSales, remoteSales);
-          ledgerExpenses = preferRemote(embeddedExpenses, remoteExpenses);
-          ledgerPayments = preferRemote(embeddedPayments, remotePayments);
-          setSupplierBills(remoteBills);
-          setSupplierPayments(remoteSupplierPayments);
+          ledgerSales = recordsForAccess(ledgerReads.sales, embeddedSales, remoteSales);
+          ledgerExpenses = recordsForAccess(ledgerReads.expenses, embeddedExpenses, remoteExpenses);
+          ledgerPayments = recordsForAccess(ledgerReads.payments, embeddedPayments, remotePayments);
+          setSupplierBills(ledgerReads.supplierBills ? remoteBills : []);
+          setSupplierPayments(ledgerReads.supplierPayments ? remoteSupplierPayments : []);
         } catch (error) {
           const denied = error instanceof Error && /permission/i.test(error.message);
           setStatus(denied
@@ -766,7 +816,7 @@ export default function Page() {
         const sideLogs = activitySnap?.exists()
           ? (Array.isArray(activitySnap.data().activityLogs) ? activitySnap.data().activityLogs as ActivityLog[] : [])
           : null;
-        setActivityLogs(trimActivity(sideLogs ?? inlineLogs));
+        setActivityLogs(ledgerReads.activity ? trimActivity(sideLogs ?? inlineLogs) : []);
         applyRetailCollections(data as Record<string, unknown>);
         hasLoadedUserDataRef.current = true;
         isSwitchingShopRef.current = false;
@@ -780,7 +830,7 @@ export default function Page() {
           : `Failed to load your data: ${error instanceof Error ? error.message : 'Unknown error'}`);
         return false;
       }
-    }, [activeShopOwnerUid, authUser, db, role]);
+    }, [activeShopOwnerUid, authUser, db, ensureDefaultCashAccount, invitedEmail]);
 
   useEffect(() => {
     void loadUserData();
@@ -825,50 +875,52 @@ export default function Page() {
           return;
         }
         if (!db) return;
+        const ownsDocument = authUser.uid === activeShopOwnerUid;
+        const canWriteTill = ownsDocument || allow('sell') || allow('customers');
+        const canWriteCatalog = ownsDocument || allow('editCatalog');
+        const canWriteActivity = ownsDocument || allow('activity');
+        if (!ownsDocument && !canWriteTill && !canWriteCatalog && !canWriteActivity) return;
         const userDataRef = doc(db, 'users', activeShopOwnerUid, 'pos', 'data');
         const activityDocRef = doc(db, 'users', activeShopOwnerUid, 'pos', 'activity');
         let nextRevision = shopRevisionRef.current;
-        if (shopRole === 'cashier') {
-          await runTransaction(db, async (transaction) => {
-            const snap = await transaction.get(userDataRef);
-            const remoteRevision = snap.exists() ? Number(snap.data().revision) || 0 : 0;
-            if (snap.exists() && remoteRevision !== shopRevisionRef.current) throw new Error('SHOP_CONFLICT');
-            nextRevision = remoteRevision + 1;
-            transaction.set(userDataRef, {
-              customers: removeUndefinedDeep(customers),
-              heldTickets: removeUndefinedDeep(heldTickets),
-              cashSessions: removeUndefinedDeep(cashSessions),
-              ledgerSplit: true,
-              revision: nextRevision,
-              updatedAt: serverTimestamp(),
-            }, { merge: true });
-            transaction.set(activityDocRef, {
-              activityLogs: removeUndefinedDeep(trimmedLogs),
-              updatedAt: serverTimestamp(),
-            });
-          });
-          shopRevisionRef.current = nextRevision;
-          return;
-        }
         await runTransaction(db, async (transaction) => {
           const snap = await transaction.get(userDataRef);
           const remoteRevision = snap.exists() ? Number(snap.data().revision) || 0 : 0;
           if (snap.exists() && remoteRevision !== shopRevisionRef.current) throw new Error('SHOP_CONFLICT');
           nextRevision = remoteRevision + 1;
-          transaction.set(userDataRef, {
-            ...removeUndefinedDeep(shopDocumentBody({ ...shopPayload, revision: nextRevision })),
-            updatedAt: serverTimestamp(),
-          }, { merge: true });
-          transaction.set(activityDocRef, {
-            activityLogs: removeUndefinedDeep(trimmedLogs),
-            updatedAt: serverTimestamp(),
-          });
+          const patch: Record<string, unknown> = ownsDocument
+            ? { ...removeUndefinedDeep(shopDocumentBody({ ...shopPayload, revision: nextRevision })), updatedAt: serverTimestamp() }
+            : {
+              ledgerSplit: true,
+              revision: nextRevision,
+              updatedAt: serverTimestamp(),
+              ...(canWriteTill ? {
+                customers: removeUndefinedDeep(customers),
+                heldTickets: removeUndefinedDeep(heldTickets),
+                cashSessions: removeUndefinedDeep(cashSessions),
+              } : {}),
+              ...(canWriteCatalog ? {
+                products: removeUndefinedDeep(stored.products),
+                services: removeUndefinedDeep(services),
+                suppliers: removeUndefinedDeep(suppliers),
+                expenseGroups: removeUndefinedDeep(expenseGroups),
+              } : {}),
+            };
+          if (ownsDocument || canWriteTill || canWriteCatalog) transaction.set(userDataRef, patch, { merge: true });
+          if (canWriteActivity) {
+            transaction.set(activityDocRef, {
+              activityLogs: removeUndefinedDeep(trimmedLogs),
+              updatedAt: serverTimestamp(),
+            });
+          }
         });
         shopRevisionRef.current = nextRevision;
-        await setDoc(doc(db, 'users', activeShopOwnerUid, 'pos', 'images'), {
-          images: stored.images,
-          updatedAt: serverTimestamp(),
-        });
+        if (canWriteCatalog) {
+          await setDoc(doc(db, 'users', activeShopOwnerUid, 'pos', 'images'), {
+            images: stored.images,
+            updatedAt: serverTimestamp(),
+          });
+        }
       } catch (error) {
         if (error instanceof Error && error.message === 'SHOP_CONFLICT') {
           hasLoadedUserDataRef.current = false;
@@ -880,7 +932,7 @@ export default function Page() {
       }
     };
     void saveUserData();
-  }, [activeShopOwnerUid, authUser, customerPayments, db, loadUserData, shopRole, branches, products, services, sales, expenses, expenseGroups, users, activityLogs, shopTimeSettings, accounts, customers, suppliers, supplierBills, supplierPayments, heldTickets, cashSessions, taxSettings, receiptSettings, registerSettings, salesEmailSettings, currentShop?.shopName]);
+  }, [activeShopOwnerUid, allow, authUser, customerPayments, db, loadUserData, branches, products, services, sales, expenses, expenseGroups, users, activityLogs, shopTimeSettings, accounts, customers, suppliers, supplierBills, supplierPayments, heldTickets, cashSessions, taxSettings, receiptSettings, registerSettings, salesEmailSettings, currentShop?.shopName]);
 
   const startLocalCounter = () => {
     hasLoadedUserDataRef.current = false;
@@ -905,6 +957,7 @@ export default function Page() {
 
   const handleLogout = async () => {
     clearOpenedShop();
+    setInviteBlocked('');
     setAwaitingShopChoice(false);
     setShopsResolved(false);
     setShopSwitchTarget('');
@@ -954,7 +1007,7 @@ export default function Page() {
     setCart([]);
     setSaleAccountId('');
     setExpenseForm({ id: '', title: '', branchId: '', amount: 0, expenseGroupId: '', accountId: '' });
-    setUserForm({ id: '', name: '', email: '', role: 'cashier', branchId: '', pin: '' });
+    setUserForm({ id: '', name: '', email: '', role: 'cashier', branchId: '', pin: '', permissions: permissionsFor('cashier') });
   };
 
   const handleShopSwitch = (nextOwnerUid: string) => {
@@ -1124,7 +1177,7 @@ export default function Page() {
     return products.filter(p => {
       const query = productSearchQuery.trim().toLowerCase();
       const matchesSearch = [p.name, p.sku, p.barcode, p.category].some((value) => value?.toLowerCase().includes(query));
-      const matchesBranch = !productBranchFilter || p.branchId === productBranchFilter;
+      const matchesBranch = (!scopeBranchId || p.branchId === scopeBranchId) && (!productBranchFilter || p.branchId === productBranchFilter);
       const matchesStock = 
         productStockFilter === 'all' ? true :
         productStockFilter === 'low' ? stockIsLow(p) :
@@ -1132,12 +1185,20 @@ export default function Page() {
         p.stock === 0;
       return matchesSearch && matchesBranch && matchesStock;
     });
-  }, [products, productSearchQuery, productBranchFilter, productStockFilter]);
+  }, [products, productSearchQuery, productBranchFilter, productStockFilter, scopeBranchId]);
 
-  const shopStockWorth = useMemo(() => stockWorth(products), [products]);
+  const counterProducts = useMemo(
+    () => (scopeBranchId ? products.filter((product) => product.branchId === scopeBranchId) : products),
+    [products, scopeBranchId],
+  );
+  const visibleServices = useMemo(
+    () => (scopeBranchId ? services.filter((service) => service.branchId === scopeBranchId) : services),
+    [scopeBranchId, services],
+  );
+  const shopStockWorth = useMemo(() => stockWorth(counterProducts), [counterProducts]);
   const shelfStockWorth = useMemo(
-    () => (productBranchFilter ? stockWorth(products.filter((product) => product.branchId === productBranchFilter)) : shopStockWorth),
-    [productBranchFilter, products, shopStockWorth],
+    () => (productBranchFilter ? stockWorth(counterProducts.filter((product) => product.branchId === productBranchFilter)) : shopStockWorth),
+    [counterProducts, productBranchFilter, shopStockWorth],
   );
   const shelfStockBranch = branches.find((branch) => branch.id === productBranchFilter)?.name;
   const formatCount = (value: number) => new Intl.NumberFormat('en-UG', { maximumFractionDigits: 2 }).format(value);
@@ -1305,7 +1366,7 @@ export default function Page() {
     }
   };
 
-  const canEditSku = shopRole === 'shop_owner' || shopRole === 'admin' || shopRole === 'manager' || shopRole === 'stock';
+  const canEditSku = canEditCatalog;
 
   const suggestSku = (name: string, barcode: string, exceptId = '') => (
     nextSku(name || 'Item', reservedProductCodes(products, exceptId, barcode.trim() ? [barcode] : []))
@@ -1501,7 +1562,7 @@ export default function Page() {
     showNotification('Payment recorded.', 'success');
     setPaymentCustomer(null);
   };
-  const showRegisterMargin = shopRole === 'shop_owner' || shopRole === 'admin' || shopRole === 'manager';
+  const showRegisterMargin = allow('seeCost');
 
   const createExpenseGroup = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1545,8 +1606,8 @@ export default function Page() {
 
   const topUpAccount = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!(isShopOwner || shopRole === 'admin')) {
-      showNotification('Only admin or shop owner can top up accounts.', 'error');
+    if (!isShopOwner) {
+      showNotification('Only the shop owner can top up accounts.', 'error');
       return;
     }
     const selectedAccountId = accountTopUpForm.accountId || defaultAccount?.id;
@@ -1569,8 +1630,8 @@ export default function Page() {
   };
 
   const editAccountOpeningBalance = (accountId: string) => {
-    if (!(isShopOwner || shopRole === 'admin')) {
-      showNotification('Only admin or shop owner can edit account values.', 'error');
+    if (!isShopOwner) {
+      showNotification('Only the shop owner can edit account values.', 'error');
       return;
     }
     const targetAccount = accounts.find((account) => account.id === accountId);
@@ -1671,8 +1732,8 @@ export default function Page() {
     setShowExpenseModal(false);
   };
 
-  const saveShopMembership = async (email: string, staffRole: Role) => {
-    if (!db || !activeShopOwnerUid) return;
+  const saveShopMembership = async (email: string, staffRole: Role, staffPermissions: StaffPermission[], branchId: string) => {
+    if (!db || !activeShopOwnerUid || !isShopOwner) return;
     const normalizedEmail = email.toLowerCase().trim();
     if (!normalizedEmail) return;
     const shopMembershipRef = doc(db, 'shopMemberships', `${activeShopOwnerUid}_${normalizedEmail}`);
@@ -1681,12 +1742,14 @@ export default function Page() {
       email: normalizedEmail,
       shopName: availableShops.find(s => s.ownerUid === activeShopOwnerUid)?.shopName || 'My Shop',
       role: staffRole,
+      permissions: permissionsFor(staffRole, staffPermissions),
+      branchId,
       invitedAt: serverTimestamp(),
     }, { merge: true });
   };
 
-  const emailStaffSignInLink = async (email: string, staffRole: Role) => {
-    await saveShopMembership(email, staffRole);
+  const emailStaffSignInLink = async (email: string, staffRole: Role, staffPermissions: StaffPermission[], branchId: string) => {
+    await saveShopMembership(email, staffRole, staffPermissions, branchId);
     if (!firebaseApp || !authUser || authUser.uid === LOCAL_OPERATOR_ID) {
       throw new Error('Sign in with Firebase before emailing a staff link. This browser-only counter cannot send email.');
     }
@@ -1728,6 +1791,10 @@ export default function Page() {
 
   const saveUser = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isShopOwner) {
+      showNotification('Only the shop owner can change what staff can do.', 'error');
+      return;
+    }
     const name = userForm.name.trim();
     const email = userForm.email.trim();
     if (!name || !userForm.branchId) return;
@@ -1741,7 +1808,8 @@ export default function Page() {
     }
     const staffId = userForm.id || crypto.randomUUID();
     const pinHash = pinIsValid(userForm.pin) ? await hashPin(staffId, userForm.pin) : undefined;
-    const staffFields = { name, email, role: userForm.role, branchId: userForm.branchId, ...(pinHash ? { pinHash } : {}) };
+    const staffPermissions = permissionsFor(userForm.role, userForm.permissions);
+    const staffFields = { name, email, role: userForm.role, branchId: userForm.branchId, permissions: staffPermissions, ...(pinHash ? { pinHash } : {}) };
     const canEmail = Boolean(email && db && authUser && authUser.uid !== LOCAL_OPERATOR_ID);
 
     if (userForm.id) {
@@ -1751,7 +1819,7 @@ export default function Page() {
         await deleteDoc(doc(db, 'shopMemberships', `${activeShopOwnerUid}_${previous.email.toLowerCase().trim()}`)).catch(() => undefined);
       }
       if (canEmail) {
-        await saveShopMembership(email, userForm.role).catch((error) => {
+        await saveShopMembership(email, userForm.role, staffPermissions, userForm.branchId).catch((error) => {
           showNotification(error instanceof Error ? error.message : 'Could not update shop access.', 'error');
         });
       }
@@ -1767,7 +1835,7 @@ export default function Page() {
       logActivity('add_user', `Added user "${email || name}" with role "${userForm.role}"`);
       if (canEmail) {
         try {
-          await emailStaffSignInLink(email, userForm.role);
+          await emailStaffSignInLink(email, userForm.role, staffPermissions, userForm.branchId);
         } catch (error) {
           const message = `Staff saved, but the sign-in email was not sent. ${staffSignInError(error)}`;
           setStatus(message);
@@ -1779,7 +1847,7 @@ export default function Page() {
         showNotification(message, 'success');
       }
     }
-    setUserForm({ id: '', name: '', email: '', role: 'cashier', branchId: '', pin: '' });
+    setUserForm({ id: '', name: '', email: '', role: 'cashier', branchId: '', pin: '', permissions: permissionsFor('cashier') });
     setShowUserModal(false);
   };
 
@@ -1796,7 +1864,7 @@ export default function Page() {
       if (manual) notify('Sign in with Firebase before emailing a sales report. This browser-only counter cannot send email.', 'error', 6000);
       return;
     }
-    if (!(isShopOwner || shopRole === 'admin')) return;
+    if (!isShopOwner) return;
     const period = previousSalesPeriod(salesEmailSettings.cadence, new Date(), shopTimeSettings.timezoneOffsetMinutes);
     if (!manual && salesEmailSettings.lastSentKey === period.key) return;
     const claimKey = `${activeShopOwnerUid}:${period.key}`;
@@ -1840,7 +1908,7 @@ export default function Page() {
     } finally {
       setSendingSalesEmail(false);
     }
-  }, [activeShopOwnerUid, authUser, currentShop?.shopName, expenses, isShopOwner, role, sales, salesEmailSettings, shopTimeSettings.timezoneOffsetMinutes]);
+  }, [activeShopOwnerUid, authUser, currentShop?.shopName, expenses, isShopOwner, sales, salesEmailSettings, shopTimeSettings.timezoneOffsetMinutes]);
 
   const deliverSalesReportRef = useRef(deliverSalesReport);
   deliverSalesReportRef.current = deliverSalesReport;
@@ -1853,7 +1921,7 @@ export default function Page() {
   useEffect(() => {
     if (salesEmailSettings.cadence === 'off') return;
     void deliverSalesReportRef.current(false);
-  }, [salesEmailSettings.cadence, salesEmailSettings.lastSentKey, authUser, activeShopOwnerUid, role, isShopOwner, shopTimeSettings.timezoneOffsetMinutes]);
+  }, [salesEmailSettings.cadence, salesEmailSettings.lastSentKey, authUser, activeShopOwnerUid, isShopOwner, shopTimeSettings.timezoneOffsetMinutes]);
 
   const addProductToCart = (productId: string, silent = false) => {
     const product = products.find(p => p.id === productId);
@@ -2679,6 +2747,7 @@ export default function Page() {
     const selectedStart = businessDayRange(selectedKey, shopClock).start;
 
     return sales.filter((sale) => {
+      if (scopeBranchId && sale.branchId !== scopeBranchId) return false;
       const saleDate = new Date(sale.createdAt);
       if (Number.isNaN(saleDate.getTime())) return false;
       const saleKey = businessDayKey(saleDate, shopClock);
@@ -2697,7 +2766,7 @@ export default function Page() {
       const rangeEnd = businessDayRange(shiftDayKey(salesRangeEnd, 1), shopClock).start;
       return saleDate >= rangeStart && saleDate < rangeEnd;
     });
-  }, [sales, salesDateFilter, salesHistoryViewMode, salesRangeEnd, salesRangeStart, shopClock]);
+  }, [sales, salesDateFilter, salesHistoryViewMode, salesRangeEnd, salesRangeStart, scopeBranchId, shopClock]);
 
   const salesHistoryPageSize = 8;
   const sharedTablePageSize = 10;
@@ -2754,13 +2823,14 @@ export default function Page() {
   };
 
   const filteredExpenses = useMemo(() => {
-    if (expensesViewMode === 'all') return expenses;
-    return expenses.filter((expense) => {
+    const scoped = scopeBranchId ? expenses.filter((expense) => expense.branchId === scopeBranchId) : expenses;
+    if (expensesViewMode === 'all') return scoped;
+    return scoped.filter((expense) => {
       const expenseDate = new Date(expense.createdAt);
       const selectedDay = new Date(`${expensesDayFilter}T00:00:00`);
       return expenseDate.toDateString() === selectedDay.toDateString();
     });
-  }, [expenses, expensesDayFilter, expensesViewMode]);
+  }, [expenses, expensesDayFilter, expensesViewMode, scopeBranchId]);
 
   useEffect(() => {
     setExpensesPage(1);
@@ -2771,7 +2841,7 @@ export default function Page() {
   }, [productSearchQuery, productBranchFilter, productStockFilter]);
 
   const productsPagination = paginateData(filteredProducts, productsPage, setProductsPage, shelfPageSize);
-  const servicesPagination = paginateData(services, servicesPage, setServicesPage);
+  const servicesPagination = paginateData(visibleServices, servicesPage, setServicesPage);
   const expensesPagination = paginateData(filteredExpenses, expensesPage, setExpensesPage);
   const usersPagination = paginateData(users, usersPage, setUsersPage);
   const activityLogsPagination = paginateData(activityLogs, activityLogsPage, setActivityLogsPage);
@@ -2789,12 +2859,14 @@ export default function Page() {
     )
   );
 
-  const canManageUsers = (shopRole === 'shop_owner' || shopRole === 'admin') && activeShopOwnerUid === authUser?.uid;
-  const canManageSalesAndExpenses = shopRole === 'shop_owner' || shopRole === 'admin' || shopRole === 'manager';
+  const canManageUsers = isShopOwner;
+  const canViewStaff = isShopOwner || allow('manageStaff');
+  const canManageSalesAndExpenses = isShopOwner || allow('reports');
+  const canEditExpenses = isShopOwner || allow('expenses');
 
   const deleteTransaction = async (ids: string[]) => {
     if (!canManageSalesAndExpenses) {
-      setStatus('Only the shop owner, admin, or manager can void a sale.');
+      setStatus('The owner has not turned on reports, so this receipt cannot be voided.');
       return;
     }
     const lines = sales.filter((sale) => ids.includes(sale.id) && !sale.voidedAt);
@@ -2838,8 +2910,8 @@ export default function Page() {
   };
 
   const editExpense = (expense: Expense) => {
-    if (!canManageSalesAndExpenses) {
-      setStatus('Only the shop owner or admin can edit expenses.');
+    if (!canEditExpenses) {
+      setStatus('The owner has not turned on expenses for you.');
       return;
     }
     setExpenseForm({ id: expense.id, title: expense.title, branchId: expense.branchId, amount: expense.amount, expenseGroupId: expense.expenseGroupId || '', accountId: expense.accountId || defaultAccount?.id || '' });
@@ -2847,8 +2919,8 @@ export default function Page() {
   };
 
   const deleteExpense = (id: string) => {
-    if (!canManageSalesAndExpenses) {
-      setStatus('Only the shop owner or admin can delete expenses.');
+    if (!canEditExpenses) {
+      setStatus('The owner has not turned on expenses for you.');
       return;
     }
     if (!window.confirm('Delete this expense?')) return;
@@ -3030,7 +3102,6 @@ export default function Page() {
 
       await setDoc(userDataRef, {
         ...removeUndefinedDeep({
-          role: 'shop_owner' as Role,
           shopName: restoredShopName,
           branches: restoredBranches,
           products: restoredSplit.products,
@@ -3070,11 +3141,14 @@ export default function Page() {
         const normalizedEmail = staffUser.email?.toLowerCase().trim();
         if (!normalizedEmail) return Promise.resolve();
         const shopMembershipRef = doc(db, 'shopMemberships', `${activeShopOwnerUid}_${normalizedEmail}`);
+        const restoredRole = staffUser.role === 'admin' || staffUser.role === 'manager' || staffUser.role === 'cashier' || staffUser.role === 'stock' ? staffUser.role : 'cashier';
         return setDoc(shopMembershipRef, {
           ownerUid: activeShopOwnerUid,
           email: normalizedEmail,
           shopName: restoredShopName,
-          role: staffUser.role,
+          role: restoredRole,
+          permissions: permissionsFor(restoredRole, staffUser.permissions),
+          branchId: staffUser.branchId || '',
           restoredAt: serverTimestamp(),
         }, { merge: true });
       }));
@@ -3159,6 +3233,24 @@ export default function Page() {
             </section>
           </div>
         )}
+      </div>
+    );
+  }
+
+  if (inviteBlocked) {
+    return (
+      <div className="auth-container">
+        <div className="auth-glow auth-glow-a" aria-hidden="true" />
+        <div className="auth-glow auth-glow-b" aria-hidden="true" />
+        <div className="auth-glow auth-glow-c" aria-hidden="true" />
+        <div className="auth-layout">
+          <Logo variant="stacked" />
+          <section className="auth-card" aria-label="Wrong account">
+            <h2>This invite is for someone else</h2>
+            <p className="auth-lede">{inviteBlocked}</p>
+            <button type="button" className="auth-action" onClick={handleLogout}>Sign out</button>
+          </section>
+        </div>
       </div>
     );
   }
@@ -3261,38 +3353,42 @@ export default function Page() {
           )}
         </div>
 
-        <button type="button" className={`sell-launch${view === 'sales' ? ' active' : ''}`} onClick={() => { setView('sales'); setIsSidebarOpen(false); }}>
-          <span>{sellLabel}</span>
-          <small>{registerSettings.mode === 'drawer' ? (openCashSession ? 'Drawer open' : 'Drawer closed') : 'Tap a product'}</small>
-        </button>
+        {allow('sell') && (
+          <button type="button" className={`sell-launch${view === 'sales' ? ' active' : ''}`} onClick={() => { setView('sales'); setIsSidebarOpen(false); }}>
+            <span>{sellLabel}</span>
+            <small>{registerSettings.mode === 'drawer' ? (openCashSession ? 'Drawer open' : 'Drawer closed') : 'Tap a product'}</small>
+          </button>
+        )}
 
         <nav className="sidebar-nav" aria-label="Shop">
           <div className="nav-group">
             <button className={`nav-button ${view === 'dashboard' ? 'active' : ''}`} onClick={() => { setView('dashboard'); setIsSidebarOpen(false); }}>Today</button>
-            {shopRole !== 'stock' && <button className={`nav-button ${view === 'sales_history' ? 'active' : ''}`} onClick={() => { setView('sales_history'); setIsSidebarOpen(false); }}>Sales</button>}
-            {shopRole !== 'stock' && <button className={`nav-button ${view === 'customers' ? 'active' : ''}`} onClick={() => { setView('customers'); setIsSidebarOpen(false); }}>Customers</button>}
+            {allow('salesHistory') && <button className={`nav-button ${view === 'sales_history' ? 'active' : ''}`} onClick={() => { setView('sales_history'); setIsSidebarOpen(false); }}>Sales</button>}
+            {allow('customers') && <button className={`nav-button ${view === 'customers' ? 'active' : ''}`} onClick={() => { setView('customers'); setIsSidebarOpen(false); }}>Customers</button>}
           </div>
 
-          <div className="nav-group">
-            <div className="nav-group-label">Items</div>
-            <button className={`nav-button ${view === 'products' ? 'active' : ''}`} onClick={() => { setView('products'); setIsSidebarOpen(false); }}>Products</button>
-            <button className={`nav-button ${view === 'services' ? 'active' : ''}`} onClick={() => { setView('services'); setIsSidebarOpen(false); }}>Services</button>
-          </div>
+          {canSeeShelf && (
+            <div className="nav-group">
+              <div className="nav-group-label">Items</div>
+              <button className={`nav-button ${view === 'products' ? 'active' : ''}`} onClick={() => { setView('products'); setIsSidebarOpen(false); }}>Products</button>
+              <button className={`nav-button ${view === 'services' ? 'active' : ''}`} onClick={() => { setView('services'); setIsSidebarOpen(false); }}>Services</button>
+            </div>
+          )}
 
           {seesBooks && (
             <div className="nav-group">
               <div className="nav-group-label">Money</div>
-              <button className={`nav-button ${view === 'expenses' ? 'active' : ''}`} onClick={() => { setView('expenses'); setIsSidebarOpen(false); }}>Expenses</button>
-              <button className={`nav-button ${view === 'reports' ? 'active' : ''}`} onClick={() => { setView('reports'); setIsSidebarOpen(false); }}>Reports</button>
-              <button className={`nav-button ${view === 'accounts' ? 'active' : ''}`} onClick={() => { setView('accounts'); setIsSidebarOpen(false); }}>Balances</button>
+              {allow('expenses') && <button className={`nav-button ${view === 'expenses' ? 'active' : ''}`} onClick={() => { setView('expenses'); setIsSidebarOpen(false); }}>Expenses</button>}
+              {allow('reports') && <button className={`nav-button ${view === 'reports' ? 'active' : ''}`} onClick={() => { setView('reports'); setIsSidebarOpen(false); }}>Reports</button>}
+              {allow('accounts') && <button className={`nav-button ${view === 'accounts' ? 'active' : ''}`} onClick={() => { setView('accounts'); setIsSidebarOpen(false); }}>Balances</button>}
             </div>
           )}
 
-          {(seesBooks || isShopOwner) && (
+          {(canViewStaff || allow('activity') || isShopOwner) && (
             <div className="nav-group">
               <div className="nav-group-label">Shop</div>
-              {seesBooks && <button className={`nav-button ${view === 'users' ? 'active' : ''}`} onClick={() => { setView('users'); setIsSidebarOpen(false); }}>Staff</button>}
-              {seesBooks && <button className={`nav-button ${view === 'activity_logs' ? 'active' : ''}`} onClick={() => { setView('activity_logs'); setIsSidebarOpen(false); }}>Activity</button>}
+              {canViewStaff && <button className={`nav-button ${view === 'users' ? 'active' : ''}`} onClick={() => { setView('users'); setIsSidebarOpen(false); }}>Staff</button>}
+              {allow('activity') && <button className={`nav-button ${view === 'activity_logs' ? 'active' : ''}`} onClick={() => { setView('activity_logs'); setIsSidebarOpen(false); }}>Activity</button>}
               {isShopOwner && <button className={`nav-button ${view === 'assistant' ? 'active' : ''}`} onClick={() => { setView('assistant'); setIsSidebarOpen(false); }}>Assistant</button>}
               {isShopOwner && <button className={`nav-button ${view === 'settings' ? 'active' : ''}`} onClick={() => { setView('settings'); setIsSidebarOpen(false); }}>Settings</button>}
             </div>
@@ -3359,7 +3455,7 @@ export default function Page() {
               const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
               const named = authUser.displayName && authUser.displayName !== 'Counter' && authUser.email !== 'counter@this-device' ? authUser.displayName.split(' ')[0] : '';
               const periodNoun = dashboardPeriod === 'daily' ? 'today' : dashboardPeriod === 'weekly' ? 'this week' : dashboardPeriod === 'monthly' ? 'this month' : 'this year';
-              const lowStock = products.filter((product) => stockIsLow(product)).sort((a, b) => a.stock - b.stock).slice(0, 3);
+              const lowStock = counterProducts.filter((product) => stockIsLow(product)).sort((a, b) => a.stock - b.stock).slice(0, 3);
               return (
                 <>
                   <div className="studio-top">
@@ -3375,19 +3471,21 @@ export default function Page() {
                     </div>
                   </div>
                   <div className="today-numbers">
+                    {(allow('salesHistory') || allow('reports')) && (
                     <article className="stat-card">
                       <p>Sales {periodNoun}</p>
                       <strong>{formatUGX(dashboardMetrics.sales.value)}</strong>
                       <span className="stat-note">{dashboardMetrics.receipts} receipt{dashboardMetrics.receipts === 1 ? '' : 's'}</span>
                     </article>
-                    {seesBooks && (
+                    )}
+                    {seesCost && (allow('reports') || allow('expenses')) && (
                     <article className="stat-card">
                       <p>Left after costs</p>
                       <strong className={dashboardMetrics.netProfit.value >= 0 ? 'is-positive' : 'is-negative'}>{formatUGX(dashboardMetrics.netProfit.value)}</strong>
                       <span className="stat-note">After tax, cost, and expenses</span>
                     </article>
                     )}
-                    {seesBooks && (
+                    {seesCost && (
                       <article className="stat-card">
                         <p>Stock worth</p>
                         <strong>{formatUGX(shopStockWorth.atCost)}</strong>
@@ -3396,7 +3494,7 @@ export default function Page() {
                     )}
                   </div>
                   <div className="today-actions">
-                    <article className="card">
+                    {allow('sell') && <article className="card">
                       {registerSettings.mode === 'drawer' ? (
                         <>
                           <h3>{openCashSession ? 'Drawer open' : 'Drawer closed'}</h3>
@@ -3410,8 +3508,8 @@ export default function Page() {
                           <button type="button" className="primary" onClick={() => setView('sales')}>Start a sale</button>
                         </>
                       )}
-                    </article>
-                    <article className="card">
+                    </article>}
+                    {canSeeShelf && <article className="card">
                       <div className="insight-header-row">
                         <h3>Low stock</h3>
                         <button type="button" className="edit-btn" onClick={() => { setProductPane('shelf'); setProductStockFilter('low'); setView('products'); }}>Products</button>
@@ -3426,7 +3524,7 @@ export default function Page() {
                           ))}
                         </ul>
                       ) : <p className="muted-copy">Nothing is running low.</p>}
-                    </article>
+                    </article>}
                     {registerSettings.mode === 'drawer' && recentClosedShifts.length > 0 && (
                       <article className="card today-shifts">
                         <h3>Closed shifts</h3>
@@ -3441,8 +3539,8 @@ export default function Page() {
                       </article>
                     )}
                   </div>
-                  {seesBooks && <button type="button" className="edit-btn today-more" onClick={() => setView('reports')}>Open reports</button>}
-                  <button type="button" className="edit-btn" onClick={() => setCloseOpen(true)}>Close of day</button>
+                  {allow('reports') && <button type="button" className="edit-btn today-more" onClick={() => setView('reports')}>Open reports</button>}
+                  {allow('reports') && <button type="button" className="edit-btn" onClick={() => setCloseOpen(true)}>Close of day</button>}
                 </>
               );
             })()}
@@ -3462,7 +3560,7 @@ export default function Page() {
           />
         )}
 
-        {view === 'products' && (
+        {view === 'products' && canSeeShelf && (
           <section className={productPane === 'shelf' ? 'shelf-page' : undefined}>
             <div className="page-tools">
               <div className="pane-switch" role="tablist" aria-label="Products">
@@ -3521,7 +3619,7 @@ export default function Page() {
               </div>
             </div>
 
-            {seesBooks && (
+            {seesCost && (
               <div className="stock-worth" aria-label="Stock worth">
                 <div>
                   <span>At cost</span>
@@ -3701,9 +3799,9 @@ export default function Page() {
           </section>
         )}
 
-        {view === 'sales' && (
+        {view === 'sales' && allow('sell') && (
           <RegisterDesk
-            products={products}
+            products={counterProducts}
             services={services}
             sales={sales}
             cart={cart}
@@ -3756,7 +3854,7 @@ export default function Page() {
           />
         )}
 
-        {view === 'services' && (
+        {view === 'services' && canSeeShelf && (
           <section>
             <div className="page-tools">
               <p className="muted-copy">Photocopy, scanning, lamination, printing, and typing. Sell them from the register. They do not reduce shelf stock.</p>
@@ -3776,7 +3874,7 @@ export default function Page() {
                   </tr>
                 </thead>
                 <tbody>
-                  {services.length > 0 ? servicesPagination.rows.map((service) => (
+                  {visibleServices.length > 0 ? servicesPagination.rows.map((service) => (
                     <tr key={service.id}>
                       <td data-label="Service" style={{ fontWeight: 600 }}>{service.name}</td>
                       <td data-label="Branch">{branchMap[service.branchId]}</td>
@@ -3815,7 +3913,7 @@ export default function Page() {
               </table>
             </div>
             <PaginationControls
-              totalItems={services.length}
+              totalItems={visibleServices.length}
               totalPages={servicesPagination.totalPages}
               page={servicesPagination.safePage}
               start={servicesPagination.start}
@@ -3890,7 +3988,7 @@ export default function Page() {
           </section>
         )}
 
-        {view === 'sales_history' && (
+        {view === 'sales_history' && allow('salesHistory') && (
           <section>
             <div className="page-header">
               <h2>Sales History</h2>
@@ -3950,7 +4048,7 @@ export default function Page() {
                       <th>Items</th>
                       <th>Customer / tender</th>
                       <th className="num">Total</th>
-                      <th className="num">Margin</th>
+                      {seesCost && <th className="num">Margin</th>}
                       <th>Actions</th>
                     </tr>
                   </thead>
@@ -3973,10 +4071,10 @@ export default function Page() {
                             </div>
                           </td>
                           <td data-label="Total" className="num">{formatUGX(saleGroup.total)}</td>
-                          <td data-label="Margin" className={`num${saleGroup.profit < 0 ? ' is-negative' : ''}`}>{showRegisterMargin ? formatUGX(saleGroup.profit) : '—'}</td>
+                          {seesCost && <td data-label="Margin" className={`num${saleGroup.profit < 0 ? ' is-negative' : ''}`}>{formatUGX(saleGroup.profit)}</td>}
                           <td data-label="">
                             <button className="edit-btn" onClick={() => setActiveReceipt(receiptFromSaleLines(saleGroup.lines))}>Receipt</button>
-                            {saleGroup.saleKind !== 'return' && !saleGroup.lines.some((line) => line.voidedAt) && <button className="edit-btn" onClick={() => setReturnTransactionId(saleGroup.id)}>Return</button>}
+                            {allow('sell') && saleGroup.saleKind !== 'return' && !saleGroup.lines.some((line) => line.voidedAt) && <button className="edit-btn" onClick={() => setReturnTransactionId(saleGroup.id)}>Return</button>}
                             {saleGroup.lines.some((line) => line.moneyStatus === 'unconfirmed') && canManageSalesAndExpenses && (
                               <button className="edit-btn" onClick={() => {
                                 const ids = saleGroup.lines.map((line) => line.id);
@@ -3993,7 +4091,7 @@ export default function Page() {
                       ))
                     ) : (
                       <tr>
-                        <td colSpan={7} className="empty-cell">No sales recorded for this period</td>
+                        <td colSpan={seesCost ? 7 : 6} className="empty-cell">No sales recorded for this period</td>
                       </tr>
                     )}
                   </tbody>
@@ -4014,7 +4112,7 @@ export default function Page() {
           </section>
         )}
 
-        {view === 'expenses' && (
+        {view === 'expenses' && allow('expenses') && (
           <section>
             <div className="page-tools">
               <div className="pane-switch" role="tablist" aria-label="Expenses">
@@ -4129,13 +4227,13 @@ export default function Page() {
                         <td data-label="Amount" className="num">{formatUGX(e.amount)}</td>
                         <td data-label="Group">{e.expenseGroupId ? expenseGroupMap[e.expenseGroupId] || 'Unknown group' : 'Ungrouped'}</td>
                         <td data-label="">
-                          {canManageSalesAndExpenses ? (
+                          {canEditExpenses ? (
                             <>
                               <button className="edit-btn" onClick={() => editExpense(e)}>Edit</button>
                               <button className="delete-btn" onClick={() => deleteExpense(e.id)}>Delete</button>
                             </>
                           ) : (
-                            <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>Owner/Admin only</span>
+                            <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>View only</span>
                           )}
                         </td>
                       </tr>
@@ -4162,20 +4260,20 @@ export default function Page() {
           </section>
         )}
 
-        {view === 'users' && (
+        {view === 'users' && canViewStaff && (
           <section>
             <div className="page-header">
               <h2>Staff</h2>
               {canManageUsers && (
-                <button className="primary" onClick={() => { setUserForm({ id: '', name: '', email: '', role: 'cashier', branchId: branches[0]?.id || '', pin: '' }); setShowUserModal(true); }}>
+                <button className="primary" onClick={() => { setUserForm({ id: '', name: '', email: '', role: 'cashier', branchId: branches[0]?.id || '', pin: '', permissions: permissionsFor('cashier') }); setShowUserModal(true); }}>
                   Add staff
                 </button>
               )}
             </div>
             
-            {canManageUsers ? (
+            {canViewStaff ? (
               <>
-                <p className="muted-copy">Give each person a 4-digit PIN for this shared till. Add an email when they should also sign in with Google on their own phone.</p>
+                <p className="muted-copy">{canManageUsers ? 'Give each person a 4-digit PIN for this shared till. Add an email when they should sign in on their own phone. The switches on each person decide what they see. Settings, backup, and the assistant stay with you.' : 'The shop owner decides what each person can do. You can see who works here.'}</p>
             <div className="table-wrap">
                   <table className="data-table">
                     <thead>
@@ -4198,18 +4296,19 @@ export default function Page() {
                               <span className="badge">
                                 {roleLabels[u.role] || u.role}
                               </span>
+                              {u.permissions && !permissionsMatchPreset(u.role, u.permissions) && <div>Custom</div>}
                             </td>
                             <td data-label="Branch">{branchMap[u.branchId]}</td>
                             <td data-label="Added">{new Date(u.createdAt).toLocaleDateString()}{u.pinHash ? ' · PIN set' : ''}</td>
                             <td data-label="">
-                              <button className="edit-btn" onClick={() => { setUserForm({ ...u, pin: '' }); setShowUserModal(true); }}>Edit</button>
-                              {u.email && authUser?.uid !== LOCAL_OPERATOR_ID && <button className="edit-btn" onClick={() => { void emailStaffSignInLink(u.email, u.role).catch((error) => showNotification(staffSignInError(error), 'error', 7000)); }}>Email link</button>}
-                              <button className="delete-btn" onClick={() => {
+                              {canManageUsers && <button className="edit-btn" onClick={() => { setUserForm({ ...u, pin: '', permissions: u.permissions ?? permissionsFor(u.role) }); setShowUserModal(true); }}>Edit</button>}
+                              {canManageUsers && u.email && authUser?.uid !== LOCAL_OPERATOR_ID && <button className="edit-btn" onClick={() => { void emailStaffSignInLink(u.email, u.role, u.permissions ?? permissionsFor(u.role), u.branchId).catch((error) => showNotification(staffSignInError(error), 'error', 7000)); }}>Email link</button>}
+                              {canManageUsers && <button className="delete-btn" onClick={() => {
                                 if (!window.confirm(`Remove ${u.name || u.email}? They lose access to this shop.`)) return;
                                 setUsers(prev => prev.filter(x => x.id !== u.id));
                                 if (db && u.email.trim()) void deleteDoc(doc(db, 'shopMemberships', `${activeShopOwnerUid}_${u.email.toLowerCase().trim()}`)).catch(() => undefined);
                                 logActivity('delete_user', `Removed user "${u.email}"`);
-                              }}>Remove</button>
+                              }}>Remove</button>}
                             </td>
                           </tr>
                         ))
@@ -4233,13 +4332,13 @@ export default function Page() {
               </>
             ) : (
               <div className="card">
-                <p className="muted-copy">Only the shop owner can manage staff.</p>
+                <p className="muted-copy">Only the shop owner can change what staff are allowed to do.</p>
               </div>
             )}
           </section>
         )}
 
-        {view === 'reports' && (
+        {view === 'reports' && allow('reports') && (
           <section>
             <div className="card trend-card">
               <div className="insight-header-row">
@@ -4335,7 +4434,7 @@ export default function Page() {
           </section>
         )}
 
-        {view === 'activity_logs' && (
+        {view === 'activity_logs' && allow('activity') && (
           <section>
             <p className="muted-copy">Who changed stock, sales, staff, or settings.</p>
             <div className="table-wrap">
@@ -4370,12 +4469,12 @@ export default function Page() {
           </section>
         )}
 
-        {view === 'customers' && (
+        {view === 'customers' && allow('customers') && (
           <section>
             <div className="page-header">
               <h2>Customers</h2>
             </div>
-            {seesBooks && (
+            {allow('customers') && (
               <form className="card" onSubmit={addCustomer}>
                 <h3>Add a customer</h3>
                 <p className="muted-copy">One person, one balance. Leave the limit empty for no cap. Zero means they cannot buy on account.</p>
@@ -4446,7 +4545,7 @@ export default function Page() {
           </section>
         )}
 
-        {view === 'settings' && (
+        {view === 'settings' && isShopOwner && (
           <section className="settings-shell">
             <nav className="settings-nav" aria-label="Settings sections">
               <p>Shop</p>
@@ -4714,12 +4813,12 @@ export default function Page() {
         )}
 
 
-        {view === 'accounts' && (
+        {view === 'accounts' && allow('accounts') && (
           <section>
             <div className="card">
               <h3>Where money sits</h3>
               <p className="muted-copy">{registerSettings.mode === 'drawer' ? 'Each sale and expense updates one of these balances. Cash in the drawer is counted on the register.' : 'Each sale and expense updates one of these balances.'}</p>
-              {(isShopOwner || shopRole === 'admin') && (
+              {isShopOwner && (
                 <details className="quiet-fold">
                   <summary>Add or adjust a balance</summary>
                   <form onSubmit={createAccount} className="form" style={{ marginTop: '1rem' }}>
@@ -4750,7 +4849,7 @@ export default function Page() {
               )}
               <div className="table-wrap" style={{ marginTop: '1rem' }}>
                 <table className="data-table">
-                  <thead><tr><th>Account</th><th>Type</th><th className="num">Opening balance</th><th className="num">Current balance</th>{(isShopOwner || shopRole === 'admin') && <th>Actions</th>}</tr></thead>
+                  <thead><tr><th>Account</th><th>Type</th><th className="num">Opening balance</th><th className="num">Current balance</th>{isShopOwner && <th>Actions</th>}</tr></thead>
                   <tbody>
                     {accounts.map((account) => (
                       <tr key={account.id}>
@@ -4758,7 +4857,7 @@ export default function Page() {
                         <td data-label="Type">{account.isDefault ? 'Default' : 'Custom'}</td>
                         <td data-label="Opening balance" className="num">{formatUGX(account.openingBalance || 0)}</td>
                         <td data-label="Current balance" className="num">{formatUGX(accountBalances.get(account.id) || 0)}</td>
-                        {(isShopOwner || shopRole === 'admin') && (
+                        {isShopOwner && (
                           <td data-label="">
                             <button type="button" className="edit-btn" onClick={() => editAccountOpeningBalance(account.id)}>Edit value</button>
                           </td>
@@ -4769,7 +4868,7 @@ export default function Page() {
                 </table>
               </div>
             </div>
-            {seesBooks && (
+            {(canEditCatalog || seesCost) && (
               <div className="card" style={{ marginTop: 16 }}>
                 <h3>Suppliers</h3>
                 <p className="muted-copy">A bill is recorded when stock is received with a supplier and a unit cost.</p>
@@ -4818,6 +4917,7 @@ export default function Page() {
                 <div><span>Email</span><strong>{authUser?.email}</strong></div>
                 <div><span>Role</span><strong>{roleLabels[shopRole]}</strong></div>
                 <div><span>Shop</span><strong>{currentShop?.shopName || 'My Shop'}</strong></div>
+                <div><span>Access</span><strong>{isShopOwner ? 'The whole shop, including settings, backup, and the assistant' : (granted.map((key) => PERMISSION_LABELS[key]).join(', ') || 'Nothing beyond signing in')}</strong></div>
               </div>
             </div>
             {shopSwitchPanel && <div className="card profile-card">{shopSwitchPanel}</div>}
@@ -4862,7 +4962,7 @@ export default function Page() {
             </div>
           </div>
         )}
-        {closeOpen && (
+        {closeOpen && allow('reports') && (
           <div className="modal-overlay">
             <div className="modal-content">
               <div className="modal-header">
@@ -4926,7 +5026,7 @@ export default function Page() {
                       <span>Product</span>
                       <select value={saleForm.productId} onChange={(e) => setSaleForm({ ...saleForm, productId: e.target.value })} required>
                         <option value="">Select product</option>
-                        {products.filter(p => p.stock > 0).map((p) => (
+                        {counterProducts.filter(p => p.stock > 0).map((p) => (
                           <option key={p.id} value={p.id}>{p.name} ({p.stock} available)</option>
                         ))}
                       </select>
@@ -4951,10 +5051,12 @@ export default function Page() {
                               <span>Total:</span>
                               <span style={{ fontWeight: 700, fontSize: '1.1rem', color: 'var(--success)' }}>{formatUGX(p.salePrice * saleForm.qty)}</span>
                             </div>
+                            {seesCost && (
                             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
                               <span>Profit:</span>
                               <span style={{ fontWeight: 600 }}>{formatUGX((p.salePrice - p.purchasePrice) * saleForm.qty)}</span>
                             </div>
+                            )}
                           </>
                         ) : null;
                       })()}
@@ -5026,7 +5128,7 @@ export default function Page() {
                       <span>SKU</span>
                       <input value={productForm.sku} onChange={(e) => { setSkuManual(true); setProductForm({ ...productForm, sku: e.target.value }); }} autoCapitalize="characters" readOnly={!canEditSku} />
                     </label>
-                    <p className="muted-copy form-span">{canEditSku ? 'Filled in from the product name. Change it when this product already has a code.' : 'A SKU is created automatically. An owner, admin, manager, or stock lead can change it.'}</p>
+                    <p className="muted-copy form-span">{canEditSku ? 'Filled in from the product name. Change it when this product already has a code.' : 'A SKU is created automatically. Someone allowed to change products can edit it.'}</p>
                     <label className="field">
                       <span>Barcode</span>
                       <input value={productForm.barcode} onChange={(e) => {
@@ -5329,13 +5431,30 @@ export default function Page() {
                     {!userForm.id && <p className="muted-copy form-span">A PIN is enough for this till. An email is for someone who signs in with Google on their own phone. {authUser?.uid === LOCAL_OPERATOR_ID ? 'This counter cannot send that email until the shop is signed in.' : 'AlphaPOS emails the link from the shop address.'}</p>}
                     <label className="field">
                       <span>Role</span>
-                      <select value={userForm.role} onChange={(e) => setUserForm({ ...userForm, role: e.target.value as Role })} required>
+                      <select value={userForm.role} onChange={(e) => { const nextRole = e.target.value as Role; setUserForm({ ...userForm, role: nextRole, permissions: permissionsFor(nextRole) }); }} required>
                         <option value="cashier">Cashier</option>
                         <option value="admin">Admin</option>
                         <option value="manager">Manager</option>
                         <option value="stock">Stock Manager</option>
                       </select>
                     </label>
+                    <div className="permission-grid form-span">
+                      {STAFF_PERMISSIONS.map((key) => (
+                        <label key={key} className="permission-toggle">
+                          <input
+                            type="checkbox"
+                            checked={(userForm.permissions ?? permissionsFor(userForm.role)).includes(key)}
+                            onChange={() => setUserForm((prev) => {
+                              const current = prev.permissions ?? permissionsFor(prev.role);
+                              const permissions = current.includes(key) ? current.filter((item) => item !== key) : [...current, key];
+                              return { ...prev, permissions };
+                            })}
+                          />
+                          <span>{PERMISSION_LABELS[key]}</span>
+                        </label>
+                      ))}
+                    </div>
+                    <p className="muted-copy form-span">These start from the role. Turn any function off, or on. Signing in does not make this person the owner.</p>
                     <label className="field">
                       <span>Branch</span>
                       <select value={userForm.branchId} onChange={(e) => setUserForm({ ...userForm, branchId: e.target.value })} required>

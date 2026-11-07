@@ -31,6 +31,12 @@ test('opening another shop keeps the invited role', () => {
     staffRole: 'cashier',
   }), 'cashier');
   assert.equal(openedRole({
+    userUid: 'cashier',
+    shopOwnerUid: 'owner',
+    membershipRole: 'cashier',
+    staffRole: 'admin',
+  }), 'cashier');
+  assert.equal(openedRole({
     userUid: 'owner',
     shopOwnerUid: 'owner',
     staffRole: 'cashier',
