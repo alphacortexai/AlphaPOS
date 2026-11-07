@@ -52,15 +52,35 @@ export const overlayStock = <T extends { id: string; stock: number }>(products: 
   products.map((product) => (stock[product.id] === undefined ? product : { ...product, stock: stock[product.id] }))
 );
 
-/** Rows saved as an array, or as a map of ids, still belong on the shelf. */
+const asCatalogRecord = (item: unknown): Record<string, unknown> | undefined => (
+  item && typeof item === 'object' && !Array.isArray(item) ? item as Record<string, unknown> : undefined
+);
+
+/** Rows saved as an array, a map of ids, or a JSON string still belong on the shelf. A map key is the id when the row omitted it. */
 export const catalogRows = (value: unknown): Record<string, unknown>[] => {
-  if (Array.isArray(value)) {
-    return value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item));
+  let source = value;
+  if (typeof source === 'string') {
+    try {
+      source = JSON.parse(source) as unknown;
+    } catch {
+      return [];
+    }
   }
-  if (!value || typeof value !== 'object') return [];
-  return Object.values(value as Record<string, unknown>).filter(
-    (item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item) && typeof (item as { id?: unknown }).id === 'string',
-  );
+  if (Array.isArray(source)) {
+    return source.flatMap((item, index) => {
+      const row = asCatalogRecord(item);
+      if (!row) return [];
+      const id = typeof row.id === 'string' && row.id ? row.id : `row-${index + 1}`;
+      return [{ ...row, id }];
+    });
+  }
+  if (!source || typeof source !== 'object') return [];
+  return Object.entries(source as Record<string, unknown>).flatMap(([key, item]) => {
+    const row = asCatalogRecord(item);
+    if (!row || !key) return [];
+    const id = typeof row.id === 'string' && row.id ? row.id : key;
+    return [{ ...row, id }];
+  });
 };
 
 /** The shelf is on the shop document. Receipts and live stock load after; they must not leave the register empty. */
