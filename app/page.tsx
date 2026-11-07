@@ -21,6 +21,7 @@ import { attachProductImages, compressProductPhoto, imageMapChars, isProductImag
 import { commitStockAndRecords, migrateShopLedger, readNamedRecords, readStockMap, setStockQty, writeRecords } from '../lib/pos/ledger';
 import { beginSalesEmailSend, buildSalesDigest, defaultSalesEmailSettings, finishSalesEmailSend, normalizeSalesEmailSettings, previousSalesPeriod, type SalesDigest, type SalesEmailSettings } from '../lib/pos/salesEmail';
 import { billForReceipt, countVariance, creditAllows, dayClose, discountNeedsManager, hashPin, ledgerReadsForRole, needsReorder, overlayStock, pinIsValid, preferRemote, productForReturn, rankProducts, sellingPrice, shopDocumentBody, stockFallback, supplierOwed, tenderTotals, tendersNeedReference, type SupplierBill, type SupplierPayment } from '../lib/pos/shopMath';
+import { chooseShopId, openedRole, ownShopIsReal, shopsForSignedInUser } from '../lib/pos/shopAccess';
 import { completeGoogleRedirect, googleSignInError, startGoogleSignIn } from '../lib/pos/googleSignIn';
 import { completeEmailLinkSignIn, createStaffInviteLink, rememberInviteFromUrl, staffSignInError, takeInvitedShopId } from '../lib/pos/staffInvite';
 import {
@@ -429,23 +430,24 @@ export default function Page() {
     }))
   ), [authUser]);
   const currentShop = availableShops.find((s) => s.ownerUid === activeShopOwnerUid);
-  const isShopOwner = activeShopOwnerUid === authUser?.uid;
-  const actingRole = operator ? (users.find((person) => person.id === operator.id)?.role || role) : role;
-  const seesBooks = role === 'shop_owner' || role === 'admin' || role === 'manager';
-  const seesCost = seesBooks || role === 'stock';
-  const canEditCatalog = role === 'shop_owner' || role === 'admin' || role === 'manager' || role === 'stock';
+  const shopRole = currentShop?.role || role;
+  const isShopOwner = shopRole === 'shop_owner' && activeShopOwnerUid === authUser?.uid;
+  const actingRole = operator ? (users.find((person) => person.id === operator.id)?.role || shopRole) : shopRole;
+  const seesBooks = shopRole === 'shop_owner' || shopRole === 'admin' || shopRole === 'manager';
+  const seesCost = seesBooks || shopRole === 'stock';
+  const canEditCatalog = shopRole === 'shop_owner' || shopRole === 'admin' || shopRole === 'manager' || shopRole === 'stock';
   const canOpenView = useCallback((next: View) => {
     if (next === 'profile' || next === 'sales' || next === 'dashboard' || next === 'products' || next === 'services') return true;
-    if (next === 'sales_history' || next === 'customers') return role !== 'stock';
+    if (next === 'sales_history' || next === 'customers') return shopRole !== 'stock';
     if (next === 'expenses' || next === 'reports' || next === 'accounts') return seesBooks;
     if (next === 'users' || next === 'activity_logs') return seesBooks;
     if (next === 'settings' || next === 'branches' || next === 'assistant') return isShopOwner;
     return false;
-  }, [isShopOwner, role, seesBooks]);
+  }, [isShopOwner, shopRole, seesBooks]);
   useEffect(() => {
     if (!authUser) return;
-    if (!canOpenView(view)) setView(role === 'stock' ? 'products' : 'sales');
-  }, [authUser, canOpenView, role, view]);
+    if (!canOpenView(view)) setView(shopRole === 'stock' ? 'products' : 'sales');
+  }, [authUser, canOpenView, shopRole, view]);
 
   useEffect(() => {
     if (!authUser || authUser.uid !== activeShopOwnerUid) {
@@ -616,27 +618,28 @@ export default function Page() {
       try {
         const normalizedEmail = authUser.email?.trim().toLowerCase() || '';
         const invitedShop = takeInvitedShopId();
-        const memberships: ShopMembership[] = [{ ownerUid: authUser.uid, shopName: 'My Shop', role: 'shop_owner' }];
-        const addMembership = (data: Record<string, unknown>) => {
-          if (!data.ownerUid || data.ownerUid === authUser.uid) return;
-          memberships.push({
-            ownerUid: data.ownerUid as string,
-            shopName: (typeof data.shopName === 'string' && data.shopName) || 'Linked Shop',
-            role: (data.role as Role) || 'cashier',
-          });
-        };
+        const ownSnap = await getDoc(doc(db, 'users', authUser.uid, 'pos', 'data')).catch(() => null);
+        const ownData = ownSnap?.exists() ? ownSnap.data() as Record<string, unknown> : undefined;
+        const linked: { ownerUid?: unknown; shopName?: unknown; role?: unknown }[] = [];
         if (normalizedEmail) {
           try {
             const membershipSnap = await getDocs(query(collection(db, 'shopMemberships'), where('email', '==', normalizedEmail)));
-            membershipSnap.forEach((entry) => addMembership(entry.data()));
+            membershipSnap.forEach((entry) => linked.push(entry.data()));
           } catch {
             if (invitedShop && invitedShop !== authUser.uid) {
               const memberSnap = await getDoc(doc(db, 'shopMemberships', `${invitedShop}_${normalizedEmail}`)).catch(() => null);
-              if (memberSnap?.exists()) addMembership(memberSnap.data());
+              if (memberSnap?.exists()) linked.push(memberSnap.data());
             }
           }
         }
-        const namedMemberships = memberships.length > 1 ? await Promise.all(memberships.map(async (shop) => {
+        const memberships = shopsForSignedInUser({
+          userUid: authUser.uid,
+          ownShopExists: ownShopIsReal(ownData),
+          ownShopName: typeof ownData?.shopName === 'string' ? ownData.shopName : '',
+          memberships: linked,
+        });
+        const namedMemberships = await Promise.all(memberships.map(async (shop) => {
+          if (shop.ownerUid === authUser.uid) return shop;
           try {
             const nameSnap = await getDoc(doc(db, 'users', shop.ownerUid, 'pos', 'data'));
             const storedName = nameSnap.exists() && typeof nameSnap.data().shopName === 'string' ? nameSnap.data().shopName.trim() : '';
@@ -644,11 +647,13 @@ export default function Page() {
           } catch {
             return shop;
           }
-        })) : memberships;
-        setAvailableShops(namedMemberships);
+        }));
         const rememberedShop = readOpenedShop(authUser.uid);
-        const remembered = rememberedShop && namedMemberships.some((shop) => shop.ownerUid === rememberedShop) ? rememberedShop : '';
-        if (namedMemberships.length > 1 && !invitedShop && !remembered && !activeShopOwnerUid) {
+        const invitedMatch = invitedShop && namedMemberships.some((shop) => shop.ownerUid === invitedShop) ? invitedShop : '';
+        const rememberedMatch = rememberedShop && namedMemberships.some((shop) => shop.ownerUid === rememberedShop) ? rememberedShop : '';
+        const activeMatch = activeShopOwnerUid && namedMemberships.some((shop) => shop.ownerUid === activeShopOwnerUid) ? activeShopOwnerUid : '';
+        if (namedMemberships.length > 1 && !invitedMatch && !rememberedMatch && !activeMatch) {
+          setAvailableShops(namedMemberships);
           setAwaitingShopChoice(true);
           setShopsResolved(true);
           hasLoadedUserDataRef.current = false;
@@ -657,9 +662,10 @@ export default function Page() {
         }
         setAwaitingShopChoice(false);
         setShopsResolved(true);
-        const selectedShopOwnerUid = (invitedShop && namedMemberships.some((shop) => shop.ownerUid === invitedShop) ? invitedShop : '') || remembered || activeShopOwnerUid || namedMemberships[0].ownerUid;
+        const selectedShopOwnerUid = chooseShopId(namedMemberships, { invited: invitedMatch, remembered: rememberedMatch, active: activeMatch });
         if (!activeShopOwnerUid) setActiveShopOwnerUid(selectedShopOwnerUid);
-        const selectedShop = namedMemberships.find((s) => s.ownerUid === selectedShopOwnerUid);
+        if (selectedShopOwnerUid) writeOpenedShop(authUser.uid, selectedShopOwnerUid);
+        const selectedShop = namedMemberships.find((shop) => shop.ownerUid === selectedShopOwnerUid);
         const userDataRef = doc(db, 'users', selectedShopOwnerUid, 'pos', 'data');
         const imageRef = doc(db, 'users', selectedShopOwnerUid, 'pos', 'images');
         const activityRef = doc(db, 'users', selectedShopOwnerUid, 'pos', 'activity');
@@ -680,13 +686,29 @@ export default function Page() {
           setCustomerPayments([]);
           shopRevisionRef.current = 0;
           applyRetailCollections();
-          setRole(selectedShop?.role || 'shop_owner');
+          const emptyRole = openedRole({
+            userUid: authUser.uid,
+            shopOwnerUid: selectedShopOwnerUid,
+            membershipRole: selectedShop?.role,
+          });
+          setRole(emptyRole);
+          setAvailableShops(namedMemberships.map((shop) => shop.ownerUid === selectedShopOwnerUid ? { ...shop, role: emptyRole } : shop));
           hasLoadedUserDataRef.current = true;
           isSwitchingShopRef.current = false;
-          setStatus(`Viewing ${selectedShop?.shopName || 'selected shop'} as ${roleLabels[selectedShop?.role || role]}.`);
+          setStatus(`Viewing ${selectedShop?.shopName || 'selected shop'} as ${roleLabels[emptyRole]}.`);
           return true;
         }
         const data = snap.data();
+        const staffHit = (Array.isArray(data.users) ? data.users as { email?: string; role?: string }[] : []).find((person) => person.email?.trim().toLowerCase() === normalizedEmail);
+        const resolvedRole = openedRole({
+          userUid: authUser.uid,
+          shopOwnerUid: selectedShopOwnerUid,
+          membershipRole: selectedShop?.role,
+          staffRole: staffHit?.role,
+        });
+        const shopsWithRole = namedMemberships.map((shop) => shop.ownerUid === selectedShopOwnerUid ? { ...shop, role: resolvedRole, ...(typeof data.shopName === 'string' && data.shopName.trim() ? { shopName: data.shopName.trim() } : {}) } : shop);
+        setAvailableShops(shopsWithRole);
+        setRole(resolvedRole);
         const embeddedProducts = attachProductImages(Array.isArray(data.products) ? data.products : [], imageSnap?.exists() ? imageSnap.data().images : {});
         const embeddedSales = Array.isArray(data.sales) ? data.sales as Sale[] : [];
         const embeddedExpenses = Array.isArray(data.expenses) ? data.expenses as Expense[] : [];
@@ -695,7 +717,7 @@ export default function Page() {
         let ledgerSales = embeddedSales;
         let ledgerExpenses = embeddedExpenses;
         let ledgerPayments = embeddedPayments;
-        const ledgerReads = ledgerReadsForRole(selectedShop?.role || 'shop_owner');
+        const ledgerReads = ledgerReadsForRole(resolvedRole);
         try {
           if (data.ledgerSplit !== true && ledgerReads.migrate) {
             await migrateShopLedger(db, selectedShopOwnerUid, {
@@ -736,7 +758,6 @@ export default function Page() {
         setSuppliers(normalizeSuppliers(data.suppliers));
         setCustomerPayments(ledgerPayments);
         shopRevisionRef.current = Number(data.revision) || 0;
-        setRole(selectedShop?.role || (data.role as Role) || 'shop_owner');
         setShopTimeSettings({
           timezoneOffsetMinutes: typeof data?.shopTimeSettings?.timezoneOffsetMinutes === 'number' ? data.shopTimeSettings.timezoneOffsetMinutes : 0,
           dayStartTime: typeof data?.shopTimeSettings?.dayStartTime === 'string' ? data.shopTimeSettings.dayStartTime : '00:00',
@@ -747,13 +768,9 @@ export default function Page() {
           : null;
         setActivityLogs(trimActivity(sideLogs ?? inlineLogs));
         applyRetailCollections(data as Record<string, unknown>);
-        const storedShopName = typeof data.shopName === 'string' ? data.shopName.trim() : '';
-        if (storedShopName && selectedShopOwnerUid === authUser.uid) {
-          setAvailableShops(namedMemberships.map((shop) => shop.ownerUid === authUser.uid ? { ...shop, shopName: storedShopName } : shop));
-        }
         hasLoadedUserDataRef.current = true;
         isSwitchingShopRef.current = false;
-        setStatus(`Viewing ${selectedShop?.shopName || 'selected shop'} as ${roleLabels[selectedShop?.role || role]}.`);
+        setStatus(`Viewing ${selectedShop?.shopName || 'selected shop'} as ${roleLabels[resolvedRole]}.`);
         return true;
       } catch (error) {
         setShopsResolved(true);
@@ -781,7 +798,6 @@ export default function Page() {
         }
         const trimmedLogs = trimActivity(activityLogs);
         const shopPayload = {
-          role,
           shopName: currentShop?.shopName || 'My Shop',
           branches,
           products: stored.products,
@@ -812,7 +828,7 @@ export default function Page() {
         const userDataRef = doc(db, 'users', activeShopOwnerUid, 'pos', 'data');
         const activityDocRef = doc(db, 'users', activeShopOwnerUid, 'pos', 'activity');
         let nextRevision = shopRevisionRef.current;
-        if (role === 'cashier') {
+        if (shopRole === 'cashier') {
           await runTransaction(db, async (transaction) => {
             const snap = await transaction.get(userDataRef);
             const remoteRevision = snap.exists() ? Number(snap.data().revision) || 0 : 0;
@@ -864,7 +880,7 @@ export default function Page() {
       }
     };
     void saveUserData();
-  }, [activeShopOwnerUid, authUser, customerPayments, db, loadUserData, role, branches, products, services, sales, expenses, expenseGroups, users, activityLogs, shopTimeSettings, accounts, customers, suppliers, supplierBills, supplierPayments, heldTickets, cashSessions, taxSettings, receiptSettings, registerSettings, salesEmailSettings, currentShop?.shopName]);
+  }, [activeShopOwnerUid, authUser, customerPayments, db, loadUserData, shopRole, branches, products, services, sales, expenses, expenseGroups, users, activityLogs, shopTimeSettings, accounts, customers, suppliers, supplierBills, supplierPayments, heldTickets, cashSessions, taxSettings, receiptSettings, registerSettings, salesEmailSettings, currentShop?.shopName]);
 
   const startLocalCounter = () => {
     hasLoadedUserDataRef.current = false;
@@ -1289,7 +1305,7 @@ export default function Page() {
     }
   };
 
-  const canEditSku = role === 'shop_owner' || role === 'admin' || role === 'manager' || role === 'stock';
+  const canEditSku = shopRole === 'shop_owner' || shopRole === 'admin' || shopRole === 'manager' || shopRole === 'stock';
 
   const suggestSku = (name: string, barcode: string, exceptId = '') => (
     nextSku(name || 'Item', reservedProductCodes(products, exceptId, barcode.trim() ? [barcode] : []))
@@ -1485,7 +1501,7 @@ export default function Page() {
     showNotification('Payment recorded.', 'success');
     setPaymentCustomer(null);
   };
-  const showRegisterMargin = role === 'shop_owner' || role === 'admin' || role === 'manager';
+  const showRegisterMargin = shopRole === 'shop_owner' || shopRole === 'admin' || shopRole === 'manager';
 
   const createExpenseGroup = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1529,7 +1545,7 @@ export default function Page() {
 
   const topUpAccount = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!(isShopOwner || role === 'admin')) {
+    if (!(isShopOwner || shopRole === 'admin')) {
       showNotification('Only admin or shop owner can top up accounts.', 'error');
       return;
     }
@@ -1553,7 +1569,7 @@ export default function Page() {
   };
 
   const editAccountOpeningBalance = (accountId: string) => {
-    if (!(isShopOwner || role === 'admin')) {
+    if (!(isShopOwner || shopRole === 'admin')) {
       showNotification('Only admin or shop owner can edit account values.', 'error');
       return;
     }
@@ -1780,7 +1796,7 @@ export default function Page() {
       if (manual) notify('Sign in with Firebase before emailing a sales report. This browser-only counter cannot send email.', 'error', 6000);
       return;
     }
-    if (!(isShopOwner || role === 'admin')) return;
+    if (!(isShopOwner || shopRole === 'admin')) return;
     const period = previousSalesPeriod(salesEmailSettings.cadence, new Date(), shopTimeSettings.timezoneOffsetMinutes);
     if (!manual && salesEmailSettings.lastSentKey === period.key) return;
     const claimKey = `${activeShopOwnerUid}:${period.key}`;
@@ -2773,8 +2789,8 @@ export default function Page() {
     )
   );
 
-  const canManageUsers = (role === 'shop_owner' || role === 'admin') && activeShopOwnerUid === authUser?.uid;
-  const canManageSalesAndExpenses = role === 'shop_owner' || role === 'admin' || role === 'manager';
+  const canManageUsers = (shopRole === 'shop_owner' || shopRole === 'admin') && activeShopOwnerUid === authUser?.uid;
+  const canManageSalesAndExpenses = shopRole === 'shop_owner' || shopRole === 'admin' || shopRole === 'manager';
 
   const deleteTransaction = async (ids: string[]) => {
     if (!canManageSalesAndExpenses) {
@@ -3195,7 +3211,7 @@ export default function Page() {
   const shopSwitchPanel = availableShops.length > 1 ? (
     <div className="shop-switch">
       <h3>Open a different shop</h3>
-      <p className="muted-copy">You are in {currentShop?.shopName || 'this shop'} as {roleLabels[role]}. Choosing another shop is a separate step, so a sale is not recorded in the wrong place.</p>
+      <p className="muted-copy">You are in {currentShop?.shopName || 'this shop'} as {roleLabels[shopRole]}. Choosing another shop is a separate step, so a sale is not recorded in the wrong place.</p>
       <div className="shop-switch-list">
         {availableShops.map((shop) => {
           const open = shop.ownerUid === activeShopOwnerUid;
@@ -3238,7 +3254,7 @@ export default function Page() {
           </h2>
           <p className="rail-shop">
             <strong>{currentShop?.shopName || 'My Shop'}</strong>
-            <span>{roleLabels[role]}</span>
+            <span>{roleLabels[shopRole]}</span>
           </p>
           {availableShops.length > 1 && (
             <button type="button" className="rail-change" onClick={() => { setView('profile'); setIsSidebarOpen(false); }}>Change shop</button>
@@ -3253,8 +3269,8 @@ export default function Page() {
         <nav className="sidebar-nav" aria-label="Shop">
           <div className="nav-group">
             <button className={`nav-button ${view === 'dashboard' ? 'active' : ''}`} onClick={() => { setView('dashboard'); setIsSidebarOpen(false); }}>Today</button>
-            {role !== 'stock' && <button className={`nav-button ${view === 'sales_history' ? 'active' : ''}`} onClick={() => { setView('sales_history'); setIsSidebarOpen(false); }}>Sales</button>}
-            {role !== 'stock' && <button className={`nav-button ${view === 'customers' ? 'active' : ''}`} onClick={() => { setView('customers'); setIsSidebarOpen(false); }}>Customers</button>}
+            {shopRole !== 'stock' && <button className={`nav-button ${view === 'sales_history' ? 'active' : ''}`} onClick={() => { setView('sales_history'); setIsSidebarOpen(false); }}>Sales</button>}
+            {shopRole !== 'stock' && <button className={`nav-button ${view === 'customers' ? 'active' : ''}`} onClick={() => { setView('customers'); setIsSidebarOpen(false); }}>Customers</button>}
           </div>
 
           <div className="nav-group">
@@ -3326,7 +3342,7 @@ export default function Page() {
                  view === 'assistant' ? 'Assistant' :
                  'Profile'}
               </h1>
-              <p className="header-kicker"><strong>{currentShop?.shopName || 'My Shop'}</strong> · {roleLabels[role]}</p>
+              <p className="header-kicker"><strong>{currentShop?.shopName || 'My Shop'}</strong> · {roleLabels[shopRole]}</p>
             </div>
           </div>
           {status && /fail|error|could not/i.test(status) && (
@@ -3364,11 +3380,13 @@ export default function Page() {
                       <strong>{formatUGX(dashboardMetrics.sales.value)}</strong>
                       <span className="stat-note">{dashboardMetrics.receipts} receipt{dashboardMetrics.receipts === 1 ? '' : 's'}</span>
                     </article>
+                    {seesBooks && (
                     <article className="stat-card">
                       <p>Left after costs</p>
                       <strong className={dashboardMetrics.netProfit.value >= 0 ? 'is-positive' : 'is-negative'}>{formatUGX(dashboardMetrics.netProfit.value)}</strong>
                       <span className="stat-note">After tax, cost, and expenses</span>
                     </article>
+                    )}
                     {seesBooks && (
                       <article className="stat-card">
                         <p>Stock worth</p>
@@ -3753,8 +3771,8 @@ export default function Page() {
                     <th>Branch</th>
                     <th>Type</th>
                     <th className="num">Price</th>
-                    <th className="num">Cost model</th>
-                    <th>Actions</th>
+                    {seesCost && <th className="num">Cost model</th>}
+                    {canEditCatalog && <th>Actions</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -3764,11 +3782,13 @@ export default function Page() {
                       <td data-label="Branch">{branchMap[service.branchId]}</td>
                       <td data-label="Type">{service.serviceType === 'direct_cost' ? 'Each sale' : 'Monthly'}</td>
                       <td data-label="Price" className="num">{formatUGX(service.salePrice)}</td>
+                      {seesCost && (
                       <td data-label="Cost" className="num">
                         {service.serviceType === 'direct_cost'
                           ? formatUGX(service.directCost)
                           : `${formatUGX(service.monthlySharedCost)} / month`}
                       </td>
+                      )}
                       <td data-label="">
                         {canEditCatalog && <>
                         <button className="edit-btn" onClick={() => { setServiceForm({
@@ -3786,7 +3806,7 @@ export default function Page() {
                     </tr>
                   )) : (
                     <tr>
-                      <td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>
+                      <td colSpan={4 + (seesCost ? 1 : 0) + (canEditCatalog ? 1 : 0)} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>
                         No services added yet.
                       </td>
                     </tr>
@@ -4453,7 +4473,7 @@ export default function Page() {
                 <div className="fact-list">
                   <div><span>Name</span><strong>{currentShop?.shopName || 'My Shop'}</strong></div>
                   <div><span>Branches</span><strong>{branches.length}</strong></div>
-                  <div><span>Your role</span><strong>{roleLabels[role]}</strong></div>
+                  <div><span>Your role</span><strong>{roleLabels[shopRole]}</strong></div>
                 </div>
                 {isShopOwner && (
                   <button className="primary" onClick={() => { setShopNameForm(currentShop?.shopName || ''); setShowSettingsModal(true); }}>Edit shop name</button>
@@ -4699,7 +4719,7 @@ export default function Page() {
             <div className="card">
               <h3>Where money sits</h3>
               <p className="muted-copy">{registerSettings.mode === 'drawer' ? 'Each sale and expense updates one of these balances. Cash in the drawer is counted on the register.' : 'Each sale and expense updates one of these balances.'}</p>
-              {(isShopOwner || role === 'admin') && (
+              {(isShopOwner || shopRole === 'admin') && (
                 <details className="quiet-fold">
                   <summary>Add or adjust a balance</summary>
                   <form onSubmit={createAccount} className="form" style={{ marginTop: '1rem' }}>
@@ -4730,7 +4750,7 @@ export default function Page() {
               )}
               <div className="table-wrap" style={{ marginTop: '1rem' }}>
                 <table className="data-table">
-                  <thead><tr><th>Account</th><th>Type</th><th className="num">Opening balance</th><th className="num">Current balance</th>{(isShopOwner || role === 'admin') && <th>Actions</th>}</tr></thead>
+                  <thead><tr><th>Account</th><th>Type</th><th className="num">Opening balance</th><th className="num">Current balance</th>{(isShopOwner || shopRole === 'admin') && <th>Actions</th>}</tr></thead>
                   <tbody>
                     {accounts.map((account) => (
                       <tr key={account.id}>
@@ -4738,7 +4758,7 @@ export default function Page() {
                         <td data-label="Type">{account.isDefault ? 'Default' : 'Custom'}</td>
                         <td data-label="Opening balance" className="num">{formatUGX(account.openingBalance || 0)}</td>
                         <td data-label="Current balance" className="num">{formatUGX(accountBalances.get(account.id) || 0)}</td>
-                        {(isShopOwner || role === 'admin') && (
+                        {(isShopOwner || shopRole === 'admin') && (
                           <td data-label="">
                             <button type="button" className="edit-btn" onClick={() => editAccountOpeningBalance(account.id)}>Edit value</button>
                           </td>
@@ -4796,7 +4816,7 @@ export default function Page() {
               <div className="fact-list">
                 <div><span>Name</span><strong>{authUser?.displayName}</strong></div>
                 <div><span>Email</span><strong>{authUser?.email}</strong></div>
-                <div><span>Role</span><strong>{roleLabels[role]}</strong></div>
+                <div><span>Role</span><strong>{roleLabels[shopRole]}</strong></div>
                 <div><span>Shop</span><strong>{currentShop?.shopName || 'My Shop'}</strong></div>
               </div>
             </div>
