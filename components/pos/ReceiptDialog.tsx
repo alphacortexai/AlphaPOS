@@ -2,7 +2,7 @@
 
 import Image from 'next/image';
 import type { ReceiptModel } from '../../lib/pos/retail';
-import { printReceipt } from '../../lib/pos/retail';
+import { printReceipt, shareReceipt, whatsAppReceiptLink } from '../../lib/pos/retail';
 
 export default function ReceiptDialog({
   receipt,
@@ -58,6 +58,8 @@ export default function ReceiptDialog({
         </article>
         <div className="pos-actions">
           <button type="button" className="edit-btn" onClick={onClose}>New sale</button>
+          <button type="button" className="edit-btn" onClick={() => { void shareReceipt(receipt, formatMoney); }}>Share</button>
+          <a className="edit-btn" href={whatsAppReceiptLink(receipt, formatMoney)} target="_blank" rel="noreferrer">WhatsApp</a>
           <button type="button" className="primary" onClick={() => printReceipt(receipt, formatMoney)}>Print receipt</button>
         </div>
       </div>

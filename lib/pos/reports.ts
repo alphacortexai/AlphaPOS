@@ -12,6 +12,7 @@ export type PeriodSale = {
   cost: number;
   taxAmount?: number;
   createdAt: string;
+  voidedAt?: string;
 };
 
 export type PeriodExpense = {
@@ -142,7 +143,7 @@ const totalsFor = (periodSales: PeriodSale[], periodExpenses: PeriodExpense[]): 
 /** Sales the customer paid, minus tax and the cost recorded on each line, then minus expenses. */
 export const summarizePeriod = (sales: PeriodSale[], expenses: PeriodExpense[], start: Date, end: Date): ReportTotals => (
   totalsFor(
-    sales.filter((sale) => instantInRange(sale.createdAt, start, end)),
+    sales.filter((sale) => !sale.voidedAt && instantInRange(sale.createdAt, start, end)),
     expenses.filter((expense) => instantInRange(expense.createdAt, start, end)),
   )
 );
@@ -155,7 +156,7 @@ export const summarizeBusinessDays = (sales: PeriodSale[], expenses: PeriodExpen
     return !Number.isNaN(time.getTime()) && wanted.has(businessDayKey(time, clock));
   };
   return totalsFor(
-    sales.filter((sale) => onWantedDay(sale.createdAt)),
+    sales.filter((sale) => !sale.voidedAt && onWantedDay(sale.createdAt)),
     expenses.filter((expense) => onWantedDay(expense.createdAt)),
   );
 };

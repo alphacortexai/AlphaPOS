@@ -100,6 +100,7 @@ export type CustomerPaymentRecord = {
   id: string;
   customerName: string;
   customerPhone?: string;
+  customerId?: string;
   amount: number;
   method: Exclude<PaymentMethod, 'on_account'>;
   createdAt: string;
@@ -141,6 +142,7 @@ export const normalizeCustomerPayments = (value: unknown): CustomerPaymentRecord
       id: record.id,
       customerName: name,
       ...(phone ? { customerPhone: phone } : {}),
+      ...(typeof record.customerId === 'string' && record.customerId ? { customerId: record.customerId } : {}),
       amount,
       method: method as CustomerPaymentRecord['method'],
       createdAt: typeof record.createdAt === 'string' ? record.createdAt : new Date().toISOString(),

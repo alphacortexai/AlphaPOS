@@ -40,6 +40,9 @@ export type Customer = {
   phone?: string;
   notes?: string;
   createdAt: string;
+  /** Omitted means no cap. Zero means this customer cannot buy on account. */
+  creditLimit?: number;
+  priceList?: 'retail' | 'wholesale';
 };
 
 export type CashSession = {
@@ -155,6 +158,8 @@ export const normalizeCustomers = (value: unknown): Customer[] => {
       name: record.name.trim().slice(0, 100),
       ...(typeof record.phone === 'string' && record.phone.trim() ? { phone: record.phone.trim().slice(0, 40) } : {}),
       ...(typeof record.notes === 'string' && record.notes.trim() ? { notes: record.notes.trim().slice(0, 240) } : {}),
+      ...(Number.isFinite(Number(record.creditLimit)) && Number(record.creditLimit) >= 0 ? { creditLimit: roundMoney(Number(record.creditLimit)) } : {}),
+      ...(record.priceList === 'wholesale' ? { priceList: 'wholesale' as const } : {}),
       createdAt: typeof record.createdAt === 'string' ? record.createdAt : new Date().toISOString(),
     }];
   });
@@ -279,16 +284,21 @@ type SaleLike = {
   paymentMethod?: PaymentMethod;
   tenders?: Tender[];
   cashSessionId?: string;
+  voidedAt?: string;
+  customerId?: string;
+  customerName?: string;
+  customerPhone?: string;
+  productId?: string;
 };
 
 export const transactionKey = (sale: { id: string; transactionId?: string }) => sale.transactionId || sale.id;
 
 export const returnableQuantity = (sales: SaleLike[], transactionId: string, itemName: string, type: string) => {
   const sold = sales
-    .filter((sale) => transactionKey(sale) === transactionId && sale.itemName === itemName && sale.type === type && sale.saleKind !== 'return' && sale.qty > 0)
+    .filter((sale) => !sale.voidedAt && transactionKey(sale) === transactionId && sale.itemName === itemName && sale.type === type && sale.saleKind !== 'return' && sale.qty > 0)
     .reduce((sum, sale) => sum + sale.qty, 0);
   const returned = sales
-    .filter((sale) => sale.returnOfTransactionId === transactionId && sale.itemName === itemName && sale.type === type && sale.saleKind === 'return')
+    .filter((sale) => !sale.voidedAt && sale.returnOfTransactionId === transactionId && sale.itemName === itemName && sale.type === type && sale.saleKind === 'return')
     .reduce((sum, sale) => sum + Math.abs(sale.qty), 0);
   return Math.max(0, sold - returned);
 };
@@ -308,21 +318,23 @@ export const receiptPrefix = (date: Date, kind: 'sale' | 'return') => {
 };
 
 export const sessionCashTaken = (sales: SaleLike[], sessionId: string) => sales
-  .filter((sale) => sale.cashSessionId === sessionId)
+  .filter((sale) => !sale.voidedAt && sale.cashSessionId === sessionId)
   .reduce((sum, sale) => {
     if (sale.tenders && sale.tenders.length > 0) return sum + cashPortion(sale.tenders);
     if ((sale.paymentMethod || 'cash') === 'cash') return sum + sale.amount;
     return sum;
   }, 0);
 
-export const customerAccountBalance = (sales: SaleLike[], customerName: string, customerPhone?: string) => {
+export const customerAccountBalance = (sales: SaleLike[], customerName: string, customerPhone?: string, customerId?: string) => {
   const name = customerName.trim().toLowerCase();
   const phone = customerPhone?.trim();
   return sales.reduce((sum, sale) => {
-    const saleRecord = sale as SaleLike & { customerName?: string; customerPhone?: string };
-    const sameName = saleRecord.customerName?.trim().toLowerCase() === name;
-    const samePhone = phone && saleRecord.customerPhone?.trim() === phone;
-    if (!sameName && !samePhone) return sum;
+    if (sale.voidedAt) return sum;
+    const sameId = Boolean(customerId && sale.customerId === customerId);
+    const sameName = sale.customerName?.trim().toLowerCase() === name;
+    const samePhone = Boolean(phone && sale.customerPhone?.trim() === phone);
+    const legacy = !sale.customerId && (sameName || samePhone);
+    if (!sameId && !legacy) return sum;
     if (sale.tenders && sale.tenders.length > 0) {
       return sum + sale.tenders.filter((tender) => tender.method === 'on_account').reduce((tenderSum, tender) => tenderSum + tender.amount, 0);
     }
@@ -420,6 +432,51 @@ const escapeHtml = (value: string) => value
   .replaceAll('<', '&lt;')
   .replaceAll('>', '&gt;')
   .replaceAll('"', '&quot;');
+
+export const receiptPlainText = (receipt: ReceiptModel, formatMoney: (value: number) => string) => {
+  const lines = receipt.lines.map((line) => `${line.name} × ${line.qty}  ${formatMoney(line.amount)}`).join('\n');
+  const tenders = receipt.tenders.map((tender) => `${tender.label}  ${formatMoney(tender.amount)}${tender.reference ? `  ${tender.reference}` : ''}`).join('\n');
+  return [
+    receipt.shopName,
+    receipt.kind === 'return' ? 'Credit note' : 'Receipt',
+    receipt.receiptNumber,
+    new Date(receipt.createdAt).toLocaleString(),
+    receipt.cashier,
+    receipt.customerName || '',
+    lines,
+    `Total  ${formatMoney(receipt.total)}`,
+    tenders,
+    receipt.footer || '',
+  ].filter(Boolean).join('\n');
+};
+
+export const shareReceipt = async (receipt: ReceiptModel, formatMoney: (value: number) => string) => {
+  const text = receiptPlainText(receipt, formatMoney);
+  if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
+    await navigator.share({ title: receipt.receiptNumber, text });
+    return 'shared' as const;
+  }
+  if (typeof navigator !== 'undefined' && navigator.clipboard) {
+    await navigator.clipboard.writeText(text);
+    return 'copied' as const;
+  }
+  return 'unavailable' as const;
+};
+
+export const whatsAppReceiptLink = (receipt: ReceiptModel, formatMoney: (value: number) => string) => (
+  `https://wa.me/?text=${encodeURIComponent(receiptPlainText(receipt, formatMoney))}`
+);
+
+export const printPlain = (title: string, text: string) => {
+  const popup = window.open('', 'alphapos-slip', 'width=440,height=760');
+  if (!popup) return false;
+  popup.document.open();
+  popup.document.write(`<!doctype html><html><head><title>${title}</title><style>body{font-family:ui-sans-serif,system-ui,sans-serif;margin:0}.paper{width:80mm;padding:8mm 6mm;white-space:pre-wrap;font-size:12px}</style></head><body><div class="paper">${text.replaceAll('&', '&amp;').replaceAll('<', '&lt;')}</div></body></html>`);
+  popup.document.close();
+  popup.focus();
+  popup.print();
+  return true;
+};
 
 export const printReceipt = (receipt: ReceiptModel, formatMoney: (value: number) => string) => {
   const popup = window.open('', 'alphapos-receipt', 'width=440,height=760');
