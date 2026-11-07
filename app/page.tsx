@@ -22,7 +22,7 @@ import { commitStockAndRecords, migrateShopLedger, readNamedRecords, readStockMa
 import { beginSalesEmailSend, buildSalesDigest, defaultSalesEmailSettings, finishSalesEmailSend, normalizeSalesEmailSettings, previousSalesPeriod, type SalesDigest, type SalesEmailSettings } from '../lib/pos/salesEmail';
 import { billForReceipt, countVariance, creditAllows, dayClose, discountNeedsManager, hashPin, needsReorder, overlayStock, pinIsValid, productForReturn, rankProducts, sellingPrice, shopDocumentBody, stockFallback, supplierOwed, tenderTotals, tendersNeedReference, type SupplierBill, type SupplierPayment } from '../lib/pos/shopMath';
 import { chooseShopId, ownShopIsReal, shopsForSignedInUser } from '../lib/pos/shopAccess';
-import { booksForPermissions, PERMISSION_LABELS, permissionsFor, permissionsMatchPreset, recordsForAccess, resolveStaffAccess, STAFF_PERMISSIONS, type StaffPermission } from '../lib/pos/staffAccess';
+import { booksForPermissions, PERMISSION_LABELS, permissionsFor, permissionsMatchPreset, recordsForAccess, resolveStaffAccess, rowsForBranch, STAFF_PERMISSIONS, type StaffPermission } from '../lib/pos/staffAccess';
 import { completeGoogleRedirect, googleSignInError, startGoogleSignIn } from '../lib/pos/googleSignIn';
 import { completeEmailLinkSignIn, createStaffInviteLink, readInvitedEmail, readInvitedShopId, rememberInviteFromUrl, staffSignInError, takeInvitedShopId } from '../lib/pos/staffInvite';
 import {
@@ -440,7 +440,7 @@ export default function Page() {
     [currentShop?.permissions, isShopOwner, shopRole],
   );
   const allow = useCallback((key: StaffPermission) => granted.includes(key), [granted]);
-  const scopeBranchId = !isShopOwner && !allow('allBranches') ? (currentShop?.branchId || '') : '';
+  const staffBranchId = !isShopOwner && !allow('allBranches') ? (currentShop?.branchId || '') : '';
   const actingRole = operator ? (users.find((person) => person.id === operator.id)?.role || shopRole) : shopRole;
   const seesBooks = allow('reports') || allow('expenses') || allow('accounts');
   const seesCost = allow('seeCost');
@@ -1174,10 +1174,10 @@ export default function Page() {
 
   // Filtered products for inventory
   const filteredProducts = useMemo(() => {
-    return products.filter(p => {
+    return rowsForBranch(products, staffBranchId, branches.length).filter(p => {
       const query = productSearchQuery.trim().toLowerCase();
       const matchesSearch = [p.name, p.sku, p.barcode, p.category].some((value) => value?.toLowerCase().includes(query));
-      const matchesBranch = (!scopeBranchId || p.branchId === scopeBranchId) && (!productBranchFilter || p.branchId === productBranchFilter);
+      const matchesBranch = !productBranchFilter || p.branchId === productBranchFilter;
       const matchesStock = 
         productStockFilter === 'all' ? true :
         productStockFilter === 'low' ? stockIsLow(p) :
@@ -1185,15 +1185,15 @@ export default function Page() {
         p.stock === 0;
       return matchesSearch && matchesBranch && matchesStock;
     });
-  }, [products, productSearchQuery, productBranchFilter, productStockFilter, scopeBranchId]);
+  }, [branches.length, products, productSearchQuery, productBranchFilter, productStockFilter, staffBranchId]);
 
   const counterProducts = useMemo(
-    () => (scopeBranchId ? products.filter((product) => product.branchId === scopeBranchId) : products),
-    [products, scopeBranchId],
+    () => rowsForBranch(products, staffBranchId, branches.length),
+    [branches.length, products, staffBranchId],
   );
   const visibleServices = useMemo(
-    () => (scopeBranchId ? services.filter((service) => service.branchId === scopeBranchId) : services),
-    [scopeBranchId, services],
+    () => rowsForBranch(services, staffBranchId, branches.length),
+    [branches.length, services, staffBranchId],
   );
   const shopStockWorth = useMemo(() => stockWorth(counterProducts), [counterProducts]);
   const shelfStockWorth = useMemo(
@@ -2746,8 +2746,7 @@ export default function Page() {
     const selectedKey = salesDateFilter || businessDayKey(new Date(), shopClock);
     const selectedStart = businessDayRange(selectedKey, shopClock).start;
 
-    return sales.filter((sale) => {
-      if (scopeBranchId && sale.branchId !== scopeBranchId) return false;
+    return rowsForBranch(sales, staffBranchId, branches.length).filter((sale) => {
       const saleDate = new Date(sale.createdAt);
       if (Number.isNaN(saleDate.getTime())) return false;
       const saleKey = businessDayKey(saleDate, shopClock);
@@ -2766,7 +2765,7 @@ export default function Page() {
       const rangeEnd = businessDayRange(shiftDayKey(salesRangeEnd, 1), shopClock).start;
       return saleDate >= rangeStart && saleDate < rangeEnd;
     });
-  }, [sales, salesDateFilter, salesHistoryViewMode, salesRangeEnd, salesRangeStart, scopeBranchId, shopClock]);
+  }, [branches.length, sales, salesDateFilter, salesHistoryViewMode, salesRangeEnd, salesRangeStart, staffBranchId, shopClock]);
 
   const salesHistoryPageSize = 8;
   const sharedTablePageSize = 10;
@@ -2823,14 +2822,14 @@ export default function Page() {
   };
 
   const filteredExpenses = useMemo(() => {
-    const scoped = scopeBranchId ? expenses.filter((expense) => expense.branchId === scopeBranchId) : expenses;
+    const scoped = rowsForBranch(expenses, staffBranchId, branches.length);
     if (expensesViewMode === 'all') return scoped;
     return scoped.filter((expense) => {
       const expenseDate = new Date(expense.createdAt);
       const selectedDay = new Date(`${expensesDayFilter}T00:00:00`);
       return expenseDate.toDateString() === selectedDay.toDateString();
     });
-  }, [expenses, expensesDayFilter, expensesViewMode, scopeBranchId]);
+  }, [branches.length, expenses, expensesDayFilter, expensesViewMode, staffBranchId]);
 
   useEffect(() => {
     setExpensesPage(1);
