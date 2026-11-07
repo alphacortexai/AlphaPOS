@@ -257,6 +257,17 @@ export const preferRemote = <T extends { id: string }>(embedded: T[], remote: T[
   remote.forEach((item) => map.set(item.id, item));
   return [...map.values()];
 };
+/** Lowercase emails saved on the shop. Rules allow these people to read products and branches. */
+export const inviteEmails = (people: { email?: string }[]) => {
+  const emails: string[] = [];
+  people.forEach((person) => {
+    const email = person.email?.trim().toLowerCase() || '';
+    if (!email.includes('@') || emails.includes(email)) return;
+    emails.push(email);
+  });
+  return emails;
+};
+
 export const shopDocumentBody = <T extends Record<string, unknown>>(payload: T) => {
   const rest = { ...payload };
   delete rest.sales;

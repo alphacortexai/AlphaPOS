@@ -13,23 +13,27 @@ service cloud.firestore {
     function sameMail(stored) {
       return stored is string && stored != '' && (stored == rawEmail() || stored.lower() == email());
     }
-    function member(owner) {
-      return get(/databases/$(database)/documents/shopMemberships/$(owner + '_' + email()));
-    }
     function staffGrant(owner) {
+      let grant = get(/databases/$(database)/documents/shopMemberships/$(owner + '_' + email()));
       return email() != ''
-        && member(owner).exists
-        && sameMail(member(owner).data.email)
+        && grant.exists
+        && sameMail(grant.data.email)
         && (
-          !('ownerUid' in member(owner).data)
-          || member(owner).data.ownerUid == null
-          || member(owner).data.ownerUid == owner
+          !('ownerUid' in grant.data)
+          || grant.data.ownerUid == null
+          || grant.data.ownerUid == owner
         );
     }
+    function listedOnShop() {
+      return email() != ''
+        && resource.data.get('staffEmails', []) is list
+        && email() in resource.data.get('staffEmails', []);
+    }
     function role(owner) {
+      let grant = get(/databases/$(database)/documents/shopMemberships/$(owner + '_' + email()));
       return request.auth.uid == owner
         ? 'shop_owner'
-        : (!member(owner).exists ? '' : member(owner).data.role);
+        : (email() != '' && grant.exists && sameMail(grant.data.email) ? grant.data.role : '');
     }
     function isStaff(owner) {
       return signedIn() && (request.auth.uid == owner || staffGrant(owner));
@@ -43,10 +47,11 @@ service cloud.firestore {
         || (r == 'stock' && key in ['products', 'editCatalog', 'seeCost', 'allBranches']);
     }
     function hasPerm(owner, key) {
+      let grant = get(/databases/$(database)/documents/shopMemberships/$(owner + '_' + email()));
       return request.auth.uid == owner
-        || (staffGrant(owner) && (
-          (member(owner).data.permissions is list && key in member(owner).data.permissions)
-          || (!(member(owner).data.permissions is list) && roleHas(owner, key))
+        || (email() != '' && grant.exists && sameMail(grant.data.email) && (
+          (grant.data.permissions is list && key in grant.data.permissions)
+          || (!(grant.data.permissions is list) && roleHas(owner, key))
         ));
     }
     function changedKeys() {
@@ -76,8 +81,8 @@ service cloud.firestore {
     }
 
     match /users/{owner}/pos/data {
-      // Products and branches are fields on this document. A matching invite can read them.
-      allow read: if isStaff(owner);
+      // Products and branches live on this document. The owner, an invite, or an email saved on the shop may read them.
+      allow read: if signedIn() && (request.auth.uid == owner || listedOnShop() || staffGrant(owner));
       allow create: if signedIn() && request.auth.uid == owner;
       allow update: if (signedIn() && request.auth.uid == owner) || (isStaff(owner) && shopPatchAllowed(owner));
       allow delete: if signedIn() && request.auth.uid == owner;

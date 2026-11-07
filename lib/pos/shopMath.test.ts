@@ -1,6 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { billForReceipt, creditAllows, dayClose, ledgerReadsForRole, needsReorder, overlayStock, preferShopCatalog, productForReturn, rankProducts, shopCatalog, shopDocumentBody, supplierOwed, tenderTotals, tendersNeedReference } from './shopMath';
+import { billForReceipt, creditAllows, dayClose, inviteEmails, ledgerReadsForRole, needsReorder, overlayStock, preferShopCatalog, productForReturn, rankProducts, shopCatalog, shopDocumentBody, supplierOwed, tenderTotals, tendersNeedReference } from './shopMath';
+
+test('invited emails are saved on the shop so a cashier can read the shelf', () => {
+  assert.deepEqual(inviteEmails([
+    { email: 'Cashier@Shop.test' },
+    { email: 'cashier@shop.test' },
+    { email: '' },
+    { email: 'manager@shop.test' },
+  ]), ['cashier@shop.test', 'manager@shop.test']);
+  const body = shopDocumentBody({ shopName: 'C & E', staffEmails: ['cashier@shop.test'], sales: [{ id: '1' }] });
+  assert.deepEqual(body.staffEmails, ['cashier@shop.test']);
+});
 
 test('a cashier loads the shelf and the receipts, not the books', () => {
   const cashier = ledgerReadsForRole('cashier');
