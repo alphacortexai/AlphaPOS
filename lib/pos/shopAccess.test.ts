@@ -46,8 +46,17 @@ test('opening another shop keeps the invited role', () => {
   }), 'shop_owner');
 });
 
-test('a blank browser shop is not treated as a real business', () => {
+test('a copied shop name does not make an invited person the owner', () => {
   assert.equal(ownShopIsReal(undefined), false);
   assert.equal(ownShopIsReal({ shopName: 'My Shop', products: [], sales: [] }), false);
-  assert.equal(ownShopIsReal({ shopName: 'C & E Supplies' }), true);
+  assert.equal(ownShopIsReal({ shopName: 'C & E Supplies', branches: [{ id: 'main', name: 'Main Branch' }] }), false);
+  assert.equal(ownShopIsReal({ shopName: 'C & E Supplies', products: [{ id: 'soap' }] }), true);
+  const shops = shopsForSignedInUser({
+    userUid: 'cashier',
+    ownShopExists: ownShopIsReal({ shopName: 'C & E Supplies', products: [] }),
+    ownShopName: 'C & E Supplies',
+    memberships: [{ ownerUid: 'owner', shopName: 'C & E Supplies', role: 'manager' }],
+  });
+  assert.deepEqual(shops.map((shop) => ({ ownerUid: shop.ownerUid, role: shop.role })), [{ ownerUid: 'owner', role: 'manager' }]);
+  assert.equal(chooseShopId(shops, { remembered: 'cashier', active: 'cashier' }), 'owner');
 });

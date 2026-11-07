@@ -473,6 +473,9 @@ export default function RegisterDesk({
             </div>
           )}
         </div>
+        {Object.keys(branchNames).length > 0 && (
+          <p className="pos-branches">Branches: {[...new Set(Object.values(branchNames))].filter(Boolean).join(', ')}</p>
+        )}
         {cameraOn && (
           <div className="pos-camera">
             <video ref={videoRef} muted playsInline />
@@ -535,7 +538,7 @@ export default function RegisterDesk({
                         <strong>{formatMoney(product.salePrice)}</strong>
                         <em className={out ? 'is-out' : low ? 'is-low' : ''}>{out ? 'Out of stock' : low ? `${product.stock} low` : `${product.stock} in stock`}</em>
                       </span>
-                      {Object.keys(branchNames).length > 1 && <span className="pos-tile-meta">{branchNames[product.branchId]}</span>}
+                      {branchNames[product.branchId] && <span className="pos-tile-meta">{branchNames[product.branchId]}</span>}
                     </span>
                   </span>
                 </button>

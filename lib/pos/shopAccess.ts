@@ -39,12 +39,10 @@ export const shopsForSignedInUser = (input: {
   return [own];
 };
 
+/** A name copied from an invite is not a business. Products, services, or sales are. */
 export const ownShopIsReal = (data: Record<string, unknown> | undefined) => {
   if (!data) return false;
-  const name = typeof data.shopName === 'string' ? data.shopName.trim() : '';
-  const products = catalogCount(data.products);
-  const sales = catalogCount(data.sales);
-  return (name !== '' && name !== 'My Shop') || products > 0 || sales > 0;
+  return catalogCount(data.products) > 0 || catalogCount(data.services) > 0 || catalogCount(data.sales) > 0;
 };
 
 export const chooseShopId = (
