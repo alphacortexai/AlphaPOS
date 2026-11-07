@@ -1,9 +1,9 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type Dispatch, type SetStateAction } from 'react';
-import { firebaseApp } from '../lib.firebase';
+import { db as firestoreDb, firebaseApp, firebaseConfig } from '../lib.firebase';
 import { getAuth, onAuthStateChanged, signOut } from 'firebase/auth';
-import { collection, deleteDoc, doc, getDoc, getDocFromServer, getDocs, getFirestore, onSnapshot, query, runTransaction, serverTimestamp, setDoc, where } from 'firebase/firestore';
+import { collection, deleteDoc, doc, getDoc, getDocFromServer, getDocs, onSnapshot, query, runTransaction, serverTimestamp, setDoc, where } from 'firebase/firestore';
 import Logo from '../components/brand/Logo';
 import CatalogAssistant, { type CatalogCategoryRow, type CatalogCreateRow, type CatalogPriceRow } from '../components/pos/CatalogAssistant';
 import RegisterDesk from '../components/pos/RegisterDesk';
@@ -22,6 +22,7 @@ import { commitStockAndRecords, migrateShopLedger, readNamedRecords, readStockMa
 import { beginSalesEmailSend, buildSalesDigest, defaultSalesEmailSettings, finishSalesEmailSend, normalizeSalesEmailSettings, previousSalesPeriod, type SalesDigest, type SalesEmailSettings } from '../lib/pos/salesEmail';
 import { billForReceipt, countVariance, creditAllows, dayClose, discountNeedsManager, hashPin, needsReorder, overlayStock, pinIsValid, preferShopCatalog, productForReturn, rankProducts, sellingPrice, shopCatalog, shopDocumentBody, stockFallback, supplierOwed, tenderTotals, tendersNeedReference, type SupplierBill, type SupplierPayment } from '../lib/pos/shopMath';
 import { accessDenied, chooseShopId, ownShopIsReal, shopsForSignedInUser } from '../lib/pos/shopAccess';
+import { fetchFirestoreDocument, fetchMembershipsByEmail, firstShopRecord, SHOP_CONNECTION_MESSAGE, ShopReadError, shopDocumentPath, withTimeout } from '../lib/pos/shopRead';
 import { booksForPermissions, canViewShelf, PERMISSION_LABELS, permissionsFor, permissionsMatchPreset, recordsForAccess, registerCatalog, resolveStaffAccess, rowsForBranch, shelfForInvite, STAFF_PERMISSIONS, type StaffPermission } from '../lib/pos/staffAccess';
 import { completeGoogleRedirect, googleSignInError, startGoogleSignIn } from '../lib/pos/googleSignIn';
 import { clearInviteMemory, completeEmailLinkSignIn, createStaffInviteLink, readInvitedEmail, readInvitedShopId, rememberInviteFromUrl, staffSignInError, takeInvitedShopId } from '../lib/pos/staffInvite';
@@ -431,7 +432,7 @@ export default function Page() {
     }
     return item.unitPrice;
   }, []);
-  const db = firebaseApp ? getFirestore(firebaseApp) : null;
+  const db = firestoreDb;
   const formatUGX = (value: number) => `UGX ${new Intl.NumberFormat('en-UG', { maximumFractionDigits: 0 }).format(Math.round(value))}`;
   const ensureDefaultCashAccount = useCallback((existingAccounts: Account[]) => (
     withTenderAccounts(existingAccounts, () => ({
@@ -660,23 +661,47 @@ export default function Page() {
           hasLoadedUserDataRef.current = false;
           return false;
         }
-        const readShopData = async (ownerUid: string) => {
+        const projectId = firebaseConfig.projectId || '';
+        let connectionDropped = false;
+        let rulesBlocked = false;
+        const restToken = async () => {
+          if (!firebaseApp) return '';
+          const user = getAuth(firebaseApp).currentUser;
+          if (!user) return '';
+          return withTimeout(user.getIdToken(), 8000, SHOP_CONNECTION_MESSAGE).catch(() => '');
+        };
+        const noteReadError = (error: unknown) => {
+          if (accessDenied(error) || (error instanceof ShopReadError && error.denied)) {
+            rulesBlocked = true;
+            return;
+          }
+          connectionDropped = true;
+        };
+        const readShopRecord = async (ownerUid: string) => {
           const ref = doc(db, 'users', ownerUid, 'pos', 'data');
-          try {
-            return await getDocFromServer(ref);
-          } catch (error) {
+          const sdk = withTimeout(getDocFromServer(ref), 8000, SHOP_CONNECTION_MESSAGE).then((snap) => (
+            snap.exists() ? snap.data() as Record<string, unknown> : null
+          )).catch(async (error) => {
             if (accessDenied(error)) throw error;
             const cached = await getDoc(ref).catch(() => null);
-            if (cached?.exists() && shopCatalog(cached.data() as Record<string, unknown>).products.length > 0) return cached;
+            if (cached?.exists()) {
+              const cachedData = cached.data() as Record<string, unknown>;
+              if (shopCatalog(cachedData).products.length > 0) return cachedData;
+            }
             throw error;
-          }
+          });
+          const rest = restToken().then((token) => (
+            token && projectId ? fetchFirestoreDocument(projectId, shopDocumentPath(ownerUid), token) : Promise.reject(new ShopReadError(SHOP_CONNECTION_MESSAGE))
+          ));
+          return firstShopRecord([sdk, rest]);
         };
-        const ownSnap = await readShopData(authUser.uid).catch(() => null);
-        const ownData = ownSnap?.exists() ? ownSnap.data() as Record<string, unknown> : undefined;
+        const ownData = await readShopRecord(authUser.uid).catch((error: unknown) => {
+          noteReadError(error);
+          return undefined;
+        });
         const shopDocs = new Map<string, Record<string, unknown>>();
         if (ownData) shopDocs.set(authUser.uid, ownData);
         const linked: { ownerUid?: unknown; shopName?: unknown; role?: unknown; permissions?: unknown; branchId?: unknown }[] = [];
-        let rulesBlocked = false;
         const rememberMembership = (data: { ownerUid?: unknown; shopName?: unknown; role?: unknown; permissions?: unknown; branchId?: unknown }) => {
           const ownerUid = typeof data.ownerUid === 'string' ? data.ownerUid : '';
           if (!ownerUid || ownerUid === authUser.uid || linked.some((entry) => entry.ownerUid === ownerUid)) return;
@@ -684,34 +709,54 @@ export default function Page() {
         };
         const pullInvitedShop = async (ownerUid: string) => {
           if (!ownerUid || !normalizedEmail || ownerUid === authUser.uid || linked.some((entry) => entry.ownerUid === ownerUid)) return;
+          const memberId = `${ownerUid}_${normalizedEmail}`;
           try {
-            const memberSnap = await getDoc(doc(db, 'shopMemberships', `${ownerUid}_${normalizedEmail}`));
+            const memberSnap = await withTimeout(getDoc(doc(db, 'shopMemberships', memberId)), 8000, SHOP_CONNECTION_MESSAGE);
             if (memberSnap.exists()) {
               rememberMembership(memberSnap.data());
               return;
             }
           } catch (error) {
-            if (accessDenied(error)) rulesBlocked = true;
+            noteReadError(error);
+            const token = await restToken();
+            if (token && projectId) {
+              const member = await fetchFirestoreDocument(projectId, `shopMemberships/${encodeURIComponent(memberId)}`, token).catch((memberError: unknown) => {
+                noteReadError(memberError);
+                return null;
+              });
+              if (member) {
+                rememberMembership(member);
+                return;
+              }
+            }
           }
           try {
-            const shopSnap = await readShopData(ownerUid);
-            if (!shopSnap.exists()) return;
-            const stored = shopSnap.data() as Record<string, unknown>;
+            const stored = await readShopRecord(ownerUid);
+            if (!stored) return;
             shopDocs.set(ownerUid, stored);
             const storedName = typeof stored.shopName === 'string' ? stored.shopName.trim() : '';
             rememberMembership({ ownerUid, shopName: storedName || 'Linked shop', role: 'cashier' });
           } catch (error) {
-            if (accessDenied(error)) rulesBlocked = true;
+            noteReadError(error);
           }
         };
         if (normalizedEmail) {
           const emailKeys = [...new Set([normalizedEmail, authUser.email?.trim() || ''].filter((value) => value.includes('@')))];
           for (const emailKey of emailKeys) {
             try {
-              const membershipSnap = await getDocs(query(collection(db, 'shopMemberships'), where('email', '==', emailKey)));
+              const membershipSnap = await withTimeout(
+                getDocs(query(collection(db, 'shopMemberships'), where('email', '==', emailKey))),
+                8000,
+                SHOP_CONNECTION_MESSAGE,
+              );
               membershipSnap.forEach((entry) => rememberMembership(entry.data()));
             } catch (error) {
-              if (accessDenied(error)) rulesBlocked = true;
+              noteReadError(error);
+              const token = await restToken();
+              if (token && projectId) {
+                const rows = await fetchMembershipsByEmail(projectId, emailKey, token).catch(() => []);
+                rows.forEach((row) => rememberMembership(row));
+              }
             }
           }
           await pullInvitedShop(invitedShop);
@@ -719,7 +764,7 @@ export default function Page() {
         }
         const memberships = shopsForSignedInUser({
           userUid: authUser.uid,
-          ownShopExists: ownShopIsReal(ownData),
+          ownShopExists: ownShopIsReal(ownData ?? undefined),
           ownShopName: typeof ownData?.shopName === 'string' ? ownData.shopName : '',
           memberships: linked,
         });
@@ -731,9 +776,8 @@ export default function Page() {
             return storedName ? { ...shop, shopName: storedName } : shop;
           }
           try {
-            const nameSnap = await readShopData(shop.ownerUid);
-            if (!nameSnap.exists()) return shop;
-            const stored = nameSnap.data() as Record<string, unknown>;
+            const stored = await readShopRecord(shop.ownerUid);
+            if (!stored) return shop;
             shopDocs.set(shop.ownerUid, stored);
             const storedName = typeof stored.shopName === 'string' ? stored.shopName.trim() : '';
             return storedName ? { ...shop, shopName: storedName } : shop;
@@ -742,7 +786,7 @@ export default function Page() {
             return shop;
           }
         }));
-        if (invitedShop && invitedShop !== authUser.uid && !namedMemberships.some((shop) => shop.ownerUid === invitedShop) && !ownShopIsReal(ownData)) {
+        if (invitedShop && invitedShop !== authUser.uid && !namedMemberships.some((shop) => shop.ownerUid === invitedShop) && !ownShopIsReal(ownData ?? undefined)) {
           setRole('cashier');
           setAvailableShops([]);
           setBranches([]);
@@ -795,16 +839,15 @@ export default function Page() {
         }
         const imageRef = doc(db, 'users', selectedShopOwnerUid, 'pos', 'images');
         const activityRef = doc(db, 'users', selectedShopOwnerUid, 'pos', 'activity');
-        const [freshSnap, imageSnap, activitySnap] = await Promise.all([
-          readShopData(selectedShopOwnerUid).catch((error) => {
-            if (accessDenied(error)) rulesBlocked = true;
-            return null;
+        const [freshData, imageSnap, activitySnap] = await Promise.all([
+          readShopRecord(selectedShopOwnerUid).catch((error: unknown) => {
+            noteReadError(error);
+            return undefined;
           }),
           getDoc(imageRef).catch(() => null),
           getDoc(activityRef).catch(() => null),
         ]);
-        const freshData = freshSnap?.exists() ? freshSnap.data() as Record<string, unknown> : undefined;
-        const data = preferShopCatalog(freshData, preloadedShop);
+        const data = preferShopCatalog(freshData ?? undefined, preloadedShop);
         if (stale() && !shopStillOpen()) return false;
         const rawMembership = linked.find((entry) => entry.ownerUid === selectedShopOwnerUid);
         const applyAccess = (staffHit?: { role?: string; permissions?: unknown; branchId?: string }, shopName?: string) => {
@@ -837,6 +880,13 @@ export default function Page() {
         if (!data) {
           const access = applyAccess();
           setShopsResolved(true);
+          if (connectionDropped) {
+            hasLoadedUserDataRef.current = false;
+            isSwitchingShopRef.current = false;
+            setRegisterNotice(SHOP_CONNECTION_MESSAGE);
+            setStatus(SHOP_CONNECTION_MESSAGE);
+            return true;
+          }
           if (selectedShopOwnerUid !== authUser.uid) {
             hasLoadedUserDataRef.current = false;
             isSwitchingShopRef.current = false;
@@ -896,13 +946,14 @@ export default function Page() {
             });
           }
           if (stale() && !shopStillOpen()) return false;
+          const orEmpty = <T,>(work: Promise<T>, empty: T) => withTimeout(work, 8000, SHOP_CONNECTION_MESSAGE).catch(() => empty);
           const [remoteSales, remoteExpenses, remotePayments, remoteBills, remoteSupplierPayments, remoteStock] = await Promise.all([
-            ledgerReads.sales ? readNamedRecords<Sale>(db, selectedShopOwnerUid, 'sales') : Promise.resolve([]),
-            ledgerReads.expenses ? readNamedRecords<Expense>(db, selectedShopOwnerUid, 'expenses') : Promise.resolve([]),
-            ledgerReads.payments ? readNamedRecords<CustomerPayment>(db, selectedShopOwnerUid, 'payments') : Promise.resolve([]),
-            ledgerReads.supplierBills ? readNamedRecords<SupplierBill>(db, selectedShopOwnerUid, 'supplierBills') : Promise.resolve([]),
-            ledgerReads.supplierPayments ? readNamedRecords<SupplierPayment>(db, selectedShopOwnerUid, 'supplierPayments') : Promise.resolve([]),
-            ledgerReads.stock ? readStockMap(db, selectedShopOwnerUid) : Promise.resolve({}),
+            ledgerReads.sales ? orEmpty(readNamedRecords<Sale>(db, selectedShopOwnerUid, 'sales'), []) : Promise.resolve([]),
+            ledgerReads.expenses ? orEmpty(readNamedRecords<Expense>(db, selectedShopOwnerUid, 'expenses'), []) : Promise.resolve([]),
+            ledgerReads.payments ? orEmpty(readNamedRecords<CustomerPayment>(db, selectedShopOwnerUid, 'payments'), []) : Promise.resolve([]),
+            ledgerReads.supplierBills ? orEmpty(readNamedRecords<SupplierBill>(db, selectedShopOwnerUid, 'supplierBills'), []) : Promise.resolve([]),
+            ledgerReads.supplierPayments ? orEmpty(readNamedRecords<SupplierPayment>(db, selectedShopOwnerUid, 'supplierPayments'), []) : Promise.resolve([]),
+            ledgerReads.stock ? orEmpty(readStockMap(db, selectedShopOwnerUid), {}) : Promise.resolve({}),
           ]);
           if (stale() && !shopStillOpen()) return false;
           stockMap = remoteStock;
@@ -957,11 +1008,12 @@ export default function Page() {
   }, [loadUserData]);
 
   useEffect(() => {
-    if (!db || !authUser || !activeShopOwnerUid || authUser.uid === LOCAL_OPERATOR_ID || authUser.uid === activeShopOwnerUid) return;
-    const ref = doc(db, 'users', activeShopOwnerUid, 'pos', 'data');
-    return onSnapshot(ref, (snap) => {
-      if (!snap.exists() || snap.metadata.hasPendingWrites) return;
-      const catalog = shelfForInvite(shopCatalog(snap.data() as Record<string, unknown>));
+    if (!authUser || !activeShopOwnerUid || authUser.uid === LOCAL_OPERATOR_ID || authUser.uid === activeShopOwnerUid) return;
+    const ownerUid = activeShopOwnerUid;
+    let stopped = false;
+    const applyShelf = (source: Record<string, unknown>) => {
+      if (stopped) return;
+      const catalog = shelfForInvite(shopCatalog(source));
       if (catalog.products.length === 0) return;
       const sameRows = <T extends { id: string }>(current: T[], next: T[]) => (
         current.length === next.length && current.every((row, index) => JSON.stringify(row) === JSON.stringify(next[index]))
@@ -984,11 +1036,32 @@ export default function Page() {
         return sameRows(current, next) ? current : next;
       });
       setRegisterNotice((notice) => (notice ? '' : notice));
+    };
+    const pullShelf = async () => {
+      const projectId = firebaseConfig.projectId || '';
+      const user = firebaseApp ? getAuth(firebaseApp).currentUser : null;
+      const token = await user?.getIdToken().catch(() => '');
+      if (!token || !projectId || stopped) return;
+      const record = await fetchFirestoreDocument(projectId, shopDocumentPath(ownerUid), token).catch(() => null);
+      if (record) applyShelf(record);
+    };
+    void pullShelf();
+    if (!db) return () => { stopped = true; };
+    const ref = doc(db, 'users', ownerUid, 'pos', 'data');
+    const unsubscribe = onSnapshot(ref, (snap) => {
+      if (!snap.exists() || snap.metadata.hasPendingWrites) return;
+      applyShelf(snap.data() as Record<string, unknown>);
     }, (error) => {
       if (accessDenied(error)) {
         setRegisterNotice('This register cannot read the shop’s products yet. Publish the latest Firestore rules, then tap Reload the shop.');
+        return;
       }
+      void pullShelf();
     });
+    return () => {
+      stopped = true;
+      unsubscribe();
+    };
   }, [activeShopOwnerUid, authUser, db]);
 
   useEffect(() => {

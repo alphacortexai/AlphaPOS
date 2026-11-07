@@ -1,4 +1,5 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
+import { getFirestore, initializeFirestore } from 'firebase/firestore';
 import { shopAuthDomain } from './lib/firebaseAuth';
 
 const pageHost = typeof window === 'undefined' ? '' : window.location.host;
@@ -23,3 +24,18 @@ export const firebaseApp = isFirebaseConfigured
     ? getApp()
     : initializeApp(firebaseConfig)
   : null;
+
+const browserDb = () => {
+  if (!firebaseApp || typeof window === 'undefined') return null;
+  try {
+    // The live Listen channel dies on some networks with QUIC_TOO_MANY_RTOS and the shelf never arrives.
+    return initializeFirestore(firebaseApp, {
+      experimentalForceLongPolling: true,
+      experimentalLongPollingOptions: { timeoutSeconds: 10 },
+    });
+  } catch {
+    return getFirestore(firebaseApp);
+  }
+};
+
+export const db = browserDb();
