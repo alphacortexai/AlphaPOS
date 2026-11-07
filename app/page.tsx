@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type Dispatch, type SetStateAction } from 'react';
 import { firebaseApp } from '../lib.firebase';
 import { getAuth, onAuthStateChanged, signOut } from 'firebase/auth';
-import { collection, deleteDoc, doc, getDoc, getDocFromServer, getDocs, getFirestore, query, runTransaction, serverTimestamp, setDoc, where } from 'firebase/firestore';
+import { collection, deleteDoc, doc, getDoc, getDocFromServer, getDocs, getFirestore, onSnapshot, query, runTransaction, serverTimestamp, setDoc, where } from 'firebase/firestore';
 import Logo from '../components/brand/Logo';
 import CatalogAssistant, { type CatalogCategoryRow, type CatalogCreateRow, type CatalogPriceRow } from '../components/pos/CatalogAssistant';
 import RegisterDesk from '../components/pos/RegisterDesk';
@@ -298,6 +298,7 @@ export default function Page() {
   const [loading, setLoading] = useState(true);
   const [role, setRole] = useState<Role>('cashier');
   const [inviteBlocked, setInviteBlocked] = useState('');
+  const [registerNotice, setRegisterNotice] = useState('');
   const [activeShopOwnerUid, setActiveShopOwnerUid] = useState('');
   const [availableShops, setAvailableShops] = useState<ShopMembership[]>([]);
   const [awaitingShopChoice, setAwaitingShopChoice] = useState(false);
@@ -665,7 +666,9 @@ export default function Page() {
             return await getDocFromServer(ref);
           } catch (error) {
             if (accessDenied(error)) throw error;
-            return await getDoc(ref);
+            const cached = await getDoc(ref).catch(() => null);
+            if (cached?.exists() && shopCatalog(cached.data() as Record<string, unknown>).products.length > 0) return cached;
+            throw error;
           }
         };
         const ownSnap = await readShopData(authUser.uid).catch(() => null);
@@ -748,6 +751,9 @@ export default function Page() {
           setShopsResolved(true);
           hasLoadedUserDataRef.current = false;
           isSwitchingShopRef.current = false;
+          setRegisterNotice(rulesBlocked
+            ? 'This register cannot read the shop’s products yet. Publish the latest Firestore rules, then tap Reload the shop.'
+            : 'This invite is not on your sign-in yet. Sign out, open the link again, and choose the Google account for that email.');
           setStatus(rulesBlocked
             ? 'The shop access rules are blocking this invite, so products and branches cannot load. Publish the latest Firestore rules, then reload.'
             : 'This invite is not on your sign-in yet. Sign out, open the link again, and choose the Google account for that email.');
@@ -826,7 +832,6 @@ export default function Page() {
             }
             return { ...shop, role: access.role, permissions: access.permissions, branchId: access.branchId, ...(shopName ? { shopName } : {}) };
           }));
-          if (invitedShop && invitedShop === selectedShopOwnerUid) takeInvitedShopId();
           return access;
         };
         if (!data) {
@@ -835,9 +840,11 @@ export default function Page() {
           if (selectedShopOwnerUid !== authUser.uid) {
             hasLoadedUserDataRef.current = false;
             isSwitchingShopRef.current = false;
-            setStatus(rulesBlocked
-              ? 'The shop access rules are blocking this invite, so products and branches cannot load. Publish the latest Firestore rules, then reload.'
-              : `${selectedShop?.shopName || 'This shop'} is not open yet. Ask the owner to sign in once, then try again.`);
+            const notice = rulesBlocked
+              ? 'This register cannot read the shop’s products yet. Publish the latest Firestore rules, then tap Reload the shop.'
+              : `${selectedShop?.shopName || 'This shop'} is not open yet. Ask the owner to sign in once, then tap Reload the shop.`;
+            setRegisterNotice(notice);
+            setStatus(notice);
             return true;
           }
           const defaultBranch = { id: crypto.randomUUID(), name: 'Main Branch', location: 'HQ', createdAt: new Date().toISOString() };
@@ -870,7 +877,9 @@ export default function Page() {
         setBranches(catalog.branches as Branch[]);
         setProducts(embeddedProducts);
         setServices(catalog.services as Service[]);
+        setRegisterNotice(authUser.uid === selectedShopOwnerUid || embeddedProducts.length > 0 ? '' : 'The shop record has no products yet. Products the owner saves show here as tiles.');
         setShopsResolved(true);
+        if (invitedShop && invitedShop === selectedShopOwnerUid && (embeddedProducts.length > 0 || !rulesBlocked)) takeInvitedShopId();
         let stockMap: Record<string, number> = {};
         let ledgerNote = '';
         const ledgerReads = booksForPermissions(access.permissions, authUser.uid === selectedShopOwnerUid);
@@ -948,15 +957,47 @@ export default function Page() {
   }, [loadUserData]);
 
   useEffect(() => {
+    if (!db || !authUser || !activeShopOwnerUid || authUser.uid === LOCAL_OPERATOR_ID || authUser.uid === activeShopOwnerUid) return;
+    const ref = doc(db, 'users', activeShopOwnerUid, 'pos', 'data');
+    return onSnapshot(ref, (snap) => {
+      if (!snap.exists() || snap.metadata.hasPendingWrites) return;
+      const catalog = shelfForInvite(shopCatalog(snap.data() as Record<string, unknown>));
+      if (catalog.products.length === 0) return;
+      const sameRows = <T extends { id: string }>(current: T[], next: T[]) => (
+        current.length === next.length && current.every((row, index) => JSON.stringify(row) === JSON.stringify(next[index]))
+      );
+      setBranches((current) => {
+        const next = catalog.branches as Branch[];
+        return sameRows(current, next) ? current : next;
+      });
+      setProducts((current) => {
+        const next = catalog.products.map((product) => {
+          const row = product as Product;
+          const prior = current.find((item) => item.id === row.id);
+          if (!prior) return row;
+          return { ...row, stock: prior.stock, ...(prior.image ? { image: prior.image } : {}) };
+        });
+        return sameRows(current, next) ? current : next;
+      });
+      setServices((current) => {
+        const next = catalog.services as Service[];
+        return sameRows(current, next) ? current : next;
+      });
+      setRegisterNotice((notice) => (notice ? '' : notice));
+    }, (error) => {
+      if (accessDenied(error)) {
+        setRegisterNotice('This register cannot read the shop’s products yet. Publish the latest Firestore rules, then tap Reload the shop.');
+      }
+    });
+  }, [activeShopOwnerUid, authUser, db]);
+
+  useEffect(() => {
     const saveUserData = async () => {
       if (!authUser || !hasLoadedUserDataRef.current || !activeShopOwnerUid || isSwitchingShopRef.current) return;
       if (authUser.uid !== LOCAL_OPERATOR_ID && !db) return;
       try {
         const stored = splitProductImages(products);
-        if (imageMapChars(stored.images) > PRODUCT_IMAGE_DOC_MAX_CHARS) {
-          setStatus('Product photos are too large to save. Remove a photo and try again.');
-          return;
-        }
+        const photosFit = imageMapChars(stored.images) <= PRODUCT_IMAGE_DOC_MAX_CHARS;
         const trimmedLogs = trimActivity(activityLogs);
         const shopPayload = {
           shopName: currentShop?.shopName || 'My Shop',
@@ -981,7 +1022,7 @@ export default function Page() {
           const nextRevision = (shopRevisionRef.current || 0) + 1;
           writeLocalActivity(trimmedLogs);
           writeLocalShop(removeUndefinedDeep({ ...shopPayload, sales, expenses, customerPayments, supplierBills, supplierPayments, revision: nextRevision }));
-          writeLocalProductImages(stored.images);
+          if (photosFit) writeLocalProductImages(stored.images);
           shopRevisionRef.current = nextRevision;
           return;
         }
@@ -1028,11 +1069,13 @@ export default function Page() {
           }
         });
         shopRevisionRef.current = nextRevision;
-        if (canWriteCatalog) {
+        if (canWriteCatalog && photosFit) {
           await setDoc(doc(db, 'users', activeShopOwnerUid, 'pos', 'images'), {
             images: stored.images,
             updatedAt: serverTimestamp(),
           });
+        } else if (canWriteCatalog && stored.products.length > 0) {
+          setStatus('Product photos are too large to save. The products were saved, so a cashier can still sell them.');
         }
       } catch (error) {
         if (error instanceof Error && error.message === 'SHOP_CONFLICT') {
@@ -3997,6 +4040,11 @@ export default function Page() {
             sellerName={operator?.name || ''}
             onSwitchSeller={() => { setPinDraft(''); setPinPrompt('switch'); }}
             canAddProduct={canEditCatalog}
+            emptyNote={registerNotice}
+            onReloadShop={() => {
+              hasLoadedUserDataRef.current = false;
+              setShopEpoch((epoch) => epoch + 1);
+            }}
             onCreateProduct={() => { if (!canEditCatalog) { showNotification('Cashiers sell. A manager adds products.', 'error'); return; } openProductForm(blankProductForm(branches[0]?.id || '')); }}
           />
         )}

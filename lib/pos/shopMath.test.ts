@@ -36,6 +36,8 @@ test('the register shelf comes from the shop document even when receipts have no
   assert.equal(shopCatalog({ shopName: 'Corner' }).products.length, 0);
   assert.equal(overlayStock(catalog.products as { id: string; stock: number }[], {}).length, 2);
   assert.equal(shopCatalog({ products: { soap: { id: 'soap', name: 'Soap' } } }).products[0].id, 'soap');
+  assert.equal(shopCatalog({ products: { soap: { name: 'Soap', salePrice: 1000 } } }).products[0].id, 'soap');
+  assert.equal(shopCatalog({ products: '{"soap":{"name":"Soap"}}' }).products[0].id, 'soap');
   const invited = preferShopCatalog({ shopName: 'C & E', products: [] }, { shopName: 'C & E', products: [{ id: 'soap' }], branches: [{ id: 'main' }] });
   assert.equal(shopCatalog(invited).products[0].id, 'soap');
   assert.equal(shopCatalog(invited).branches[0].id, 'main');
