@@ -131,7 +131,10 @@ export const recordsForAccess = <T extends { id: string }>(allowed: boolean, emb
   return [...map.values()];
 };
 
-/** One branch shows the whole shelf. Several branches show that person's branch, and the whole shelf when their branch has nothing. */
+/** The register and the product shelf show every product. A branch on the person must not hide the catalog. */
+export const registerCatalog = <T,>(products: T[]): T[] => products;
+
+/** Sales and expenses can follow a branch. A branch with no rows still shows the whole list, so the screen is not blank. */
 export const rowsForBranch = <T extends { branchId?: string }>(rows: T[], branchId: string, branchCount: number): T[] => {
   if (!branchId || branchCount < 2) return rows;
   const own = rows.filter((row) => !row.branchId || row.branchId === branchId);

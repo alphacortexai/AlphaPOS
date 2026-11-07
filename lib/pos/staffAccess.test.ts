@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { booksForPermissions, permissionsFor, permissionsMatchPreset, recordsForAccess, resolveStaffAccess, rowsForBranch, staffMayWriteShopField } from './staffAccess';
+import { booksForPermissions, permissionsFor, permissionsMatchPreset, recordsForAccess, registerCatalog, resolveStaffAccess, rowsForBranch, staffMayWriteShopField } from './staffAccess';
 
 test('an invite opens as the invited role, not as the owner of that shop', () => {
   const access = resolveStaffAccess({
@@ -56,17 +56,17 @@ test('a person who cannot see the books does not receive the copy stored on the 
   assert.equal(shown.length, 2);
 });
 
-test('a cashier still sees products when their branch does not match the shelf', () => {
+test('a cashier, a stock manager, and anyone else invited sees every product on the register', () => {
   const products = [
     { id: 'soap', branchId: 'main' },
     { id: 'rice', branchId: 'stall' },
   ];
-  assert.equal(rowsForBranch(products, 'other', 1).length, 2);
-  assert.deepEqual(rowsForBranch(products, 'main', 2).map((product) => product.id), ['soap']);
+  assert.deepEqual(registerCatalog(products).map((product) => product.id), ['soap', 'rice']);
   assert.equal(rowsForBranch(products, 'closed', 2).length, 2);
-  const access = resolveStaffAccess({ userUid: 'cashier', shopOwnerUid: 'owner', membershipRole: 'cashier' });
-  assert.equal(access.permissions.includes('products'), true);
-  assert.equal(access.permissions.includes('allBranches'), true);
+  (['cashier', 'stock', 'manager', 'admin'] as const).forEach((role) => {
+    const access = resolveStaffAccess({ userUid: role, shopOwnerUid: 'owner', membershipRole: role, membershipBranchId: 'closed' });
+    assert.equal(access.permissions.includes('products') || access.permissions.includes('sell'), true);
+  });
 });
 
 test('an empty permission list stays empty instead of falling back to the role', () => {
