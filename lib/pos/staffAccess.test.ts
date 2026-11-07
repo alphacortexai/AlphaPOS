@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { booksForPermissions, permissionsFor, permissionsMatchPreset, recordsForAccess, registerCatalog, resolveStaffAccess, rowsForBranch, staffMayWriteShopField } from './staffAccess';
+import { booksForPermissions, canViewShelf, permissionsFor, permissionsMatchPreset, recordsForAccess, resolveStaffAccess, rowsForBranch, shelfForInvite, staffMayWriteShopField } from './staffAccess';
 
 test('an invite opens as the invited role, not as the owner of that shop', () => {
   const access = resolveStaffAccess({
@@ -61,7 +61,17 @@ test('a cashier, a stock manager, and anyone else invited sees every product on 
     { id: 'soap', branchId: 'main' },
     { id: 'rice', branchId: 'stall' },
   ];
-  assert.deepEqual(registerCatalog(products).map((product) => product.id), ['soap', 'rice']);
+  const shelf = shelfForInvite({
+    products,
+    branches: [{ id: 'main', name: 'Main' }, { id: 'stall', name: 'Stall' }],
+    services: [{ id: 'print' }],
+  });
+  assert.deepEqual(shelf.products.map((product) => product.id), ['soap', 'rice']);
+  assert.deepEqual(shelf.branches.map((branch) => branch.id), ['main', 'stall']);
+  assert.equal(shelf.services.length, 1);
+  assert.equal(canViewShelf(true, []), true);
+  assert.equal(canViewShelf(false, []), false);
+  assert.equal(canViewShelf(false, ['sell']), true);
   assert.equal(rowsForBranch(products, 'closed', 2).length, 2);
   (['cashier', 'stock', 'manager', 'admin'] as const).forEach((role) => {
     const access = resolveStaffAccess({ userUid: role, shopOwnerUid: 'owner', membershipRole: role, membershipBranchId: 'closed' });

@@ -21,10 +21,10 @@ import { attachProductImages, compressProductPhoto, imageMapChars, isProductImag
 import { commitStockAndRecords, migrateShopLedger, readNamedRecords, readStockMap, setStockQty, writeRecords } from '../lib/pos/ledger';
 import { beginSalesEmailSend, buildSalesDigest, defaultSalesEmailSettings, finishSalesEmailSend, normalizeSalesEmailSettings, previousSalesPeriod, type SalesDigest, type SalesEmailSettings } from '../lib/pos/salesEmail';
 import { billForReceipt, countVariance, creditAllows, dayClose, discountNeedsManager, hashPin, needsReorder, overlayStock, pinIsValid, preferShopCatalog, productForReturn, rankProducts, sellingPrice, shopCatalog, shopDocumentBody, stockFallback, supplierOwed, tenderTotals, tendersNeedReference, type SupplierBill, type SupplierPayment } from '../lib/pos/shopMath';
-import { chooseShopId, ownShopIsReal, shopsForSignedInUser } from '../lib/pos/shopAccess';
-import { booksForPermissions, PERMISSION_LABELS, permissionsFor, permissionsMatchPreset, recordsForAccess, registerCatalog, resolveStaffAccess, rowsForBranch, STAFF_PERMISSIONS, type StaffPermission } from '../lib/pos/staffAccess';
+import { accessDenied, chooseShopId, ownShopIsReal, shopsForSignedInUser } from '../lib/pos/shopAccess';
+import { booksForPermissions, canViewShelf, PERMISSION_LABELS, permissionsFor, permissionsMatchPreset, recordsForAccess, registerCatalog, resolveStaffAccess, rowsForBranch, shelfForInvite, STAFF_PERMISSIONS, type StaffPermission } from '../lib/pos/staffAccess';
 import { completeGoogleRedirect, googleSignInError, startGoogleSignIn } from '../lib/pos/googleSignIn';
-import { completeEmailLinkSignIn, createStaffInviteLink, readInvitedEmail, readInvitedShopId, rememberInviteFromUrl, staffSignInError, takeInvitedShopId } from '../lib/pos/staffInvite';
+import { clearInviteMemory, completeEmailLinkSignIn, createStaffInviteLink, readInvitedEmail, readInvitedShopId, rememberInviteFromUrl, staffSignInError, takeInvitedShopId } from '../lib/pos/staffInvite';
 import {
   customerAccountBalance,
   defaultReceiptSettings,
@@ -250,22 +250,27 @@ const emptyCheckout = { customerName: '', customerPhone: '', customerId: '', pri
 const roleLabels: Record<Role, string> = { shop_owner: 'Owner', admin: 'Admin', manager: 'Manager', cashier: 'Cashier', stock: 'Stock' };
 const OPENED_SHOP_KEY = 'alphapos.openedShop';
 
+const openedShopStores = () => (typeof window === 'undefined' ? [] : [window.sessionStorage, window.localStorage]);
+
 const readOpenedShop = (uid: string) => {
-  if (typeof window === 'undefined') return '';
-  try {
-    const parsed = JSON.parse(window.sessionStorage.getItem(OPENED_SHOP_KEY) || '') as { uid?: string; ownerUid?: string };
-    return parsed.uid === uid && parsed.ownerUid ? parsed.ownerUid : '';
-  } catch {
-    return '';
+  for (const store of openedShopStores()) {
+    try {
+      const parsed = JSON.parse(store.getItem(OPENED_SHOP_KEY) || '') as { uid?: string; ownerUid?: string };
+      if (parsed.uid === uid && parsed.ownerUid) return parsed.ownerUid;
+    } catch {
+      // The other store may still have a shop this person opened.
+    }
   }
+  return '';
 };
 
 const writeOpenedShop = (uid: string, ownerUid: string) => {
-  window.sessionStorage.setItem(OPENED_SHOP_KEY, JSON.stringify({ uid, ownerUid }));
+  const payload = JSON.stringify({ uid, ownerUid });
+  openedShopStores().forEach((store) => store.setItem(OPENED_SHOP_KEY, payload));
 };
 
 const clearOpenedShop = () => {
-  window.sessionStorage.removeItem(OPENED_SHOP_KEY);
+  openedShopStores().forEach((store) => store.removeItem(OPENED_SHOP_KEY));
 };
 
 const normalizeHeldTickets = (value: unknown): HeldTicket[] => {
@@ -443,16 +448,17 @@ export default function Page() {
     [currentShop?.permissions, isShopOwner, shopRole],
   );
   const allow = useCallback((key: StaffPermission) => granted.includes(key), [granted]);
+  const invitedHere = Boolean(authUser && activeShopOwnerUid && authUser.uid !== activeShopOwnerUid && authUser.uid !== LOCAL_OPERATOR_ID);
+  const canSeeShelf = canViewShelf(invitedHere, granted);
   const staffBranchId = !isShopOwner && !allow('allBranches') ? (currentShop?.branchId || '') : '';
   const actingRole = operator ? (users.find((person) => person.id === operator.id)?.role || shopRole) : shopRole;
   const seesBooks = allow('reports') || allow('expenses') || allow('accounts');
   const seesCost = allow('seeCost');
   const canEditCatalog = allow('editCatalog');
-  const canSeeShelf = allow('products') || allow('sell') || allow('editCatalog');
   const canOpenView = useCallback((next: View) => {
     if (next === 'profile' || next === 'dashboard') return true;
     if (next === 'sales') return allow('sell');
-    if (next === 'products' || next === 'services') return canSeeShelf;
+    if (next === 'products' || next === 'services' || next === 'branches') return canSeeShelf;
     if (next === 'sales_history') return allow('salesHistory');
     if (next === 'customers') return allow('customers');
     if (next === 'expenses') return allow('expenses');
@@ -460,7 +466,7 @@ export default function Page() {
     if (next === 'accounts') return allow('accounts');
     if (next === 'users') return isShopOwner || (shopRole === 'admin' && allow('manageStaff'));
     if (next === 'activity_logs') return allow('activity');
-    if (next === 'settings' || next === 'branches' || next === 'assistant') return isShopOwner;
+    if (next === 'settings' || next === 'assistant') return isShopOwner;
     return false;
   }, [allow, canSeeShelf, isShopOwner, shopRole]);
   useEffect(() => {
@@ -657,7 +663,8 @@ export default function Page() {
           const ref = doc(db, 'users', ownerUid, 'pos', 'data');
           try {
             return await getDocFromServer(ref);
-          } catch {
+          } catch (error) {
+            if (accessDenied(error)) throw error;
             return await getDoc(ref);
           }
         };
@@ -666,17 +673,46 @@ export default function Page() {
         const shopDocs = new Map<string, Record<string, unknown>>();
         if (ownData) shopDocs.set(authUser.uid, ownData);
         const linked: { ownerUid?: unknown; shopName?: unknown; role?: unknown; permissions?: unknown; branchId?: unknown }[] = [];
-        if (normalizedEmail) {
+        let rulesBlocked = false;
+        const rememberMembership = (data: { ownerUid?: unknown; shopName?: unknown; role?: unknown; permissions?: unknown; branchId?: unknown }) => {
+          const ownerUid = typeof data.ownerUid === 'string' ? data.ownerUid : '';
+          if (!ownerUid || ownerUid === authUser.uid || linked.some((entry) => entry.ownerUid === ownerUid)) return;
+          linked.push(data);
+        };
+        const pullInvitedShop = async (ownerUid: string) => {
+          if (!ownerUid || !normalizedEmail || ownerUid === authUser.uid || linked.some((entry) => entry.ownerUid === ownerUid)) return;
           try {
-            const membershipSnap = await getDocs(query(collection(db, 'shopMemberships'), where('email', '==', normalizedEmail)));
-            membershipSnap.forEach((entry) => linked.push(entry.data()));
-          } catch {
-            // The direct invite document is loaded below when the list is blocked.
+            const memberSnap = await getDoc(doc(db, 'shopMemberships', `${ownerUid}_${normalizedEmail}`));
+            if (memberSnap.exists()) {
+              rememberMembership(memberSnap.data());
+              return;
+            }
+          } catch (error) {
+            if (accessDenied(error)) rulesBlocked = true;
           }
-          if (invitedShop && invitedShop !== authUser.uid && !linked.some((entry) => entry.ownerUid === invitedShop)) {
-            const memberSnap = await getDoc(doc(db, 'shopMemberships', `${invitedShop}_${normalizedEmail}`)).catch(() => null);
-            if (memberSnap?.exists()) linked.push(memberSnap.data());
+          try {
+            const shopSnap = await readShopData(ownerUid);
+            if (!shopSnap.exists()) return;
+            const stored = shopSnap.data() as Record<string, unknown>;
+            shopDocs.set(ownerUid, stored);
+            const storedName = typeof stored.shopName === 'string' ? stored.shopName.trim() : '';
+            rememberMembership({ ownerUid, shopName: storedName || 'Linked shop', role: 'cashier' });
+          } catch (error) {
+            if (accessDenied(error)) rulesBlocked = true;
           }
+        };
+        if (normalizedEmail) {
+          const emailKeys = [...new Set([normalizedEmail, authUser.email?.trim() || ''].filter((value) => value.includes('@')))];
+          for (const emailKey of emailKeys) {
+            try {
+              const membershipSnap = await getDocs(query(collection(db, 'shopMemberships'), where('email', '==', emailKey)));
+              membershipSnap.forEach((entry) => rememberMembership(entry.data()));
+            } catch (error) {
+              if (accessDenied(error)) rulesBlocked = true;
+            }
+          }
+          await pullInvitedShop(invitedShop);
+          await pullInvitedShop(readOpenedShop(authUser.uid));
         }
         const memberships = shopsForSignedInUser({
           userUid: authUser.uid,
@@ -686,6 +722,11 @@ export default function Page() {
         });
         const namedMemberships = await Promise.all(memberships.map(async (shop) => {
           if (shop.ownerUid === authUser.uid) return shop;
+          const already = shopDocs.get(shop.ownerUid);
+          if (already) {
+            const storedName = typeof already.shopName === 'string' ? already.shopName.trim() : '';
+            return storedName ? { ...shop, shopName: storedName } : shop;
+          }
           try {
             const nameSnap = await readShopData(shop.ownerUid);
             if (!nameSnap.exists()) return shop;
@@ -693,7 +734,8 @@ export default function Page() {
             shopDocs.set(shop.ownerUid, stored);
             const storedName = typeof stored.shopName === 'string' ? stored.shopName.trim() : '';
             return storedName ? { ...shop, shopName: storedName } : shop;
-          } catch {
+          } catch (error) {
+            if (accessDenied(error)) rulesBlocked = true;
             return shop;
           }
         }));
@@ -706,7 +748,9 @@ export default function Page() {
           setShopsResolved(true);
           hasLoadedUserDataRef.current = false;
           isSwitchingShopRef.current = false;
-          setStatus('This invite is not on your sign-in yet. Sign out, open the link again, and choose the Google account for that email.');
+          setStatus(rulesBlocked
+            ? 'The shop access rules are blocking this invite, so products and branches cannot load. Publish the latest Firestore rules, then reload.'
+            : 'This invite is not on your sign-in yet. Sign out, open the link again, and choose the Google account for that email.');
           return true;
         }
         const rememberedShop = readOpenedShop(authUser.uid);
@@ -732,8 +776,12 @@ export default function Page() {
         const selectedShop = namedMemberships.find((shop) => shop.ownerUid === selectedShopOwnerUid);
         const preloadedShop = shopDocs.get(selectedShopOwnerUid);
         const shopStillOpen = () => !activeShopOwnerUidRef.current || activeShopOwnerUidRef.current === selectedShopOwnerUid;
+        const shelfFrom = (source: Record<string, unknown> | undefined) => {
+          const catalog = shopCatalog(source);
+          return authUser.uid === selectedShopOwnerUid ? catalog : shelfForInvite(catalog);
+        };
         if (preloadedShop && shopStillOpen()) {
-          const earlyCatalog = shopCatalog(preloadedShop);
+          const earlyCatalog = shelfFrom(preloadedShop);
           setBranches(earlyCatalog.branches as Branch[]);
           setProducts(earlyCatalog.products as Product[]);
           setServices(earlyCatalog.services as Service[]);
@@ -742,7 +790,10 @@ export default function Page() {
         const imageRef = doc(db, 'users', selectedShopOwnerUid, 'pos', 'images');
         const activityRef = doc(db, 'users', selectedShopOwnerUid, 'pos', 'activity');
         const [freshSnap, imageSnap, activitySnap] = await Promise.all([
-          readShopData(selectedShopOwnerUid).catch(() => null),
+          readShopData(selectedShopOwnerUid).catch((error) => {
+            if (accessDenied(error)) rulesBlocked = true;
+            return null;
+          }),
           getDoc(imageRef).catch(() => null),
           getDoc(activityRef).catch(() => null),
         ]);
@@ -784,7 +835,9 @@ export default function Page() {
           if (selectedShopOwnerUid !== authUser.uid) {
             hasLoadedUserDataRef.current = false;
             isSwitchingShopRef.current = false;
-            setStatus(`${selectedShop?.shopName || 'This shop'} is not open yet. Ask the owner to sign in once, then try again.`);
+            setStatus(rulesBlocked
+              ? 'The shop access rules are blocking this invite, so products and branches cannot load. Publish the latest Firestore rules, then reload.'
+              : `${selectedShop?.shopName || 'This shop'} is not open yet. Ask the owner to sign in once, then try again.`);
             return true;
           }
           const defaultBranch = { id: crypto.randomUUID(), name: 'Main Branch', location: 'HQ', createdAt: new Date().toISOString() };
@@ -808,7 +861,7 @@ export default function Page() {
           : undefined;
         const access = applyAccess(staffHit, typeof data.shopName === 'string' ? data.shopName.trim() : '');
         const resolvedRole = access.role;
-        const catalog = shopCatalog(data);
+        const catalog = shelfFrom(data);
         const embeddedProducts = attachProductImages(catalog.products as Product[], imageSnap?.exists() ? imageSnap.data().images : {});
         const embeddedSales = Array.isArray(data.sales) ? data.sales as Sale[] : [];
         const embeddedExpenses = Array.isArray(data.expenses) ? data.expenses as Expense[] : [];
@@ -819,6 +872,7 @@ export default function Page() {
         setServices(catalog.services as Service[]);
         setShopsResolved(true);
         let stockMap: Record<string, number> = {};
+        let ledgerNote = '';
         const ledgerReads = booksForPermissions(access.permissions, authUser.uid === selectedShopOwnerUid);
         let ledgerSales = recordsForAccess(ledgerReads.sales, embeddedSales, []);
         let ledgerExpenses = recordsForAccess(ledgerReads.expenses, embeddedExpenses, []);
@@ -849,10 +903,9 @@ export default function Page() {
           setSupplierBills(ledgerReads.supplierBills ? remoteBills : []);
           setSupplierPayments(ledgerReads.supplierPayments ? remoteSupplierPayments : []);
         } catch (error) {
-          const denied = error instanceof Error && /permission/i.test(error.message);
-          setStatus(denied
-            ? 'The shop access rules are blocking receipts and stock. Publish the latest Firestore rules, then reload.'
-            : `Shop records could not be split yet: ${error instanceof Error ? error.message : 'Unknown error'}`);
+          ledgerNote = accessDenied(error)
+            ? ' Receipts and live stock counts are still blocked by the shop access rules. Products and branches stay on screen.'
+            : ` Shop records could not be split yet: ${error instanceof Error ? error.message : 'Unknown error'}`;
         }
         if (stale() && !shopStillOpen()) return false;
         setProducts(overlayStock(embeddedProducts, stockMap));
@@ -877,7 +930,8 @@ export default function Page() {
         applyRetailCollections(data as Record<string, unknown>);
         hasLoadedUserDataRef.current = true;
         isSwitchingShopRef.current = false;
-        setStatus(`Viewing ${selectedShop?.shopName || 'selected shop'} as ${roleLabels[resolvedRole]}.`);
+        const shelfNote = authUser.uid === selectedShopOwnerUid ? '' : ` ${catalog.branches.length} ${catalog.branches.length === 1 ? 'branch' : 'branches'}, ${embeddedProducts.length} products.`;
+        setStatus(`Viewing ${selectedShop?.shopName || 'selected shop'} as ${roleLabels[resolvedRole]}.${shelfNote}${ledgerNote}`);
         return true;
       } catch (error) {
         setShopsResolved(true);
@@ -1016,6 +1070,7 @@ export default function Page() {
 
   const handleLogout = async () => {
     clearOpenedShop();
+    clearInviteMemory();
     setInviteBlocked('');
     setAwaitingShopChoice(false);
     setShopsResolved(false);
@@ -3429,6 +3484,7 @@ export default function Page() {
               <div className="nav-group-label">Items</div>
               <button className={`nav-button ${view === 'products' ? 'active' : ''}`} onClick={() => { setView('products'); setIsSidebarOpen(false); }}>Products</button>
               <button className={`nav-button ${view === 'services' ? 'active' : ''}`} onClick={() => { setView('services'); setIsSidebarOpen(false); }}>Services</button>
+              <button className={`nav-button ${view === 'branches' ? 'active' : ''}`} onClick={() => { setView('branches'); setIsSidebarOpen(false); }}>Branches</button>
             </div>
           )}
 
@@ -3485,6 +3541,7 @@ export default function Page() {
                  view === 'sales_history' ? 'Sales' :
                  view === 'customers' ? 'Customers' :
                  view === 'products' ? 'Products' :
+                 view === 'branches' ? 'Branches' :
                  view === 'services' ? 'Services' :
                  view === 'expenses' ? 'Expenses' :
                  view === 'users' ? 'Staff' :
@@ -3854,6 +3911,36 @@ export default function Page() {
                   </tbody>
                 </table>
             </div>
+            )}
+          </section>
+        )}
+
+        {view === 'branches' && canSeeShelf && (
+          <section>
+            <div className="page-tools">
+              <p className="muted-copy">Branches for {currentShop?.shopName || 'this shop'}. The register lists every product from these branches.</p>
+              {isShopOwner && <button className="primary" type="button" onClick={() => { setSettingsTab('branches'); setView('settings'); }}>Edit branches</button>}
+            </div>
+            {branches.length === 0 ? (
+              <div className="shelf-empty">
+                <h3>No branches yet</h3>
+                <p>{isShopOwner ? 'Add a branch from Settings.' : 'Branches added by the shop owner show up here, with that shop’s products.'}</p>
+              </div>
+            ) : (
+              <div className="branch-grid">
+                {branches.map((branch) => {
+                  const count = products.filter((product) => product.branchId === branch.id).length;
+                  return (
+                    <div key={branch.id} className="card branch-card">
+                      <h3>{branch.name}</h3>
+                      <p className="meta-label">Location</p>
+                      <p className="meta-value">{branch.location || 'Not set'}</p>
+                      <p className="meta-label">Products</p>
+                      <p className="meta-value">{count}</p>
+                    </div>
+                  );
+                })}
+              </div>
             )}
           </section>
         )}

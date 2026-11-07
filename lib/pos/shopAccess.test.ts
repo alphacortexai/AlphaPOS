@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { chooseShopId, openedRole, ownShopIsReal, shopsForSignedInUser } from './shopAccess';
+import { accessDenied, chooseShopId, openedRole, ownShopIsReal, shopsForSignedInUser } from './shopAccess';
 
 test('a cashier invite does not also make them the owner of an empty shop', () => {
   const shops = shopsForSignedInUser({
@@ -44,6 +44,13 @@ test('opening another shop keeps the invited role', () => {
     shopOwnerUid: 'owner',
     staffRole: 'cashier',
   }), 'shop_owner');
+});
+
+test('a blocked shop read is not treated as an empty shop', () => {
+  assert.equal(accessDenied({ code: 'permission-denied' }), true);
+  assert.equal(accessDenied({ code: 'firestore/permission-denied' }), true);
+  assert.equal(accessDenied(new Error('Missing or insufficient permissions.')), true);
+  assert.equal(accessDenied(new Error('offline')), false);
 });
 
 test('a copied shop name does not make an invited person the owner', () => {
