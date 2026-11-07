@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { billForReceipt, creditAllows, dayClose, ledgerReadsForRole, needsReorder, overlayStock, productForReturn, rankProducts, shopDocumentBody, supplierOwed, tenderTotals, tendersNeedReference } from './shopMath';
+import { billForReceipt, creditAllows, dayClose, ledgerReadsForRole, needsReorder, overlayStock, productForReturn, rankProducts, shopCatalog, shopDocumentBody, supplierOwed, tenderTotals, tendersNeedReference } from './shopMath';
 
 test('a cashier loads the shelf and the receipts, not the books', () => {
   const cashier = ledgerReadsForRole('cashier');
@@ -23,6 +23,18 @@ test('an empty shelf is on the reorder list', () => {
 test('live stock from the stock record wins over the shop copy', () => {
   assert.equal(overlayStock([{ id: 'soap', stock: 4 }], { soap: 2 })[0].stock, 2);
   assert.equal(overlayStock([{ id: 'soap', stock: 4 }], {})[0].stock, 4);
+});
+
+test('the register shelf comes from the shop document even when receipts have not loaded', () => {
+  const catalog = shopCatalog({
+    products: [{ id: 'soap', name: 'Soap' }, { id: 'rice', name: 'Rice' }],
+    services: [{ id: 'print' }],
+    branches: [{ id: 'main' }],
+  });
+  assert.equal(catalog.products.length, 2);
+  assert.equal(catalog.services.length, 1);
+  assert.equal(shopCatalog({ shopName: 'Corner' }).products.length, 0);
+  assert.equal(overlayStock(catalog.products as { id: string; stock: number }[], {}).length, 2);
 });
 
 test('a credit limit stops the sale that would pass it', () => {
