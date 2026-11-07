@@ -172,6 +172,21 @@ export const billForReceipt = (
   } satisfies SupplierBill;
 };
 
+/** Which ledger collections this role may read. Cashiers sell; they do not open the books. */
+export const ledgerReadsForRole = (role: string) => {
+  const books = role === 'shop_owner' || role === 'admin' || role === 'manager';
+  const shelf = books || role === 'stock';
+  return {
+    sales: role !== 'stock',
+    expenses: books,
+    payments: role !== 'stock',
+    supplierBills: shelf,
+    supplierPayments: books,
+    stock: true,
+    migrate: books,
+  };
+};
+
 export const preferRemote = <T extends { id: string }>(embedded: T[], remote: T[]) => {
   if (remote.length === 0) return embedded;
   const map = new Map(embedded.map((item) => [item.id, item]));

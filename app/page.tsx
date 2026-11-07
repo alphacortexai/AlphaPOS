@@ -20,7 +20,7 @@ import { nextSku, reservedProductCodes } from '../lib/pos/sku';
 import { attachProductImages, compressProductPhoto, imageMapChars, isProductImage, PRODUCT_IMAGE_DOC_MAX_CHARS, readLocalProductImages, splitProductImages, writeLocalProductImages } from '../lib/pos/productImage';
 import { commitStockAndRecords, migrateShopLedger, readNamedRecords, readStockMap, setStockQty, writeRecords } from '../lib/pos/ledger';
 import { beginSalesEmailSend, buildSalesDigest, defaultSalesEmailSettings, finishSalesEmailSend, normalizeSalesEmailSettings, previousSalesPeriod, type SalesDigest, type SalesEmailSettings } from '../lib/pos/salesEmail';
-import { billForReceipt, countVariance, creditAllows, dayClose, discountNeedsManager, hashPin, needsReorder, overlayStock, pinIsValid, preferRemote, productForReturn, rankProducts, sellingPrice, shopDocumentBody, stockFallback, supplierOwed, tenderTotals, tendersNeedReference, type SupplierBill, type SupplierPayment } from '../lib/pos/shopMath';
+import { billForReceipt, countVariance, creditAllows, dayClose, discountNeedsManager, hashPin, ledgerReadsForRole, needsReorder, overlayStock, pinIsValid, preferRemote, productForReturn, rankProducts, sellingPrice, shopDocumentBody, stockFallback, supplierOwed, tenderTotals, tendersNeedReference, type SupplierBill, type SupplierPayment } from '../lib/pos/shopMath';
 import { completeGoogleRedirect, googleSignInError, startGoogleSignIn } from '../lib/pos/googleSignIn';
 import { completeEmailLinkSignIn, createStaffInviteLink, rememberInviteFromUrl, staffSignInError, takeInvitedShopId } from '../lib/pos/staffInvite';
 import {
@@ -614,23 +614,28 @@ export default function Page() {
         return false;
       }
       try {
-        const normalizedEmail = authUser.email?.toLowerCase().trim();
-        const memberships: ShopMembership[] = [{ ownerUid: authUser.uid, shopName: 'My Shop', role: 'shop_owner' }];
-        if (normalizedEmail) {
-          const membershipsQuery = query(collection(db, 'shopMemberships'), where('email', '==', normalizedEmail));
-          const membershipSnap = await getDocs(membershipsQuery);
-          membershipSnap.forEach((m) => {
-            const data = m.data();
-            if (data.ownerUid && data.ownerUid !== authUser.uid) {
-              memberships.push({
-                ownerUid: data.ownerUid as string,
-                shopName: (data.shopName as string) || 'Linked Shop',
-                role: (data.role as Role) || 'cashier',
-              });
-            }
-          });
-        }
+        const normalizedEmail = authUser.email?.trim().toLowerCase() || '';
         const invitedShop = takeInvitedShopId();
+        const memberships: ShopMembership[] = [{ ownerUid: authUser.uid, shopName: 'My Shop', role: 'shop_owner' }];
+        const addMembership = (data: Record<string, unknown>) => {
+          if (!data.ownerUid || data.ownerUid === authUser.uid) return;
+          memberships.push({
+            ownerUid: data.ownerUid as string,
+            shopName: (typeof data.shopName === 'string' && data.shopName) || 'Linked Shop',
+            role: (data.role as Role) || 'cashier',
+          });
+        };
+        if (normalizedEmail) {
+          try {
+            const membershipSnap = await getDocs(query(collection(db, 'shopMemberships'), where('email', '==', normalizedEmail)));
+            membershipSnap.forEach((entry) => addMembership(entry.data()));
+          } catch {
+            if (invitedShop && invitedShop !== authUser.uid) {
+              const memberSnap = await getDoc(doc(db, 'shopMemberships', `${invitedShop}_${normalizedEmail}`)).catch(() => null);
+              if (memberSnap?.exists()) addMembership(memberSnap.data());
+            }
+          }
+        }
         const namedMemberships = memberships.length > 1 ? await Promise.all(memberships.map(async (shop) => {
           try {
             const nameSnap = await getDoc(doc(db, 'users', shop.ownerUid, 'pos', 'data'));
@@ -658,7 +663,11 @@ export default function Page() {
         const userDataRef = doc(db, 'users', selectedShopOwnerUid, 'pos', 'data');
         const imageRef = doc(db, 'users', selectedShopOwnerUid, 'pos', 'images');
         const activityRef = doc(db, 'users', selectedShopOwnerUid, 'pos', 'activity');
-        const [snap, imageSnap, activitySnap] = await Promise.all([getDoc(userDataRef), getDoc(imageRef), getDoc(activityRef)]);
+        const [snap, imageSnap, activitySnap] = await Promise.all([
+          getDoc(userDataRef),
+          getDoc(imageRef).catch(() => null),
+          getDoc(activityRef).catch(() => null),
+        ]);
         if (!snap.exists()) {
           const defaultBranch = { id: crypto.randomUUID(), name: 'Main Branch', location: 'HQ', createdAt: new Date().toISOString() };
           setBranches([defaultBranch]);
@@ -678,7 +687,7 @@ export default function Page() {
           return true;
         }
         const data = snap.data();
-        const embeddedProducts = attachProductImages(Array.isArray(data.products) ? data.products : [], imageSnap.exists() ? imageSnap.data().images : {});
+        const embeddedProducts = attachProductImages(Array.isArray(data.products) ? data.products : [], imageSnap?.exists() ? imageSnap.data().images : {});
         const embeddedSales = Array.isArray(data.sales) ? data.sales as Sale[] : [];
         const embeddedExpenses = Array.isArray(data.expenses) ? data.expenses as Expense[] : [];
         const embeddedPayments = normalizeCustomerPayments(data.customerPayments);
@@ -686,8 +695,9 @@ export default function Page() {
         let ledgerSales = embeddedSales;
         let ledgerExpenses = embeddedExpenses;
         let ledgerPayments = embeddedPayments;
+        const ledgerReads = ledgerReadsForRole(selectedShop?.role || 'shop_owner');
         try {
-          if (data.ledgerSplit !== true) {
+          if (data.ledgerSplit !== true && ledgerReads.migrate) {
             await migrateShopLedger(db, selectedShopOwnerUid, {
               sales: embeddedSales,
               expenses: embeddedExpenses,
@@ -696,12 +706,12 @@ export default function Page() {
             });
           }
           const [remoteSales, remoteExpenses, remotePayments, remoteBills, remoteSupplierPayments, remoteStock] = await Promise.all([
-            readNamedRecords<Sale>(db, selectedShopOwnerUid, 'sales'),
-            readNamedRecords<Expense>(db, selectedShopOwnerUid, 'expenses'),
-            readNamedRecords<CustomerPayment>(db, selectedShopOwnerUid, 'payments'),
-            readNamedRecords<SupplierBill>(db, selectedShopOwnerUid, 'supplierBills'),
-            readNamedRecords<SupplierPayment>(db, selectedShopOwnerUid, 'supplierPayments'),
-            readStockMap(db, selectedShopOwnerUid),
+            ledgerReads.sales ? readNamedRecords<Sale>(db, selectedShopOwnerUid, 'sales') : Promise.resolve([]),
+            ledgerReads.expenses ? readNamedRecords<Expense>(db, selectedShopOwnerUid, 'expenses') : Promise.resolve([]),
+            ledgerReads.payments ? readNamedRecords<CustomerPayment>(db, selectedShopOwnerUid, 'payments') : Promise.resolve([]),
+            ledgerReads.supplierBills ? readNamedRecords<SupplierBill>(db, selectedShopOwnerUid, 'supplierBills') : Promise.resolve([]),
+            ledgerReads.supplierPayments ? readNamedRecords<SupplierPayment>(db, selectedShopOwnerUid, 'supplierPayments') : Promise.resolve([]),
+            ledgerReads.stock ? readStockMap(db, selectedShopOwnerUid) : Promise.resolve({}),
           ]);
           stockMap = remoteStock;
           ledgerSales = preferRemote(embeddedSales, remoteSales);
@@ -710,7 +720,10 @@ export default function Page() {
           setSupplierBills(remoteBills);
           setSupplierPayments(remoteSupplierPayments);
         } catch (error) {
-          setStatus(`Shop records could not be split yet: ${error instanceof Error ? error.message : 'Unknown error'}`);
+          const denied = error instanceof Error && /permission/i.test(error.message);
+          setStatus(denied
+            ? 'The shop access rules are blocking receipts and stock. Publish the latest Firestore rules, then reload.'
+            : `Shop records could not be split yet: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
         setBranches(Array.isArray(data.branches) ? data.branches : []);
         setProducts(overlayStock(embeddedProducts, stockMap));
@@ -729,7 +742,7 @@ export default function Page() {
           dayStartTime: typeof data?.shopTimeSettings?.dayStartTime === 'string' ? data.shopTimeSettings.dayStartTime : '00:00',
         });
         const inlineLogs = Array.isArray(data.activityLogs) ? data.activityLogs as ActivityLog[] : [];
-        const sideLogs = activitySnap.exists()
+        const sideLogs = activitySnap?.exists()
           ? (Array.isArray(activitySnap.data().activityLogs) ? activitySnap.data().activityLogs as ActivityLog[] : [])
           : null;
         setActivityLogs(trimActivity(sideLogs ?? inlineLogs));
@@ -744,7 +757,10 @@ export default function Page() {
         return true;
       } catch (error) {
         setShopsResolved(true);
-        setStatus(`Failed to load your data: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        const denied = error instanceof Error && /permission/i.test(error.message);
+        setStatus(denied
+          ? 'Missing permission to open this shop. Publish the latest Firestore rules, then reload.'
+          : `Failed to load your data: ${error instanceof Error ? error.message : 'Unknown error'}`);
         return false;
       }
     }, [activeShopOwnerUid, authUser, db, role]);

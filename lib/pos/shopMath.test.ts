@@ -1,6 +1,18 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { billForReceipt, creditAllows, dayClose, needsReorder, overlayStock, productForReturn, rankProducts, shopDocumentBody, supplierOwed, tenderTotals, tendersNeedReference } from './shopMath';
+import { billForReceipt, creditAllows, dayClose, ledgerReadsForRole, needsReorder, overlayStock, productForReturn, rankProducts, shopDocumentBody, supplierOwed, tenderTotals, tendersNeedReference } from './shopMath';
+
+test('a cashier loads the shelf and the receipts, not the books', () => {
+  const cashier = ledgerReadsForRole('cashier');
+  assert.equal(cashier.sales, true);
+  assert.equal(cashier.stock, true);
+  assert.equal(cashier.expenses, false);
+  assert.equal(cashier.supplierBills, false);
+  assert.equal(cashier.migrate, false);
+  assert.equal(ledgerReadsForRole('shop_owner').expenses, true);
+  assert.equal(ledgerReadsForRole('stock').supplierBills, true);
+  assert.equal(ledgerReadsForRole('stock').sales, false);
+});
 
 test('an empty shelf is on the reorder list', () => {
   assert.equal(needsReorder({ stock: 0, reorderPoint: 10 }), true);
