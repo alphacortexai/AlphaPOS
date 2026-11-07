@@ -23,7 +23,7 @@ import { beginSalesEmailSend, buildSalesDigest, defaultSalesEmailSettings, finis
 import { billForReceipt, countVariance, creditAllows, dayClose, discountNeedsManager, hashPin, inviteEmails, needsReorder, overlayStock, pinIsValid, preferShopCatalog, productForReturn, rankProducts, sellingPrice, shopCatalog, shopDocumentBody, stockFallback, supplierOwed, tenderTotals, tendersNeedReference, type SupplierBill, type SupplierPayment } from '../lib/pos/shopMath';
 import { accessDenied, chooseShopId, ownShopIsReal, shopsForSignedInUser } from '../lib/pos/shopAccess';
 import { fetchFirestoreDocument, fetchMembershipsByEmail, firstShopRecord, SHOP_CONNECTION_MESSAGE, ShopReadError, shopDocumentPath, withTimeout } from '../lib/pos/shopRead';
-import { booksForPermissions, canViewShelf, PERMISSION_LABELS, permissionsFor, permissionsMatchPreset, recordsForAccess, registerCatalog, resolveStaffAccess, rowsForBranch, shelfForInvite, STAFF_PERMISSIONS, type StaffPermission } from '../lib/pos/staffAccess';
+import { booksForPermissions, canViewShelf, PERMISSION_LABELS, permissionsFor, permissionsMatchPreset, recordsForAccess, registerCatalog, resolveStaffAccess, rowsForBranch, shelfForInvite, staffGrants, STAFF_PERMISSIONS, type StaffPermission } from '../lib/pos/staffAccess';
 import { completeGoogleRedirect, googleSignInError, startGoogleSignIn } from '../lib/pos/googleSignIn';
 import { clearInviteMemory, completeEmailLinkSignIn, createStaffInviteLink, readInvitedEmail, readInvitedShopId, rememberInviteFromUrl, staffSignInError, takeInvitedShopId } from '../lib/pos/staffInvite';
 import {
@@ -1134,6 +1134,18 @@ export default function Page() {
           }
         });
         shopRevisionRef.current = nextRevision;
+        if (ownsDocument) {
+          const shopName = currentShop?.shopName || 'My Shop';
+          await Promise.all(staffGrants(activeShopOwnerUid, shopName, users).map((grant) => setDoc(doc(db, 'shopMemberships', grant.id), {
+            ownerUid: grant.ownerUid,
+            email: grant.email,
+            shopName: grant.shopName,
+            role: grant.role,
+            permissions: grant.permissions,
+            ...(grant.branchId ? { branchId: grant.branchId } : {}),
+            updatedAt: serverTimestamp(),
+          }, { merge: true })));
+        }
         if (canWriteCatalog && photosFit) {
           await setDoc(doc(db, 'users', activeShopOwnerUid, 'pos', 'images'), {
             images: stored.images,
