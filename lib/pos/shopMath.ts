@@ -52,12 +52,33 @@ export const overlayStock = <T extends { id: string; stock: number }>(products: 
   products.map((product) => (stock[product.id] === undefined ? product : { ...product, stock: stock[product.id] }))
 );
 
+/** Rows saved as an array, or as a map of ids, still belong on the shelf. */
+export const catalogRows = (value: unknown): Record<string, unknown>[] => {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item));
+  }
+  if (!value || typeof value !== 'object') return [];
+  return Object.values(value as Record<string, unknown>).filter(
+    (item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item) && typeof (item as { id?: unknown }).id === 'string',
+  );
+};
+
 /** The shelf is on the shop document. Receipts and live stock load after; they must not leave the register empty. */
 export const shopCatalog = (data: Record<string, unknown> | undefined) => ({
-  products: Array.isArray(data?.products) ? data.products : [],
-  services: Array.isArray(data?.services) ? data.services : [],
-  branches: Array.isArray(data?.branches) ? data.branches : [],
+  products: catalogRows(data?.products),
+  services: catalogRows(data?.services),
+  branches: catalogRows(data?.branches),
 });
+
+/** Keep the copy that actually has the shelf when two reads of the same shop disagree. */
+export const preferShopCatalog = (
+  primary: Record<string, unknown> | undefined,
+  fallback: Record<string, unknown> | undefined,
+) => {
+  const first = shopCatalog(primary);
+  if (first.products.length > 0 || !fallback) return primary;
+  return shopCatalog(fallback).products.length > 0 ? fallback : primary;
+};
 
 export const stockFallback = (products: { id: string; stock: number }[]) => (
   Object.fromEntries(products.map((product) => [product.id, product.stock]))

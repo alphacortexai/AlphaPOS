@@ -8,6 +8,12 @@ export type ShopAccess = {
 
 const STAFF_ROLES = new Set<ShopAccessRole>(['admin', 'manager', 'cashier', 'stock']);
 
+const catalogCount = (value: unknown) => {
+  if (Array.isArray(value)) return value.length;
+  if (value && typeof value === 'object') return Object.keys(value).length;
+  return 0;
+};
+
 export const staffRole = (value: unknown): ShopAccessRole => (
   STAFF_ROLES.has(value as ShopAccessRole) ? value as ShopAccessRole : 'cashier'
 );
@@ -26,16 +32,18 @@ export const shopsForSignedInUser = (input: {
     const shopName = typeof membership.shopName === 'string' && membership.shopName.trim() ? membership.shopName.trim() : 'Linked shop';
     linked.push({ ownerUid, shopName, role: staffRole(membership.role) });
   });
-  if (!input.ownShopExists && linked.length > 0) return linked;
   const shopName = input.ownShopName?.trim() || 'My Shop';
-  return [{ ownerUid: input.userUid, shopName, role: 'shop_owner' }, ...linked];
+  const own: ShopAccess = { ownerUid: input.userUid, shopName, role: 'shop_owner' };
+  if (!input.ownShopExists && linked.length > 0) return linked;
+  if (linked.length > 0) return [...linked, own];
+  return [own];
 };
 
 export const ownShopIsReal = (data: Record<string, unknown> | undefined) => {
   if (!data) return false;
   const name = typeof data.shopName === 'string' ? data.shopName.trim() : '';
-  const products = Array.isArray(data.products) ? data.products.length : 0;
-  const sales = Array.isArray(data.sales) ? data.sales.length : 0;
+  const products = catalogCount(data.products);
+  const sales = catalogCount(data.sales);
   return (name !== '' && name !== 'My Shop') || products > 0 || sales > 0;
 };
 

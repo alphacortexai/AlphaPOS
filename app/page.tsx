@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type Dispatch, type SetStateAction } from 'react';
 import { firebaseApp } from '../lib.firebase';
 import { getAuth, onAuthStateChanged, signOut } from 'firebase/auth';
-import { collection, deleteDoc, doc, getDoc, getDocs, getFirestore, query, runTransaction, serverTimestamp, setDoc, where } from 'firebase/firestore';
+import { collection, deleteDoc, doc, getDoc, getDocFromServer, getDocs, getFirestore, query, runTransaction, serverTimestamp, setDoc, where } from 'firebase/firestore';
 import Logo from '../components/brand/Logo';
 import CatalogAssistant, { type CatalogCategoryRow, type CatalogCreateRow, type CatalogPriceRow } from '../components/pos/CatalogAssistant';
 import RegisterDesk from '../components/pos/RegisterDesk';
@@ -20,7 +20,7 @@ import { nextSku, reservedProductCodes } from '../lib/pos/sku';
 import { attachProductImages, compressProductPhoto, imageMapChars, isProductImage, PRODUCT_IMAGE_DOC_MAX_CHARS, readLocalProductImages, splitProductImages, writeLocalProductImages } from '../lib/pos/productImage';
 import { commitStockAndRecords, migrateShopLedger, readNamedRecords, readStockMap, setStockQty, writeRecords } from '../lib/pos/ledger';
 import { beginSalesEmailSend, buildSalesDigest, defaultSalesEmailSettings, finishSalesEmailSend, normalizeSalesEmailSettings, previousSalesPeriod, type SalesDigest, type SalesEmailSettings } from '../lib/pos/salesEmail';
-import { billForReceipt, countVariance, creditAllows, dayClose, discountNeedsManager, hashPin, needsReorder, overlayStock, pinIsValid, productForReturn, rankProducts, sellingPrice, shopCatalog, shopDocumentBody, stockFallback, supplierOwed, tenderTotals, tendersNeedReference, type SupplierBill, type SupplierPayment } from '../lib/pos/shopMath';
+import { billForReceipt, countVariance, creditAllows, dayClose, discountNeedsManager, hashPin, needsReorder, overlayStock, pinIsValid, preferShopCatalog, productForReturn, rankProducts, sellingPrice, shopCatalog, shopDocumentBody, stockFallback, supplierOwed, tenderTotals, tendersNeedReference, type SupplierBill, type SupplierPayment } from '../lib/pos/shopMath';
 import { chooseShopId, ownShopIsReal, shopsForSignedInUser } from '../lib/pos/shopAccess';
 import { booksForPermissions, PERMISSION_LABELS, permissionsFor, permissionsMatchPreset, recordsForAccess, registerCatalog, resolveStaffAccess, rowsForBranch, STAFF_PERMISSIONS, type StaffPermission } from '../lib/pos/staffAccess';
 import { completeGoogleRedirect, googleSignInError, startGoogleSignIn } from '../lib/pos/googleSignIn';
@@ -653,8 +653,18 @@ export default function Page() {
           hasLoadedUserDataRef.current = false;
           return false;
         }
-        const ownSnap = await getDoc(doc(db, 'users', authUser.uid, 'pos', 'data')).catch(() => null);
+        const readShopData = async (ownerUid: string) => {
+          const ref = doc(db, 'users', ownerUid, 'pos', 'data');
+          try {
+            return await getDocFromServer(ref);
+          } catch {
+            return await getDoc(ref);
+          }
+        };
+        const ownSnap = await readShopData(authUser.uid).catch(() => null);
         const ownData = ownSnap?.exists() ? ownSnap.data() as Record<string, unknown> : undefined;
+        const shopDocs = new Map<string, Record<string, unknown>>();
+        if (ownData) shopDocs.set(authUser.uid, ownData);
         const linked: { ownerUid?: unknown; shopName?: unknown; role?: unknown; permissions?: unknown; branchId?: unknown }[] = [];
         if (normalizedEmail) {
           try {
@@ -677,8 +687,11 @@ export default function Page() {
         const namedMemberships = await Promise.all(memberships.map(async (shop) => {
           if (shop.ownerUid === authUser.uid) return shop;
           try {
-            const nameSnap = await getDoc(doc(db, 'users', shop.ownerUid, 'pos', 'data'));
-            const storedName = nameSnap.exists() && typeof nameSnap.data().shopName === 'string' ? nameSnap.data().shopName.trim() : '';
+            const nameSnap = await readShopData(shop.ownerUid);
+            if (!nameSnap.exists()) return shop;
+            const stored = nameSnap.data() as Record<string, unknown>;
+            shopDocs.set(shop.ownerUid, stored);
+            const storedName = typeof stored.shopName === 'string' ? stored.shopName.trim() : '';
             return storedName ? { ...shop, shopName: storedName } : shop;
           } catch {
             return shop;
@@ -705,15 +718,25 @@ export default function Page() {
         }
         if (selectedShopOwnerUid) writeOpenedShop(authUser.uid, selectedShopOwnerUid);
         const selectedShop = namedMemberships.find((shop) => shop.ownerUid === selectedShopOwnerUid);
-        const userDataRef = doc(db, 'users', selectedShopOwnerUid, 'pos', 'data');
+        const preloadedShop = shopDocs.get(selectedShopOwnerUid);
+        const shopStillOpen = () => !activeShopOwnerUidRef.current || activeShopOwnerUidRef.current === selectedShopOwnerUid;
+        if (preloadedShop && shopStillOpen()) {
+          const earlyCatalog = shopCatalog(preloadedShop);
+          setBranches(earlyCatalog.branches as Branch[]);
+          setProducts(earlyCatalog.products as Product[]);
+          setServices(earlyCatalog.services as Service[]);
+          setShopsResolved(true);
+        }
         const imageRef = doc(db, 'users', selectedShopOwnerUid, 'pos', 'images');
         const activityRef = doc(db, 'users', selectedShopOwnerUid, 'pos', 'activity');
-        const [snap, imageSnap, activitySnap] = await Promise.all([
-          getDoc(userDataRef),
+        const [freshSnap, imageSnap, activitySnap] = await Promise.all([
+          readShopData(selectedShopOwnerUid).catch(() => null),
           getDoc(imageRef).catch(() => null),
           getDoc(activityRef).catch(() => null),
         ]);
-        if (stale()) return false;
+        const freshData = freshSnap?.exists() ? freshSnap.data() as Record<string, unknown> : undefined;
+        const data = preferShopCatalog(freshData, preloadedShop);
+        if (stale() && !shopStillOpen()) return false;
         const rawMembership = linked.find((entry) => entry.ownerUid === selectedShopOwnerUid);
         const applyAccess = (staffHit?: { role?: string; permissions?: unknown; branchId?: string }, shopName?: string) => {
           const access = resolveStaffAccess({
@@ -743,7 +766,7 @@ export default function Page() {
           if (invitedShop && invitedShop === selectedShopOwnerUid) takeInvitedShopId();
           return access;
         };
-        if (!snap.exists()) {
+        if (!data) {
           const access = applyAccess();
           setShopsResolved(true);
           if (selectedShopOwnerUid !== authUser.uid) {
@@ -768,18 +791,17 @@ export default function Page() {
           setStatus(`Viewing ${selectedShop?.shopName || 'selected shop'} as ${roleLabels[access.role]}.`);
           return true;
         }
-        const data = snap.data();
         const staffHit = normalizedEmail
           ? (Array.isArray(data.users) ? data.users as { email?: string; role?: string; permissions?: unknown; branchId?: string }[] : []).find((person) => person.email?.trim().toLowerCase() === normalizedEmail)
           : undefined;
         const access = applyAccess(staffHit, typeof data.shopName === 'string' ? data.shopName.trim() : '');
         const resolvedRole = access.role;
-        const catalog = shopCatalog(data as Record<string, unknown>);
+        const catalog = shopCatalog(data);
         const embeddedProducts = attachProductImages(catalog.products as Product[], imageSnap?.exists() ? imageSnap.data().images : {});
         const embeddedSales = Array.isArray(data.sales) ? data.sales as Sale[] : [];
         const embeddedExpenses = Array.isArray(data.expenses) ? data.expenses as Expense[] : [];
         const embeddedPayments = normalizeCustomerPayments(data.customerPayments);
-        if (stale()) return false;
+        if (stale() && !shopStillOpen()) return false;
         setBranches(catalog.branches as Branch[]);
         setProducts(embeddedProducts);
         setServices(catalog.services as Service[]);
@@ -798,7 +820,7 @@ export default function Page() {
               products: embeddedProducts,
             });
           }
-          if (stale()) return false;
+          if (stale() && !shopStillOpen()) return false;
           const [remoteSales, remoteExpenses, remotePayments, remoteBills, remoteSupplierPayments, remoteStock] = await Promise.all([
             ledgerReads.sales ? readNamedRecords<Sale>(db, selectedShopOwnerUid, 'sales') : Promise.resolve([]),
             ledgerReads.expenses ? readNamedRecords<Expense>(db, selectedShopOwnerUid, 'expenses') : Promise.resolve([]),
@@ -807,7 +829,7 @@ export default function Page() {
             ledgerReads.supplierPayments ? readNamedRecords<SupplierPayment>(db, selectedShopOwnerUid, 'supplierPayments') : Promise.resolve([]),
             ledgerReads.stock ? readStockMap(db, selectedShopOwnerUid) : Promise.resolve({}),
           ]);
-          if (stale()) return false;
+          if (stale() && !shopStillOpen()) return false;
           stockMap = remoteStock;
           ledgerSales = recordsForAccess(ledgerReads.sales, embeddedSales, remoteSales);
           ledgerExpenses = recordsForAccess(ledgerReads.expenses, embeddedExpenses, remoteExpenses);
@@ -820,7 +842,7 @@ export default function Page() {
             ? 'The shop access rules are blocking receipts and stock. Publish the latest Firestore rules, then reload.'
             : `Shop records could not be split yet: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
-        if (stale()) return false;
+        if (stale() && !shopStillOpen()) return false;
         setProducts(overlayStock(embeddedProducts, stockMap));
         setSales(ledgerSales);
         setExpenses(ledgerExpenses);
@@ -830,9 +852,10 @@ export default function Page() {
         setSuppliers(normalizeSuppliers(data.suppliers));
         setCustomerPayments(ledgerPayments);
         shopRevisionRef.current = Number(data.revision) || 0;
+        const shopTime = data.shopTimeSettings && typeof data.shopTimeSettings === 'object' ? data.shopTimeSettings as Partial<ShopTimeSettings> : undefined;
         setShopTimeSettings({
-          timezoneOffsetMinutes: typeof data?.shopTimeSettings?.timezoneOffsetMinutes === 'number' ? data.shopTimeSettings.timezoneOffsetMinutes : 0,
-          dayStartTime: typeof data?.shopTimeSettings?.dayStartTime === 'string' ? data.shopTimeSettings.dayStartTime : '00:00',
+          timezoneOffsetMinutes: typeof shopTime?.timezoneOffsetMinutes === 'number' ? shopTime.timezoneOffsetMinutes : 0,
+          dayStartTime: typeof shopTime?.dayStartTime === 'string' ? shopTime.dayStartTime : '00:00',
         });
         const inlineLogs = Array.isArray(data.activityLogs) ? data.activityLogs as ActivityLog[] : [];
         const sideLogs = activitySnap?.exists()

@@ -14,13 +14,16 @@ test('a cashier invite does not also make them the owner of an empty shop', () =
 
 test('an invited shop opens before a shop this person owns', () => {
   const shops = shopsForSignedInUser({
-    userUid: 'owner',
+    userUid: 'cashier',
     ownShopExists: true,
-    ownShopName: 'C & E Supplies',
+    ownShopName: 'My stall',
     memberships: [{ ownerUid: 'other', shopName: 'Night stall', role: 'cashier' }],
   });
-  assert.equal(shops[0].role, 'shop_owner');
-  assert.equal(chooseShopId(shops, { invited: 'other', remembered: 'owner' }), 'other');
+  assert.equal(shops[0].ownerUid, 'other');
+  assert.equal(shops[0].role, 'cashier');
+  assert.equal(chooseShopId(shops, {}), 'other');
+  assert.equal(chooseShopId(shops, { invited: 'other', remembered: 'cashier' }), 'other');
+  assert.equal(chooseShopId(shops, { remembered: 'cashier' }), 'cashier');
 });
 
 test('opening another shop keeps the invited role', () => {
