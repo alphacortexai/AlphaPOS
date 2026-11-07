@@ -134,6 +134,23 @@ export const recordsForAccess = <T extends { id: string }>(allowed: boolean, emb
 /** The register and the product shelf show every product. A branch on the person must not hide the catalog. */
 export const registerCatalog = <T,>(products: T[]): T[] => products;
 
+/** An invited person is not the owner of that shop. */
+export const seesInvitedShelf = (userUid: string, shopOwnerUid: string) => (
+  Boolean(userUid && shopOwnerUid && userUid !== shopOwnerUid)
+);
+
+/** Products and branches stay visible for an invite, even when other switches are off. */
+export const canViewShelf = (invited: boolean, permissions: readonly StaffPermission[]) => (
+  invited || permissions.some((key) => key === 'products' || key === 'sell' || key === 'editCatalog')
+);
+
+/** Every branch and every product of the invited shop. The person's branch does not remove any. */
+export const shelfForInvite = <P, B, S>(catalog: { products: readonly P[]; branches: readonly B[]; services?: readonly S[] }) => ({
+  products: registerCatalog([...catalog.products]),
+  branches: [...catalog.branches],
+  services: [...(catalog.services ?? [])],
+});
+
 /** Sales and expenses can follow a branch. A branch with no rows still shows the whole list, so the screen is not blank. */
 export const rowsForBranch = <T extends { branchId?: string }>(rows: T[], branchId: string, branchCount: number): T[] => {
   if (!branchId || branchCount < 2) return rows;

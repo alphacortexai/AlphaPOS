@@ -70,14 +70,24 @@ export const shopCatalog = (data: Record<string, unknown> | undefined) => ({
   branches: catalogRows(data?.branches),
 });
 
-/** Keep the copy that actually has the shelf when two reads of the same shop disagree. */
+/** Keep whichever read still has the products and the branches when two copies of the same shop disagree. */
 export const preferShopCatalog = (
   primary: Record<string, unknown> | undefined,
   fallback: Record<string, unknown> | undefined,
 ) => {
+  if (!fallback) return primary;
+  const second = shopCatalog(fallback);
+  if (!primary) return second.products.length > 0 || second.branches.length > 0 ? fallback : primary;
   const first = shopCatalog(primary);
-  if (first.products.length > 0 || !fallback) return primary;
-  return shopCatalog(fallback).products.length > 0 ? fallback : primary;
+  if (first.products.length > 0 && first.branches.length > 0) return primary;
+  if (second.products.length === 0 && second.branches.length === 0) return primary;
+  return {
+    ...fallback,
+    ...primary,
+    products: first.products.length > 0 ? primary.products : fallback.products,
+    services: first.services.length > 0 ? primary.services : fallback.services,
+    branches: first.branches.length > 0 ? primary.branches : fallback.branches,
+  };
 };
 
 export const stockFallback = (products: { id: string; stock: number }[]) => (

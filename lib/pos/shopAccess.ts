@@ -56,6 +56,12 @@ export const chooseShopId = (
   return shops[0]?.ownerUid || '';
 };
 
+export const accessDenied = (error: unknown) => {
+  const code = typeof error === 'object' && error && 'code' in error ? String((error as { code: string }).code) : '';
+  const message = error instanceof Error ? error.message : '';
+  return code.includes('permission-denied') || /permission/i.test(message);
+};
+
 /** The shop document's saved role belongs to whoever last saved it. The invite grant decides, and it never makes a guest the owner. */
 export const openedRole = (input: {
   userUid: string;

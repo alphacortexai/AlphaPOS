@@ -5,6 +5,28 @@ const EMAIL_FOR_SIGN_IN = 'emailForSignIn';
 const INVITE_SHOP = 'alphapos.inviteShop';
 const INVITE_EMAIL = 'alphapos.inviteEmail';
 
+const inviteStores = () => {
+  if (typeof window === 'undefined') return [];
+  return [window.sessionStorage, window.localStorage];
+};
+
+const writeInvite = (shop: string, email: string) => {
+  const shopId = shop.trim();
+  const normalized = email.trim().toLowerCase();
+  inviteStores().forEach((store) => {
+    if (shopId) store.setItem(INVITE_SHOP, shopId);
+    if (normalized.includes('@')) store.setItem(INVITE_EMAIL, normalized);
+  });
+};
+
+const readInviteValue = (key: string) => {
+  for (const store of inviteStores()) {
+    const value = store.getItem(key);
+    if (value) return value;
+  }
+  return '';
+};
+
 let emailLinkAttempt: Promise<void> | null = null;
 
 export const createStaffInviteLink = (email: string, shopOwnerUid: string) => {
@@ -36,9 +58,7 @@ export const completeEmailLinkSignIn = (auth: Auth) => {
       await signInWithEmailLink(auth, email.trim(), window.location.href);
       window.localStorage.removeItem(EMAIL_FOR_SIGN_IN);
       const shop = params.get('shop');
-      const invited = email.trim().toLowerCase();
-      if (invited.includes('@')) window.sessionStorage.setItem(INVITE_EMAIL, invited);
-      if (shop) window.sessionStorage.setItem(INVITE_SHOP, shop);
+      writeInvite(shop || '', email);
       window.history.replaceState({}, '', window.location.pathname);
     })().catch((error) => {
       emailLinkAttempt = null;
@@ -52,19 +72,28 @@ export const rememberInviteFromUrl = () => {
   if (typeof window === 'undefined' || !firebaseApp) return;
   const params = new URLSearchParams(window.location.search);
   const email = params.get('email')?.trim().toLowerCase() || '';
-  if (email.includes('@')) window.sessionStorage.setItem(INVITE_EMAIL, email);
-  const shop = params.get('shop');
-  if (!shop || isSignInWithEmailLink(getAuth(firebaseApp), window.location.href)) return;
-  window.sessionStorage.setItem(INVITE_SHOP, shop);
+  const shop = params.get('shop') || '';
+  if (!email.includes('@') && !shop) return;
+  if (shop && isSignInWithEmailLink(getAuth(firebaseApp), window.location.href)) {
+    if (email.includes('@')) writeInvite('', email);
+    return;
+  }
+  writeInvite(shop, email);
 };
 
-export const readInvitedShopId = () => (typeof window === 'undefined' ? '' : window.sessionStorage.getItem(INVITE_SHOP) || '');
+export const readInvitedShopId = () => readInviteValue(INVITE_SHOP);
 
-export const readInvitedEmail = () => (typeof window === 'undefined' ? '' : window.sessionStorage.getItem(INVITE_EMAIL) || '');
+export const readInvitedEmail = () => readInviteValue(INVITE_EMAIL);
 
 export const takeInvitedShopId = () => {
-  if (typeof window === 'undefined') return '';
-  const shop = window.sessionStorage.getItem(INVITE_SHOP) || '';
-  if (shop) window.sessionStorage.removeItem(INVITE_SHOP);
+  const shop = readInvitedShopId();
+  inviteStores().forEach((store) => store.removeItem(INVITE_SHOP));
   return shop;
+};
+
+export const clearInviteMemory = () => {
+  inviteStores().forEach((store) => {
+    store.removeItem(INVITE_SHOP);
+    store.removeItem(INVITE_EMAIL);
+  });
 };

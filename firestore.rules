@@ -4,11 +4,27 @@ service cloud.firestore {
     function signedIn() {
       return request.auth != null;
     }
+    function rawEmail() {
+      return request.auth.token.email is string ? request.auth.token.email : '';
+    }
     function email() {
-      return request.auth.token.email is string ? request.auth.token.email.lower() : '';
+      return rawEmail().lower();
+    }
+    function sameMail(stored) {
+      return stored is string && stored != '' && (stored == rawEmail() || stored.lower() == email());
     }
     function member(owner) {
       return get(/databases/$(database)/documents/shopMemberships/$(owner + '_' + email()));
+    }
+    function staffGrant(owner) {
+      return email() != ''
+        && member(owner).exists
+        && sameMail(member(owner).data.email)
+        && (
+          !('ownerUid' in member(owner).data)
+          || member(owner).data.ownerUid == null
+          || member(owner).data.ownerUid == owner
+        );
     }
     function role(owner) {
       return request.auth.uid == owner
@@ -16,19 +32,19 @@ service cloud.firestore {
         : (!member(owner).exists ? '' : member(owner).data.role);
     }
     function isStaff(owner) {
-      return signedIn() && (request.auth.uid == owner || (member(owner).exists && member(owner).data.email == email()));
+      return signedIn() && (request.auth.uid == owner || staffGrant(owner));
     }
     function roleHas(owner, key) {
       let r = role(owner);
       return r == 'shop_owner'
         || (r == 'admin' && key in ['sell', 'salesHistory', 'customers', 'products', 'editCatalog', 'seeCost', 'expenses', 'reports', 'accounts', 'activity', 'manageStaff', 'allBranches'])
         || (r == 'manager' && key in ['sell', 'salesHistory', 'customers', 'products', 'editCatalog', 'seeCost', 'expenses', 'reports', 'accounts', 'activity', 'allBranches'])
-        || (r == 'cashier' && key in ['sell', 'salesHistory', 'customers', 'products'])
-        || (r == 'stock' && key in ['products', 'editCatalog', 'seeCost']);
+        || (r == 'cashier' && key in ['sell', 'salesHistory', 'customers', 'products', 'allBranches'])
+        || (r == 'stock' && key in ['products', 'editCatalog', 'seeCost', 'allBranches']);
     }
     function hasPerm(owner, key) {
       return request.auth.uid == owner
-        || (member(owner).exists && member(owner).data.email == email() && (
+        || (staffGrant(owner) && (
           (member(owner).data.permissions is list && key in member(owner).data.permissions)
           || (!(member(owner).data.permissions is list) && roleHas(owner, key))
         ));
@@ -48,7 +64,8 @@ service cloud.firestore {
     }
 
     match /shopMemberships/{id} {
-      allow get: if signedIn() && (resource.data.ownerUid == request.auth.uid || resource.data.email == email());
+      allow get: if signedIn() && (resource.data.ownerUid == request.auth.uid || sameMail(resource.data.email));
+      allow list: if signedIn() && resource.data.email == rawEmail();
       allow list: if signedIn() && resource.data.email == email();
       allow list: if signedIn() && resource.data.ownerUid == request.auth.uid;
       allow create, update: if signedIn()
@@ -59,6 +76,7 @@ service cloud.firestore {
     }
 
     match /users/{owner}/pos/data {
+      // Products and branches are fields on this document. A matching invite can read them.
       allow read: if isStaff(owner);
       allow create: if signedIn() && request.auth.uid == owner;
       allow update: if (signedIn() && request.auth.uid == owner) || (isStaff(owner) && shopPatchAllowed(owner));
