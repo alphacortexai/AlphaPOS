@@ -1,0 +1,64 @@
+export type ShopAccessRole = 'shop_owner' | 'admin' | 'manager' | 'cashier' | 'stock';
+
+export type ShopAccess = {
+  ownerUid: string;
+  shopName: string;
+  role: ShopAccessRole;
+};
+
+const STAFF_ROLES = new Set<ShopAccessRole>(['admin', 'manager', 'cashier', 'stock']);
+
+export const staffRole = (value: unknown): ShopAccessRole => (
+  STAFF_ROLES.has(value as ShopAccessRole) ? value as ShopAccessRole : 'cashier'
+);
+
+/** A person invited to someone else's shop does not also get an empty shop of their own. */
+export const shopsForSignedInUser = (input: {
+  userUid: string;
+  ownShopExists: boolean;
+  ownShopName?: string;
+  memberships: { ownerUid?: unknown; shopName?: unknown; role?: unknown }[];
+}): ShopAccess[] => {
+  const linked: ShopAccess[] = [];
+  input.memberships.forEach((membership) => {
+    const ownerUid = typeof membership.ownerUid === 'string' ? membership.ownerUid : '';
+    if (!ownerUid || ownerUid === input.userUid || linked.some((shop) => shop.ownerUid === ownerUid)) return;
+    const shopName = typeof membership.shopName === 'string' && membership.shopName.trim() ? membership.shopName.trim() : 'Linked shop';
+    linked.push({ ownerUid, shopName, role: staffRole(membership.role) });
+  });
+  if (!input.ownShopExists && linked.length > 0) return linked;
+  const shopName = input.ownShopName?.trim() || 'My Shop';
+  return [{ ownerUid: input.userUid, shopName, role: 'shop_owner' }, ...linked];
+};
+
+export const ownShopIsReal = (data: Record<string, unknown> | undefined) => {
+  if (!data) return false;
+  const name = typeof data.shopName === 'string' ? data.shopName.trim() : '';
+  const products = Array.isArray(data.products) ? data.products.length : 0;
+  const sales = Array.isArray(data.sales) ? data.sales.length : 0;
+  return (name !== '' && name !== 'My Shop') || products > 0 || sales > 0;
+};
+
+export const chooseShopId = (
+  shops: ShopAccess[],
+  preferred: { invited?: string; remembered?: string; active?: string },
+) => {
+  const has = (id?: string) => Boolean(id && shops.some((shop) => shop.ownerUid === id));
+  if (has(preferred.invited)) return preferred.invited as string;
+  if (has(preferred.remembered)) return preferred.remembered as string;
+  if (has(preferred.active)) return preferred.active as string;
+  return shops[0]?.ownerUid || '';
+};
+
+/** The shop document's saved role belongs to whoever last saved it. A cashier keeps the role they were invited as. */
+export const openedRole = (input: {
+  userUid: string;
+  shopOwnerUid: string;
+  membershipRole?: ShopAccessRole;
+  staffRole?: unknown;
+}): ShopAccessRole => {
+  if (input.shopOwnerUid === input.userUid) return 'shop_owner';
+  if (STAFF_ROLES.has(input.staffRole as ShopAccessRole)) return input.staffRole as ShopAccessRole;
+  if (input.membershipRole && STAFF_ROLES.has(input.membershipRole)) return input.membershipRole;
+  return 'cashier';
+};
