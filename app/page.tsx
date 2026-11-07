@@ -20,7 +20,7 @@ import { nextSku, reservedProductCodes } from '../lib/pos/sku';
 import { attachProductImages, compressProductPhoto, imageMapChars, isProductImage, PRODUCT_IMAGE_DOC_MAX_CHARS, readLocalProductImages, splitProductImages, writeLocalProductImages } from '../lib/pos/productImage';
 import { commitStockAndRecords, migrateShopLedger, readNamedRecords, readStockMap, setStockQty, writeRecords } from '../lib/pos/ledger';
 import { beginSalesEmailSend, buildSalesDigest, defaultSalesEmailSettings, finishSalesEmailSend, normalizeSalesEmailSettings, previousSalesPeriod, type SalesDigest, type SalesEmailSettings } from '../lib/pos/salesEmail';
-import { billForReceipt, countVariance, creditAllows, dayClose, discountNeedsManager, hashPin, needsReorder, overlayStock, pinIsValid, preferShopCatalog, productForReturn, rankProducts, sellingPrice, shopCatalog, shopDocumentBody, stockFallback, supplierOwed, tenderTotals, tendersNeedReference, type SupplierBill, type SupplierPayment } from '../lib/pos/shopMath';
+import { billForReceipt, countVariance, creditAllows, dayClose, discountNeedsManager, hashPin, inviteEmails, needsReorder, overlayStock, pinIsValid, preferShopCatalog, productForReturn, rankProducts, sellingPrice, shopCatalog, shopDocumentBody, stockFallback, supplierOwed, tenderTotals, tendersNeedReference, type SupplierBill, type SupplierPayment } from '../lib/pos/shopMath';
 import { accessDenied, chooseShopId, ownShopIsReal, shopsForSignedInUser } from '../lib/pos/shopAccess';
 import { fetchFirestoreDocument, fetchMembershipsByEmail, firstShopRecord, SHOP_CONNECTION_MESSAGE, ShopReadError, shopDocumentPath, withTimeout } from '../lib/pos/shopRead';
 import { booksForPermissions, canViewShelf, PERMISSION_LABELS, permissionsFor, permissionsMatchPreset, recordsForAccess, registerCatalog, resolveStaffAccess, rowsForBranch, shelfForInvite, STAFF_PERMISSIONS, type StaffPermission } from '../lib/pos/staffAccess';
@@ -730,15 +730,6 @@ export default function Page() {
               }
             }
           }
-          try {
-            const stored = await readShopRecord(ownerUid);
-            if (!stored) return;
-            shopDocs.set(ownerUid, stored);
-            const storedName = typeof stored.shopName === 'string' ? stored.shopName.trim() : '';
-            rememberMembership({ ownerUid, shopName: storedName || 'Linked shop', role: 'cashier' });
-          } catch (error) {
-            noteReadError(error);
-          }
         };
         if (normalizedEmail) {
           const emailKeys = [...new Set([normalizedEmail, authUser.email?.trim() || ''].filter((value) => value.includes('@')))];
@@ -1079,6 +1070,7 @@ export default function Page() {
           services,
           expenseGroups,
           users,
+          staffEmails: inviteEmails(users),
           activityLogs: [] as ActivityLog[],
           shopTimeSettings,
           accounts,
@@ -1974,6 +1966,10 @@ export default function Page() {
       permissions: permissionsFor(staffRole, staffPermissions),
       branchId,
       invitedAt: serverTimestamp(),
+    }, { merge: true });
+    await setDoc(doc(db, 'users', activeShopOwnerUid, 'pos', 'data'), {
+      staffEmails: inviteEmails([...users, { email: normalizedEmail }]),
+      updatedAt: serverTimestamp(),
     }, { merge: true });
   };
 
