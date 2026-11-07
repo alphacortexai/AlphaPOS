@@ -3684,10 +3684,6 @@ export default function Page() {
         )}
 
         {view === 'sales' && (
-          <>
-          <div className="page-tools">
-            <button type="button" className="edit-btn" onClick={() => { setPinDraft(''); setPinPrompt('switch'); }}>{operator ? `Selling as ${operator.name}` : 'Who is selling?'}</button>
-          </div>
           <RegisterDesk
             products={products}
             services={services}
@@ -3736,9 +3732,10 @@ export default function Page() {
             onCloseDrawer={closeDrawer}
             onClear={clearRegister}
             onPay={completeRegisterSale}
+            sellerName={operator?.name || ''}
+            onSwitchSeller={() => { setPinDraft(''); setPinPrompt('switch'); }}
             onCreateProduct={() => { if (!canEditCatalog) { showNotification('Cashiers sell. A manager adds products.', 'error'); return; } openProductForm(blankProductForm(branches[0]?.id || '')); }}
           />
-          </>
         )}
 
         {view === 'services' && (

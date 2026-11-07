@@ -124,6 +124,8 @@ export default function RegisterDesk({
   onPay,
   discountLocked = false,
   onAskApproval,
+  sellerName = '',
+  onSwitchSeller,
   onCreateProduct,
 }: {
   products: RegisterProduct[];
@@ -161,6 +163,8 @@ export default function RegisterDesk({
   onPay: (tenders: Tender[]) => boolean | Promise<boolean>;
   discountLocked?: boolean;
   onAskApproval?: () => void;
+  sellerName?: string;
+  onSwitchSeller?: () => void;
   onCreateProduct: () => void;
 }) {
   const searchRef = useRef<HTMLInputElement>(null);
@@ -596,6 +600,7 @@ export default function RegisterDesk({
           <div>
             <p>Current sale</p>
             <h2>{cart.length === 0 ? 'Nothing yet' : `${cart.length} item${cart.length === 1 ? '' : 's'}`}</h2>
+            <button type="button" className="pos-seller" onClick={onSwitchSeller}>{sellerName ? `Selling as ${sellerName}` : 'Who is selling?'}</button>
           </div>
           <button type="button" className="edit-btn" onClick={() => setHeldOpen(true)}>Held ({heldTickets.length})</button>
         </header>
