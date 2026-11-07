@@ -22,7 +22,7 @@ import { commitStockAndRecords, migrateShopLedger, readNamedRecords, readStockMa
 import { beginSalesEmailSend, buildSalesDigest, defaultSalesEmailSettings, finishSalesEmailSend, normalizeSalesEmailSettings, previousSalesPeriod, type SalesDigest, type SalesEmailSettings } from '../lib/pos/salesEmail';
 import { billForReceipt, countVariance, creditAllows, dayClose, discountNeedsManager, hashPin, needsReorder, overlayStock, pinIsValid, productForReturn, rankProducts, sellingPrice, shopDocumentBody, stockFallback, supplierOwed, tenderTotals, tendersNeedReference, type SupplierBill, type SupplierPayment } from '../lib/pos/shopMath';
 import { chooseShopId, ownShopIsReal, shopsForSignedInUser } from '../lib/pos/shopAccess';
-import { booksForPermissions, PERMISSION_LABELS, permissionsFor, permissionsMatchPreset, recordsForAccess, resolveStaffAccess, rowsForBranch, STAFF_PERMISSIONS, type StaffPermission } from '../lib/pos/staffAccess';
+import { booksForPermissions, PERMISSION_LABELS, permissionsFor, permissionsMatchPreset, recordsForAccess, registerCatalog, resolveStaffAccess, rowsForBranch, STAFF_PERMISSIONS, type StaffPermission } from '../lib/pos/staffAccess';
 import { completeGoogleRedirect, googleSignInError, startGoogleSignIn } from '../lib/pos/googleSignIn';
 import { completeEmailLinkSignIn, createStaffInviteLink, readInvitedEmail, readInvitedShopId, rememberInviteFromUrl, staffSignInError, takeInvitedShopId } from '../lib/pos/staffInvite';
 import {
@@ -1174,7 +1174,7 @@ export default function Page() {
 
   // Filtered products for inventory
   const filteredProducts = useMemo(() => {
-    return rowsForBranch(products, staffBranchId, branches.length).filter(p => {
+    return registerCatalog(products).filter(p => {
       const query = productSearchQuery.trim().toLowerCase();
       const matchesSearch = [p.name, p.sku, p.barcode, p.category].some((value) => value?.toLowerCase().includes(query));
       const matchesBranch = !productBranchFilter || p.branchId === productBranchFilter;
@@ -1185,16 +1185,10 @@ export default function Page() {
         p.stock === 0;
       return matchesSearch && matchesBranch && matchesStock;
     });
-  }, [branches.length, products, productSearchQuery, productBranchFilter, productStockFilter, staffBranchId]);
+  }, [products, productSearchQuery, productBranchFilter, productStockFilter]);
 
-  const counterProducts = useMemo(
-    () => rowsForBranch(products, staffBranchId, branches.length),
-    [branches.length, products, staffBranchId],
-  );
-  const visibleServices = useMemo(
-    () => rowsForBranch(services, staffBranchId, branches.length),
-    [branches.length, services, staffBranchId],
-  );
+  const counterProducts = useMemo(() => registerCatalog(products), [products]);
+  const visibleServices = services;
   const shopStockWorth = useMemo(() => stockWorth(counterProducts), [counterProducts]);
   const shelfStockWorth = useMemo(
     () => (productBranchFilter ? stockWorth(counterProducts.filter((product) => product.branchId === productBranchFilter)) : shopStockWorth),
@@ -3849,6 +3843,7 @@ export default function Page() {
             onPay={completeRegisterSale}
             sellerName={operator?.name || ''}
             onSwitchSeller={() => { setPinDraft(''); setPinPrompt('switch'); }}
+            canAddProduct={canEditCatalog}
             onCreateProduct={() => { if (!canEditCatalog) { showNotification('Cashiers sell. A manager adds products.', 'error'); return; } openProductForm(blankProductForm(branches[0]?.id || '')); }}
           />
         )}
