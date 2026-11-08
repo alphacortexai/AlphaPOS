@@ -199,6 +199,19 @@ export const staffGrants = (
   return grants;
 };
 
+/** Emails saved on the shop, split by what each person is allowed to do. */
+export const staffEmailLists = (
+  people: { email?: string; role?: string; permissions?: unknown; branchId?: string }[],
+) => {
+  const sellerEmails: string[] = [];
+  const editorEmails: string[] = [];
+  staffGrants('', '', people).forEach((grant) => {
+    if (grant.permissions.includes('sell') && sellerEmails.length < 6) sellerEmails.push(grant.email);
+    if ((grant.permissions.includes('editCatalog') || grant.permissions.includes('seeCost')) && editorEmails.length < 6) editorEmails.push(grant.email);
+  });
+  return { sellerEmails, editorEmails };
+};
+
 export const staffMayWriteShopField = (field: string, permissions: readonly StaffPermission[], ownsShop: boolean) => {
   if (ownsShop) return true;
   if (field === 'revision' || field === 'updatedAt' || field === 'ledgerSplit') return true;

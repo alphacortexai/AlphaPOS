@@ -15,14 +15,14 @@ service cloud.firestore {
     }
     function staffGrant(owner) {
       let grant = get(/databases/$(database)/documents/shopMemberships/$(owner + '_' + email()));
-      return grant != null
-        && email() != ''
+      return email() != ''
         && grant.exists
-        && sameMail(grant.data.email)
+        && grant.data.get('email', '') is string
+        && sameMail(grant.data.get('email', ''))
         && (
           !('ownerUid' in grant.data)
-          || grant.data.ownerUid == null
-          || grant.data.ownerUid == owner
+          || grant.data.get('ownerUid', null) == null
+          || grant.data.get('ownerUid', null) == owner
         );
     }
     function listedOnShop() {
@@ -31,41 +31,38 @@ service cloud.firestore {
         && resource.data.get('staffEmails', []) is list
         && email() in resource.data.get('staffEmails', []);
     }
-    function role(owner) {
-      let grant = get(/databases/$(database)/documents/shopMemberships/$(owner + '_' + email()));
+    function shopData(owner) {
+      let path = /databases/$(database)/documents/users/$(owner)/pos/data;
+      return exists(path) ? get(path).data : null;
+    }
+    function emailListed(data) {
+      return data != null && email() != '' && data.get('staffEmails', []) is list && email() in data.get('staffEmails', []);
+    }
+    function stringList(data, field) {
+      return data is map && data.keys().hasAny([field]) && data.get(field, []) is list ? data.get(field, []) : [];
+    }
+    function hasEmail(list) {
+      return (list.size() == 1 && list[0] == email())
+        || (list.size() == 2 && (list[0] == email() || list[1] == email()))
+        || (list.size() == 3 && (list[0] == email() || list[1] == email() || list[2] == email()))
+        || (list.size() == 4 && (list[0] == email() || list[1] == email() || list[2] == email() || list[3] == email()))
+        || (list.size() == 5 && (list[0] == email() || list[1] == email() || list[2] == email() || list[3] == email() || list[4] == email()))
+        || (list.size() == 6 && (list[0] == email() || list[1] == email() || list[2] == email() || list[3] == email() || list[4] == email() || list[5] == email()));
+    }
+    // sellerEmails and editorEmails hold up to six people. Until those fields exist, up to six people listed on the shop may sell.
+    function hasPerm(owner, key) {
+      let data = shopData(owner);
+      let split = data is map && data.keys().hasAny(['sellerEmails', 'editorEmails']);
+      let sellers = stringList(data, 'sellerEmails');
+      let editors = stringList(data, 'editorEmails');
+      let staff = data is map && data.get('staffEmails', []) is list ? data.get('staffEmails', []) : [];
       return request.auth.uid == owner
-        ? 'shop_owner'
-        : (grant != null && email() != '' && grant.exists && sameMail(grant.data.email) ? grant.data.role : '');
+        || (hasEmail(sellers) && (key == 'sell' || key == 'salesHistory' || key == 'customers' || key == 'products' || key == 'allBranches'))
+        || (hasEmail(editors) && (key == 'products' || key == 'editCatalog' || key == 'seeCost' || key == 'allBranches'))
+        || (!split && hasEmail(staff) && (key == 'sell' || key == 'salesHistory' || key == 'customers' || key == 'products' || key == 'allBranches'));
     }
     function isStaff(owner) {
-      return signedIn() && (request.auth.uid == owner || staffGrant(owner));
-    }
-    function roleHas(owner, key) {
-      let r = role(owner);
-      return r == 'shop_owner'
-        || (r == 'admin' && key in ['sell', 'salesHistory', 'customers', 'products', 'editCatalog', 'seeCost', 'expenses', 'reports', 'accounts', 'activity', 'manageStaff', 'allBranches'])
-        || (r == 'manager' && key in ['sell', 'salesHistory', 'customers', 'products', 'editCatalog', 'seeCost', 'expenses', 'reports', 'accounts', 'activity', 'allBranches'])
-        || (r == 'cashier' && key in ['sell', 'salesHistory', 'customers', 'products', 'allBranches'])
-        || (r == 'stock' && key in ['products', 'editCatalog', 'seeCost', 'allBranches']);
-    }
-    function grantAllows(owner, key) {
-      let grant = get(/databases/$(database)/documents/shopMemberships/$(owner + '_' + email()));
-      let invited = grant != null && email() != '' && grant.exists && sameMail(grant.data.email);
-      return request.auth.uid == owner
-        || (invited && (
-          (grant.data.permissions is list && key in grant.data.permissions)
-          || (!(grant.data.permissions is list) && roleHas(owner, key))
-        ));
-    }
-    function hasPerm(owner, key) {
-      return grantAllows(owner, key);
-    }
-    function tillChange() {
-      return request.resource != null
-        && resource != null
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'customers', 'heldTickets', 'cashSessions', 'revision', 'updatedAt', 'ledgerSplit'
-        ]);
+      return request.auth.uid == owner || emailListed(shopData(owner)) || hasPerm(owner, 'editCatalog');
     }
     function changedKeys() {
       return request.resource.data.diff(resource.data).affectedKeys();
@@ -77,8 +74,8 @@ service cloud.firestore {
         'customers', 'heldTickets', 'cashSessions',
         'revision', 'updatedAt', 'ledgerSplit'
       ])
-      && (!changed.hasAny(['products', 'services', 'suppliers', 'expenseGroups']) || grantAllows(owner, 'editCatalog'))
-      && (!changed.hasAny(['customers', 'heldTickets', 'cashSessions']) || grantAllows(owner, 'sell') || grantAllows(owner, 'customers'));
+      && (!changed.hasAny(['products', 'services', 'suppliers', 'expenseGroups']) || hasPerm(owner, 'editCatalog'))
+      && (!changed.hasAny(['customers', 'heldTickets', 'cashSessions']) || hasPerm(owner, 'sell'));
     }
 
     match /shopMemberships/{id} {
@@ -94,19 +91,18 @@ service cloud.firestore {
     }
 
     match /users/{owner}/pos/data {
-      // Products and branches live on this document. The owner, an invite, or an email saved on the shop may read them.
-      allow read: if signedIn() && (request.auth.uid == owner || listedOnShop() || staffGrant(owner));
+      // The owner allow stands alone so a missing shop document does not trip the invite checks.
+      allow read: if signedIn() && request.auth.uid == owner;
+      allow read: if signedIn() && listedOnShop();
+      allow read: if signedIn() && staffGrant(owner);
       allow create: if signedIn() && request.auth.uid == owner;
-      allow update: if signedIn() && (
-        request.auth.uid == owner
-        || (listedOnShop() && tillChange() && !staffGrant(owner))
-        || (staffGrant(owner) && shopPatchAllowed(owner))
-      );
+      allow update: if signedIn() && request.auth.uid == owner;
+      allow update: if signedIn() && shopPatchAllowed(owner);
       allow delete: if signedIn() && request.auth.uid == owner;
     }
     match /users/{owner}/pos/data/stock/{productId} {
       allow read: if isStaff(owner);
-      allow create, update: if hasPerm(owner, 'sell') || hasPerm(owner, 'editCatalog');
+      allow create, update: if hasPerm(owner, 'editCatalog') || hasPerm(owner, 'sell');
     }
     match /users/{owner}/pos/data/sales/{saleId} {
       allow read: if isStaff(owner);

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { booksForPermissions, canViewShelf, permissionsFor, permissionsMatchPreset, recordsForAccess, resolveStaffAccess, rowsForBranch, shelfForInvite, staffGrants, staffMayWriteShopField } from './staffAccess';
+import { booksForPermissions, canViewShelf, permissionsFor, permissionsMatchPreset, recordsForAccess, resolveStaffAccess, rowsForBranch, shelfForInvite, staffEmailLists, staffGrants, staffMayWriteShopField } from './staffAccess';
 
 test('saving the shop writes an invite record a cashier can sell with', () => {
   const grants = staffGrants('owner', 'C & E', [
@@ -16,6 +16,14 @@ test('saving the shop writes an invite record a cashier can sell with', () => {
   assert.equal(grants[0].branchId, 'main');
   assert.equal(grants[1].permissions.includes('sell'), false);
   assert.equal(grants[1].permissions.includes('products'), true);
+  const lists = staffEmailLists([
+    { email: 'Cashier@Shop.test', role: 'cashier' },
+    { email: 'stock@shop.test', role: 'stock' },
+  ]);
+  assert.deepEqual(lists.sellerEmails, ['cashier@shop.test']);
+  assert.deepEqual(lists.editorEmails, ['stock@shop.test']);
+  const many = staffEmailLists(Array.from({ length: 8 }, (_, index) => ({ email: `c${index}@shop.test`, role: 'cashier' })));
+  assert.equal(many.sellerEmails.length, 6);
 });
 
 test('an invite opens as the invited role, not as the owner of that shop', () => {
