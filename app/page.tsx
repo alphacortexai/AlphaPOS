@@ -23,7 +23,7 @@ import { beginSalesEmailSend, buildSalesDigest, defaultSalesEmailSettings, finis
 import { billForReceipt, countVariance, creditAllows, dayClose, discountNeedsManager, hashPin, inviteEmails, needsReorder, overlayStock, pinIsValid, preferShopCatalog, productForReturn, rankProducts, sellingPrice, shopCatalog, shopDocumentBody, stockFallback, supplierOwed, tenderTotals, tendersNeedReference, type SupplierBill, type SupplierPayment } from '../lib/pos/shopMath';
 import { accessDenied, chooseShopId, ownShopIsReal, shopsForSignedInUser } from '../lib/pos/shopAccess';
 import { fetchFirestoreDocument, fetchMembershipsByEmail, firstShopRecord, SHOP_CONNECTION_MESSAGE, ShopReadError, shopDocumentPath, withTimeout } from '../lib/pos/shopRead';
-import { booksForPermissions, canViewShelf, PERMISSION_LABELS, permissionsFor, permissionsMatchPreset, recordsForAccess, registerCatalog, resolveStaffAccess, rowsForBranch, shelfForInvite, staffGrants, STAFF_PERMISSIONS, type StaffPermission } from '../lib/pos/staffAccess';
+import { booksForPermissions, canViewShelf, PERMISSION_LABELS, permissionsFor, permissionsMatchPreset, recordsForAccess, registerCatalog, resolveStaffAccess, rowsForBranch, shelfForInvite, staffEmailLists, staffGrants, STAFF_PERMISSIONS, type StaffPermission } from '../lib/pos/staffAccess';
 import { completeGoogleRedirect, googleSignInError, startGoogleSignIn } from '../lib/pos/googleSignIn';
 import { clearInviteMemory, completeEmailLinkSignIn, createStaffInviteLink, readInvitedEmail, readInvitedShopId, rememberInviteFromUrl, staffSignInError, takeInvitedShopId } from '../lib/pos/staffInvite';
 import {
@@ -1063,6 +1063,7 @@ export default function Page() {
         const stored = splitProductImages(products);
         const photosFit = imageMapChars(stored.images) <= PRODUCT_IMAGE_DOC_MAX_CHARS;
         const trimmedLogs = trimActivity(activityLogs);
+        const staffLists = staffEmailLists(users);
         const shopPayload = {
           shopName: currentShop?.shopName || 'My Shop',
           branches,
@@ -1071,6 +1072,8 @@ export default function Page() {
           expenseGroups,
           users,
           staffEmails: inviteEmails(users),
+          sellerEmails: staffLists.sellerEmails,
+          editorEmails: staffLists.editorEmails,
           activityLogs: [] as ActivityLog[],
           shopTimeSettings,
           accounts,
@@ -1979,8 +1982,15 @@ export default function Page() {
       branchId,
       invitedAt: serverTimestamp(),
     }, { merge: true });
+    const people = [
+      ...users.filter((person) => person.email?.toLowerCase().trim() !== normalizedEmail),
+      { email: normalizedEmail, role: staffRole, permissions: staffPermissions, branchId },
+    ];
+    const lists = staffEmailLists(people);
     await setDoc(doc(db, 'users', activeShopOwnerUid, 'pos', 'data'), {
-      staffEmails: inviteEmails([...users, { email: normalizedEmail }]),
+      staffEmails: inviteEmails(people),
+      sellerEmails: lists.sellerEmails,
+      editorEmails: lists.editorEmails,
       updatedAt: serverTimestamp(),
     }, { merge: true });
   };
