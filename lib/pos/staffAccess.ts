@@ -162,6 +162,43 @@ const CATALOG_FIELDS = new Set(['products', 'services', 'suppliers', 'expenseGro
 const TILL_FIELDS = new Set(['customers', 'heldTickets', 'cashSessions']);
 
 /** Staff never write the owner's settings, staff list, balances, or shop name. */
+const GRANT_ROLES = new Set(['admin', 'manager', 'cashier', 'stock']);
+
+export type StaffGrant = {
+  id: string;
+  ownerUid: string;
+  email: string;
+  shopName: string;
+  role: 'admin' | 'manager' | 'cashier' | 'stock';
+  permissions: StaffPermission[];
+  branchId?: string;
+};
+
+/** Invite records for people saved on the shop. A sale is allowed only when this record exists. */
+export const staffGrants = (
+  ownerUid: string,
+  shopName: string,
+  people: { email?: string; role?: string; permissions?: unknown; branchId?: string }[],
+): StaffGrant[] => {
+  const grants: StaffGrant[] = [];
+  people.forEach((person) => {
+    const email = person.email?.trim().toLowerCase() || '';
+    const role = person.role || '';
+    if (!email.includes('@') || !GRANT_ROLES.has(role) || grants.some((grant) => grant.email === email)) return;
+    const named = role as StaffGrant['role'];
+    grants.push({
+      id: `${ownerUid}_${email}`,
+      ownerUid,
+      email,
+      shopName: shopName.trim() || 'My Shop',
+      role: named,
+      permissions: permissionsFor(named, normalizePermissions(person.permissions)),
+      ...(typeof person.branchId === 'string' && person.branchId ? { branchId: person.branchId } : {}),
+    });
+  });
+  return grants;
+};
+
 export const staffMayWriteShopField = (field: string, permissions: readonly StaffPermission[], ownsShop: boolean) => {
   if (ownsShop) return true;
   if (field === 'revision' || field === 'updatedAt' || field === 'ledgerSplit') return true;

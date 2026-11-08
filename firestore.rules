@@ -15,7 +15,8 @@ service cloud.firestore {
     }
     function staffGrant(owner) {
       let grant = get(/databases/$(database)/documents/shopMemberships/$(owner + '_' + email()));
-      return email() != ''
+      return grant != null
+        && email() != ''
         && grant.exists
         && sameMail(grant.data.email)
         && (
@@ -25,7 +26,8 @@ service cloud.firestore {
         );
     }
     function listedOnShop() {
-      return email() != ''
+      return resource != null
+        && email() != ''
         && resource.data.get('staffEmails', []) is list
         && email() in resource.data.get('staffEmails', []);
     }
@@ -33,7 +35,7 @@ service cloud.firestore {
       let grant = get(/databases/$(database)/documents/shopMemberships/$(owner + '_' + email()));
       return request.auth.uid == owner
         ? 'shop_owner'
-        : (email() != '' && grant.exists && sameMail(grant.data.email) ? grant.data.role : '');
+        : (grant != null && email() != '' && grant.exists && sameMail(grant.data.email) ? grant.data.role : '');
     }
     function isStaff(owner) {
       return signedIn() && (request.auth.uid == owner || staffGrant(owner));
@@ -46,13 +48,24 @@ service cloud.firestore {
         || (r == 'cashier' && key in ['sell', 'salesHistory', 'customers', 'products', 'allBranches'])
         || (r == 'stock' && key in ['products', 'editCatalog', 'seeCost', 'allBranches']);
     }
-    function hasPerm(owner, key) {
+    function grantAllows(owner, key) {
       let grant = get(/databases/$(database)/documents/shopMemberships/$(owner + '_' + email()));
+      let invited = grant != null && email() != '' && grant.exists && sameMail(grant.data.email);
       return request.auth.uid == owner
-        || (email() != '' && grant.exists && sameMail(grant.data.email) && (
+        || (invited && (
           (grant.data.permissions is list && key in grant.data.permissions)
           || (!(grant.data.permissions is list) && roleHas(owner, key))
         ));
+    }
+    function hasPerm(owner, key) {
+      return grantAllows(owner, key);
+    }
+    function tillChange() {
+      return request.resource != null
+        && resource != null
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'customers', 'heldTickets', 'cashSessions', 'revision', 'updatedAt', 'ledgerSplit'
+        ]);
     }
     function changedKeys() {
       return request.resource.data.diff(resource.data).affectedKeys();
@@ -64,8 +77,8 @@ service cloud.firestore {
         'customers', 'heldTickets', 'cashSessions',
         'revision', 'updatedAt', 'ledgerSplit'
       ])
-      && (!changed.hasAny(['products', 'services', 'suppliers', 'expenseGroups']) || hasPerm(owner, 'editCatalog'))
-      && (!changed.hasAny(['customers', 'heldTickets', 'cashSessions']) || hasPerm(owner, 'sell') || hasPerm(owner, 'customers'));
+      && (!changed.hasAny(['products', 'services', 'suppliers', 'expenseGroups']) || grantAllows(owner, 'editCatalog'))
+      && (!changed.hasAny(['customers', 'heldTickets', 'cashSessions']) || grantAllows(owner, 'sell') || grantAllows(owner, 'customers'));
     }
 
     match /shopMemberships/{id} {
@@ -84,7 +97,11 @@ service cloud.firestore {
       // Products and branches live on this document. The owner, an invite, or an email saved on the shop may read them.
       allow read: if signedIn() && (request.auth.uid == owner || listedOnShop() || staffGrant(owner));
       allow create: if signedIn() && request.auth.uid == owner;
-      allow update: if (signedIn() && request.auth.uid == owner) || (isStaff(owner) && shopPatchAllowed(owner));
+      allow update: if signedIn() && (
+        request.auth.uid == owner
+        || (listedOnShop() && tillChange() && !staffGrant(owner))
+        || (staffGrant(owner) && shopPatchAllowed(owner))
+      );
       allow delete: if signedIn() && request.auth.uid == owner;
     }
     match /users/{owner}/pos/data/stock/{productId} {
