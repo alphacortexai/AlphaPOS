@@ -127,6 +127,23 @@ export const fetchMembershipsByEmail = async (
   });
 });
 
+/**
+ * Open the shop from the signed-in SDK read.
+ * The backup stays idle unless that read drops, so a working register does not send a second document request.
+ */
+export const preferShopRead = async (
+  primary: Promise<Record<string, unknown> | null>,
+  backup: () => Promise<Record<string, unknown> | null>,
+  denied: (error: unknown) => boolean,
+): Promise<Record<string, unknown> | null> => {
+  try {
+    return await primary;
+  } catch (error) {
+    if (denied(error)) throw error;
+    return backup();
+  }
+};
+
 /** Use the first reply that actually has the shelf. A dropped listen channel must not hide it. */
 export const firstShopRecord = (reads: Promise<Record<string, unknown> | null>[]): Promise<Record<string, unknown> | null> => new Promise((resolve, reject) => {
   let open = reads.length;
