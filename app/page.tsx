@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type Dispatch, type SetStateAction } from 'react';
 import { db as firestoreDb, firebaseApp, firebaseConfig } from '../lib.firebase';
 import { getAuth, onAuthStateChanged, signOut } from 'firebase/auth';
-import { collection, deleteDoc, doc, getDoc, getDocFromServer, getDocs, onSnapshot, query, runTransaction, serverTimestamp, setDoc, where } from 'firebase/firestore';
+import { collection, deleteDoc, doc, getDoc, getDocFromServer, getDocs, increment, onSnapshot, query, runTransaction, serverTimestamp, setDoc, where } from 'firebase/firestore';
 import Logo from '../components/brand/Logo';
 import CatalogAssistant, { type CatalogCategoryRow, type CatalogCreateRow, type CatalogPriceRow } from '../components/pos/CatalogAssistant';
 import RegisterDesk from '../components/pos/RegisterDesk';
@@ -23,7 +23,7 @@ import { beginSalesEmailSend, buildSalesDigest, defaultSalesEmailSettings, finis
 import { billForReceipt, countVariance, creditAllows, dayClose, discountNeedsManager, hashPin, inviteEmails, needsReorder, overlayStock, pinIsValid, preferShopCatalog, productForReturn, rankProducts, sellingPrice, shopCatalog, shopDocumentBody, stockFallback, supplierOwed, tenderTotals, tendersNeedReference, type SupplierBill, type SupplierPayment } from '../lib/pos/shopMath';
 import { accessDenied, chooseShopId, ownShopIsReal, shopsForSignedInUser } from '../lib/pos/shopAccess';
 import { fetchFirestoreDocument, fetchMembershipsByEmail, preferShopRead, SHOP_CONNECTION_MESSAGE, ShopReadError, withTimeout } from '../lib/pos/shopRead';
-import { booksForPermissions, canViewShelf, PERMISSION_LABELS, permissionsFor, permissionsMatchPreset, recordsForAccess, registerCatalog, resolveStaffAccess, rowsForBranch, shelfForInvite, staffEmailLists, staffGrants, STAFF_PERMISSIONS, type StaffPermission } from '../lib/pos/staffAccess';
+import { booksForPermissions, canViewShelf, inviteShopPatch, PERMISSION_LABELS, permissionsFor, permissionsMatchPreset, recordsForAccess, registerCatalog, resolveStaffAccess, rowsForBranch, shelfForInvite, staffEmailLists, staffGrants, STAFF_PERMISSIONS, type StaffPermission } from '../lib/pos/staffAccess';
 import { completeGoogleRedirect, googleSignInError, startGoogleSignIn } from '../lib/pos/googleSignIn';
 import { clearInviteMemory, completeEmailLinkSignIn, createStaffInviteLink, readInvitedEmail, readInvitedShopId, rememberInviteFromUrl, staffSignInError, takeInvitedShopId } from '../lib/pos/staffInvite';
 import {
@@ -312,6 +312,7 @@ export default function Page() {
   const hasLoadedUserDataRef = useRef(false);
   const isSwitchingShopRef = useRef(false);
   const shopRevisionRef = useRef(0);
+  const invitePatchRef = useRef<string | null>(null);
   const activeShopOwnerUidRef = useRef('');
   const shopLoadGenRef = useRef(0);
   const [shopEpoch, setShopEpoch] = useState(0);
@@ -976,6 +977,7 @@ export default function Page() {
           : null;
         setActivityLogs(ledgerReads.activity ? trimActivity(sideLogs ?? inlineLogs) : []);
         applyRetailCollections(data as Record<string, unknown>);
+        if (authUser.uid !== selectedShopOwnerUid) invitePatchRef.current = null;
         hasLoadedUserDataRef.current = true;
         isSwitchingShopRef.current = false;
         const shelfNote = authUser.uid === selectedShopOwnerUid ? '' : ` ${catalog.branches.length} ${catalog.branches.length === 1 ? 'branch' : 'branches'}, ${embeddedProducts.length} products.`;
@@ -1095,33 +1097,52 @@ export default function Page() {
         if (!ownsDocument && !canWriteTill && !canWriteCatalog && !canWriteActivity) return;
         const userDataRef = doc(db, 'users', activeShopOwnerUid, 'pos', 'data');
         const activityDocRef = doc(db, 'users', activeShopOwnerUid, 'pos', 'activity');
+        if (!ownsDocument) {
+          const patch = inviteShopPatch({
+            canWriteTill,
+            canWriteCatalog,
+            customers: removeUndefinedDeep(customers),
+            heldTickets: removeUndefinedDeep(heldTickets),
+            cashSessions: removeUndefinedDeep(cashSessions),
+            products: removeUndefinedDeep(stored.products),
+            services: removeUndefinedDeep(services),
+            suppliers: removeUndefinedDeep(suppliers),
+            expenseGroups: removeUndefinedDeep(expenseGroups),
+          });
+          const patchKey = JSON.stringify(patch);
+          if (invitePatchRef.current === null) {
+            invitePatchRef.current = patchKey;
+          } else if (invitePatchRef.current !== patchKey) {
+            await setDoc(userDataRef, {
+              ...patch,
+              revision: increment(1),
+              updatedAt: serverTimestamp(),
+            }, { merge: true });
+            invitePatchRef.current = patchKey;
+          }
+          if (canWriteActivity) {
+            await setDoc(activityDocRef, {
+              activityLogs: removeUndefinedDeep(trimmedLogs),
+              updatedAt: serverTimestamp(),
+            });
+          }
+          if (canWriteCatalog && photosFit) {
+            await setDoc(doc(db, 'users', activeShopOwnerUid, 'pos', 'images'), {
+              images: stored.images,
+              updatedAt: serverTimestamp(),
+            });
+          } else if (canWriteCatalog && stored.products.length > 0) {
+            setStatus('Product photos are too large to save. The products were saved, so a cashier can still sell them.');
+          }
+          return;
+        }
         let nextRevision = shopRevisionRef.current;
         await runTransaction(db, async (transaction) => {
           const snap = await transaction.get(userDataRef);
           const remoteRevision = snap.exists() ? Number(snap.data().revision) || 0 : 0;
           if (snap.exists() && remoteRevision !== shopRevisionRef.current) throw new Error('SHOP_CONFLICT');
           nextRevision = remoteRevision + 1;
-          const remoteShelf = shopCatalog(snap.exists() ? snap.data() as Record<string, unknown> : undefined);
-          const keepRemoteShelf = !ownsDocument && stored.products.length === 0 && remoteShelf.products.length > 0;
-          const patch: Record<string, unknown> = ownsDocument
-            ? { ...removeUndefinedDeep(shopDocumentBody({ ...shopPayload, revision: nextRevision })), updatedAt: serverTimestamp() }
-            : {
-              ledgerSplit: true,
-              revision: nextRevision,
-              updatedAt: serverTimestamp(),
-              ...(canWriteTill ? {
-                customers: removeUndefinedDeep(customers),
-                heldTickets: removeUndefinedDeep(heldTickets),
-                cashSessions: removeUndefinedDeep(cashSessions),
-              } : {}),
-              ...(canWriteCatalog && !keepRemoteShelf ? {
-                products: removeUndefinedDeep(stored.products),
-                services: removeUndefinedDeep(services),
-                suppliers: removeUndefinedDeep(suppliers),
-                expenseGroups: removeUndefinedDeep(expenseGroups),
-              } : {}),
-            };
-          if (ownsDocument || canWriteTill || canWriteCatalog) transaction.set(userDataRef, patch, { merge: true });
+          transaction.set(userDataRef, { ...removeUndefinedDeep(shopDocumentBody({ ...shopPayload, revision: nextRevision })), updatedAt: serverTimestamp() }, { merge: true });
           if (canWriteActivity) {
             transaction.set(activityDocRef, {
               activityLogs: removeUndefinedDeep(trimmedLogs),

@@ -212,6 +212,34 @@ export const staffEmailLists = (
   return { sellerEmails, editorEmails };
 };
 
+/** Fields an invited person may save. A sale does not belong here, so selling does not rewrite the shop document. */
+export const inviteShopPatch = (input: {
+  canWriteTill: boolean;
+  canWriteCatalog: boolean;
+  customers: unknown;
+  heldTickets: unknown;
+  cashSessions: unknown;
+  products: unknown;
+  services: unknown;
+  suppliers: unknown;
+  expenseGroups: unknown;
+}): Record<string, unknown> => {
+  const patch: Record<string, unknown> = { ledgerSplit: true };
+  if (input.canWriteTill) {
+    patch.customers = input.customers;
+    patch.heldTickets = input.heldTickets;
+    patch.cashSessions = input.cashSessions;
+  }
+  const products = Array.isArray(input.products) ? input.products : [];
+  if (input.canWriteCatalog && products.length > 0) {
+    patch.products = products;
+    patch.services = input.services;
+    patch.suppliers = input.suppliers;
+    patch.expenseGroups = input.expenseGroups;
+  }
+  return patch;
+};
+
 export const staffMayWriteShopField = (field: string, permissions: readonly StaffPermission[], ownsShop: boolean) => {
   if (ownsShop) return true;
   if (field === 'revision' || field === 'updatedAt' || field === 'ledgerSplit') return true;
