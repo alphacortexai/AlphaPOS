@@ -22,7 +22,7 @@ import { commitStockAndRecords, migrateShopLedger, readNamedRecords, readStockMa
 import { beginSalesEmailSend, buildSalesDigest, defaultSalesEmailSettings, finishSalesEmailSend, normalizeSalesEmailSettings, previousSalesPeriod, type SalesDigest, type SalesEmailSettings } from '../lib/pos/salesEmail';
 import { billForReceipt, countVariance, creditAllows, dayClose, discountNeedsManager, hashPin, inviteEmails, needsReorder, overlayStock, pinIsValid, preferShopCatalog, productForReturn, rankProducts, sellingPrice, shopCatalog, shopDocumentBody, stockFallback, supplierOwed, tenderTotals, tendersNeedReference, type SupplierBill, type SupplierPayment } from '../lib/pos/shopMath';
 import { accessDenied, chooseShopId, ownShopIsReal, shopsForSignedInUser } from '../lib/pos/shopAccess';
-import { fetchFirestoreDocument, fetchMembershipsByEmail, firstShopRecord, SHOP_CONNECTION_MESSAGE, ShopReadError, shopDocumentPath, withTimeout } from '../lib/pos/shopRead';
+import { fetchFirestoreDocument, fetchMembershipsByEmail, preferShopRead, SHOP_CONNECTION_MESSAGE, ShopReadError, withTimeout } from '../lib/pos/shopRead';
 import { booksForPermissions, canViewShelf, PERMISSION_LABELS, permissionsFor, permissionsMatchPreset, recordsForAccess, registerCatalog, resolveStaffAccess, rowsForBranch, shelfForInvite, staffEmailLists, staffGrants, STAFF_PERMISSIONS, type StaffPermission } from '../lib/pos/staffAccess';
 import { completeGoogleRedirect, googleSignInError, startGoogleSignIn } from '../lib/pos/googleSignIn';
 import { clearInviteMemory, completeEmailLinkSignIn, createStaffInviteLink, readInvitedEmail, readInvitedShopId, rememberInviteFromUrl, staffSignInError, takeInvitedShopId } from '../lib/pos/staffInvite';
@@ -677,23 +677,20 @@ export default function Page() {
           }
           connectionDropped = true;
         };
+        const readDenied = (error: unknown) => accessDenied(error) || (error instanceof ShopReadError && error.denied);
         const readShopRecord = async (ownerUid: string) => {
           const ref = doc(db, 'users', ownerUid, 'pos', 'data');
-          const sdk = withTimeout(getDocFromServer(ref), 8000, SHOP_CONNECTION_MESSAGE).then((snap) => (
+          const fromServer = () => withTimeout(getDocFromServer(ref), 8000, SHOP_CONNECTION_MESSAGE).then((snap) => (
             snap.exists() ? snap.data() as Record<string, unknown> : null
-          )).catch(async (error) => {
-            if (accessDenied(error)) throw error;
+          ));
+          return preferShopRead(fromServer(), async () => {
             const cached = await getDoc(ref).catch(() => null);
             if (cached?.exists()) {
               const cachedData = cached.data() as Record<string, unknown>;
               if (shopCatalog(cachedData).products.length > 0) return cachedData;
             }
-            throw error;
-          });
-          const rest = restToken().then((token) => (
-            token && projectId ? fetchFirestoreDocument(projectId, shopDocumentPath(ownerUid), token) : Promise.reject(new ShopReadError(SHOP_CONNECTION_MESSAGE))
-          ));
-          return firstShopRecord([sdk, rest]);
+            return fromServer();
+          }, readDenied);
         };
         const ownData = await readShopRecord(authUser.uid).catch((error: unknown) => {
           noteReadError(error);
@@ -1028,17 +1025,13 @@ export default function Page() {
       });
       setRegisterNotice((notice) => (notice ? '' : notice));
     };
-    const pullShelf = async () => {
-      const projectId = firebaseConfig.projectId || '';
-      const user = firebaseApp ? getAuth(firebaseApp).currentUser : null;
-      const token = await user?.getIdToken().catch(() => '');
-      if (!token || !projectId || stopped) return;
-      const record = await fetchFirestoreDocument(projectId, shopDocumentPath(ownerUid), token).catch(() => null);
-      if (record) applyShelf(record);
-    };
-    void pullShelf();
     if (!db) return () => { stopped = true; };
     const ref = doc(db, 'users', ownerUid, 'pos', 'data');
+    const pullShelf = async () => {
+      const snap = await getDocFromServer(ref).catch(() => null);
+      if (stopped || !snap?.exists()) return;
+      applyShelf(snap.data() as Record<string, unknown>);
+    };
     const unsubscribe = onSnapshot(ref, (snap) => {
       if (!snap.exists() || snap.metadata.hasPendingWrites) return;
       applyShelf(snap.data() as Record<string, unknown>);

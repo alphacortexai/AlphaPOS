@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { decodeFirestoreDocument, fetchFirestoreDocument, fetchMembershipsByEmail, firstShopRecord, shopDocumentPath } from './shopRead';
+import { decodeFirestoreDocument, fetchFirestoreDocument, fetchMembershipsByEmail, firstShopRecord, preferShopRead, ShopReadError, shopDocumentPath } from './shopRead';
 
 const shopBody = {
   fields: {
@@ -52,6 +52,45 @@ test('the shelf still arrives when the live listen channel fails', async () => {
   const shop = await firstShopRecord([dropped, rest]);
   assert.equal((shop?.products as { id: string }[])[0].id, 'soap');
   assert.equal((shop?.branches as { name: string }[])[0].name, 'Main Branch');
+});
+
+test('a shop that already opened does not send the backup document request', async () => {
+  let backupCalls = 0;
+  const shop = await preferShopRead(
+    Promise.resolve({ products: [{ id: 'soap' }] }),
+    async () => {
+      backupCalls += 1;
+      return { products: [] };
+    },
+    () => false,
+  );
+  assert.equal((shop?.products as { id: string }[])[0].id, 'soap');
+  assert.equal(backupCalls, 0);
+});
+
+test('a denied shop read does not send the backup document request', async () => {
+  let backupCalls = 0;
+  await assert.rejects(
+    preferShopRead(
+      Promise.reject(new ShopReadError('Missing permission to open this shop.', true)),
+      async () => {
+        backupCalls += 1;
+        return null;
+      },
+      (error) => error instanceof ShopReadError && error.denied,
+    ),
+    (error: unknown) => error instanceof ShopReadError && error.denied,
+  );
+  assert.equal(backupCalls, 0);
+});
+
+test('a dropped shop read uses the backup', async () => {
+  const shop = await preferShopRead(
+    Promise.reject(new Error('QUIC_TOO_MANY_RTOS')),
+    async () => ({ products: [{ id: 'soap' }] }),
+    () => false,
+  );
+  assert.equal((shop?.products as { id: string }[])[0].id, 'soap');
 });
 
 test('a direct document read uses the shop path and the signed-in token', async () => {
