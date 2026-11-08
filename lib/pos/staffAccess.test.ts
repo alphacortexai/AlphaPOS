@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { booksForPermissions, canViewShelf, permissionsFor, permissionsMatchPreset, recordsForAccess, resolveStaffAccess, rowsForBranch, shelfForInvite, staffEmailLists, staffGrants, staffMayWriteShopField } from './staffAccess';
+import { booksForPermissions, canViewShelf, inviteShopPatch, permissionsFor, permissionsMatchPreset, recordsForAccess, resolveStaffAccess, rowsForBranch, shelfForInvite, staffEmailLists, staffGrants, staffMayWriteShopField } from './staffAccess';
 
 test('saving the shop writes an invite record a cashier can sell with', () => {
   const grants = staffGrants('owner', 'C & E', [
@@ -71,6 +71,60 @@ test('the owner of the document keeps every function, and a custom list can turn
   assert.equal(staffMayWriteShopField('customers', custom, false), true);
   assert.equal(staffMayWriteShopField('users', custom, false), false);
   assert.equal(staffMayWriteShopField('taxSettings', custom, false), false);
+});
+
+test('a sale does not change the shop patch an invited cashier saves', () => {
+  const before = inviteShopPatch({
+    canWriteTill: true,
+    canWriteCatalog: false,
+    customers: [{ id: '188e8d00-49a6-4677-a4b3-e97d3bae4831', name: 'Edrine' }],
+    heldTickets: [],
+    cashSessions: [],
+    products: [{ id: 'soap', stock: 4 }],
+    services: [],
+    suppliers: [],
+    expenseGroups: [],
+  });
+  const afterSale = inviteShopPatch({
+    canWriteTill: true,
+    canWriteCatalog: false,
+    customers: [{ id: '188e8d00-49a6-4677-a4b3-e97d3bae4831', name: 'Edrine' }],
+    heldTickets: [],
+    cashSessions: [],
+    products: [{ id: 'soap', stock: 3 }],
+    services: [],
+    suppliers: [],
+    expenseGroups: [],
+  });
+  assert.equal(JSON.stringify(before), JSON.stringify(afterSale));
+  assert.equal('products' in before, false);
+  assert.deepEqual(before.customers, [{ id: '188e8d00-49a6-4677-a4b3-e97d3bae4831', name: 'Edrine' }]);
+});
+
+test('an invited cashier patch changes when a customer is added', () => {
+  const opened = inviteShopPatch({
+    canWriteTill: true,
+    canWriteCatalog: false,
+    customers: [],
+    heldTickets: [],
+    cashSessions: [],
+    products: [],
+    services: [],
+    suppliers: [],
+    expenseGroups: [],
+  });
+  const withCustomer = inviteShopPatch({
+    canWriteTill: true,
+    canWriteCatalog: false,
+    customers: [{ id: 'new', name: 'Asha' }],
+    heldTickets: [],
+    cashSessions: [],
+    products: [],
+    services: [],
+    suppliers: [],
+    expenseGroups: [],
+  });
+  assert.notEqual(JSON.stringify(opened), JSON.stringify(withCustomer));
 });
 
 test('a person who cannot see the books does not receive the copy stored on the shop document', () => {
