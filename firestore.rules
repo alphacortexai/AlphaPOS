@@ -97,7 +97,7 @@ service cloud.firestore {
       allow read: if signedIn() && staffGrant(owner);
       allow create: if signedIn() && request.auth.uid == owner;
       allow update: if signedIn() && request.auth.uid == owner;
-      allow update: if signedIn() && shopPatchAllowed(owner);
+      allow update: if signedIn() && request.auth.uid != owner && shopPatchAllowed(owner);
       allow delete: if signedIn() && request.auth.uid == owner;
     }
     match /users/{owner}/pos/data/stock/{productId} {
