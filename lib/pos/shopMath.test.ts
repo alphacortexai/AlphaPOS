@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { billForReceipt, creditAllows, dayClose, inviteEmails, ledgerReadsForRole, needsReorder, overlayStock, preferShopCatalog, productForReturn, rankProducts, shopCatalog, shopDocumentBody, supplierOwed, tenderTotals, tendersNeedReference } from './shopMath';
+import { billForReceipt, creditAllows, dayClose, finiteAmount, inviteEmails, keepEditedRows, ledgerReadsForRole, mergeEditedRows, needsReorder, overlayStock, preferShopCatalog, productForReturn, rankProducts, shopCatalog, shopDocumentBody, supplierOwed, tenderTotals, tendersNeedReference } from './shopMath';
 
 test('invited emails are saved on the shop so a cashier can read the shelf', () => {
   assert.deepEqual(inviteEmails([
@@ -34,6 +34,19 @@ test('an empty shelf is on the reorder list', () => {
 test('live stock from the stock record wins over the shop copy', () => {
   assert.equal(overlayStock([{ id: 'soap', stock: 4 }], { soap: 2 })[0].stock, 2);
   assert.equal(overlayStock([{ id: 'soap', stock: 4 }], {})[0].stock, 4);
+});
+
+test('a price edited here is kept when another till saved first', () => {
+  const local = [{ id: 'soap', salePrice: 2500, stock: 4 }];
+  const remote = [{ id: 'soap', salePrice: 2000, stock: 9 }, { id: 'rice', salePrice: 4000, image: 'data:image/jpeg;base64,abc' }];
+  const kept = keepEditedRows(local, remote);
+  assert.equal(kept[0].salePrice, 2500);
+  assert.equal(kept[1].id, 'rice');
+  assert.equal('image' in kept[1], false);
+  const customers = mergeEditedRows([{ id: 'a', name: 'Asha' }], [{ id: 'b', name: 'Edrine' }]);
+  assert.deepEqual(customers.map((row) => row.id), ['b', 'a']);
+  assert.equal(finiteAmount('2,500'), 2500);
+  assert.equal(Number.isFinite(finiteAmount('')), false);
 });
 
 test('the register shelf comes from the shop document even when receipts have not loaded', () => {

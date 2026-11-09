@@ -20,7 +20,7 @@ import { nextSku, reservedProductCodes } from '../lib/pos/sku';
 import { attachProductImages, compressProductPhoto, imageMapChars, isProductImage, PRODUCT_IMAGE_DOC_MAX_CHARS, readLocalProductImages, splitProductImages, writeLocalProductImages } from '../lib/pos/productImage';
 import { commitStockAndRecords, migrateShopLedger, readNamedRecords, readStockMap, setStockQty, writeRecords } from '../lib/pos/ledger';
 import { beginSalesEmailSend, buildSalesDigest, defaultSalesEmailSettings, finishSalesEmailSend, normalizeSalesEmailSettings, previousSalesPeriod, type SalesDigest, type SalesEmailSettings } from '../lib/pos/salesEmail';
-import { billForReceipt, countVariance, creditAllows, dayClose, discountNeedsManager, hashPin, inviteEmails, needsReorder, overlayStock, pinIsValid, preferShopCatalog, productForReturn, rankProducts, sellingPrice, shopCatalog, shopDocumentBody, stockFallback, supplierOwed, tenderTotals, tendersNeedReference, type SupplierBill, type SupplierPayment } from '../lib/pos/shopMath';
+import { billForReceipt, countVariance, creditAllows, dayClose, discountNeedsManager, finiteAmount, hashPin, inviteEmails, keepEditedRows, mergeEditedRows, needsReorder, overlayStock, pinIsValid, preferShopCatalog, productForReturn, rankProducts, sellingPrice, shopCatalog, shopDocumentBody, stockFallback, supplierOwed, tenderTotals, tendersNeedReference, type SupplierBill, type SupplierPayment } from '../lib/pos/shopMath';
 import { accessDenied, chooseShopId, ownShopIsReal, shopsForSignedInUser } from '../lib/pos/shopAccess';
 import { fetchFirestoreDocument, fetchMembershipsByEmail, preferShopRead, SHOP_CONNECTION_MESSAGE, ShopReadError, withTimeout } from '../lib/pos/shopRead';
 import { booksForPermissions, canViewShelf, inviteShopPatch, PERMISSION_LABELS, permissionsFor, permissionsMatchPreset, recordsForAccess, registerCatalog, resolveStaffAccess, rowsForBranch, shelfForInvite, staffEmailLists, staffGrants, STAFF_PERMISSIONS, type StaffPermission } from '../lib/pos/staffAccess';
@@ -229,6 +229,7 @@ const emptyStockForm = () => ({
   supplierName: '',
   reference: '',
   unitCost: '',
+  salePrice: '',
   lines: null as StockReceiptLine[] | null,
 });
 
@@ -444,8 +445,11 @@ export default function Page() {
   ), [authUser]);
   const currentShop = availableShops.find((s) => s.ownerUid === activeShopOwnerUid);
   const claimedRole = currentShop?.role || role;
-  const shopRole: Role = authUser && activeShopOwnerUid && activeShopOwnerUid !== authUser.uid && claimedRole === 'shop_owner' ? 'cashier' : claimedRole;
-  const isShopOwner = shopRole === 'shop_owner' && activeShopOwnerUid === authUser?.uid;
+  const ownsThisShop = Boolean(authUser && activeShopOwnerUid && authUser.uid === activeShopOwnerUid);
+  const shopRole: Role = ownsThisShop
+    ? 'shop_owner'
+    : (authUser && activeShopOwnerUid && claimedRole === 'shop_owner' ? 'cashier' : claimedRole);
+  const isShopOwner = ownsThisShop;
   const granted = useMemo(
     () => (isShopOwner ? permissionsFor('shop_owner') : (currentShop?.permissions ?? permissionsFor(shopRole === 'shop_owner' ? 'cashier' : shopRole))),
     [currentShop?.permissions, isShopOwner, shopRole],
@@ -985,6 +989,7 @@ export default function Page() {
         return true;
       } catch (error) {
         setShopsResolved(true);
+        isSwitchingShopRef.current = false;
         const denied = error instanceof Error && /permission/i.test(error.message);
         setStatus(denied
           ? 'Missing permission to open this shop. Publish the latest Firestore rules, then reload.'
@@ -1017,9 +1022,14 @@ export default function Page() {
           const row = product as Product;
           const prior = current.find((item) => item.id === row.id);
           if (!prior) return row;
-          return { ...row, stock: prior.stock, ...(prior.image ? { image: prior.image } : {}) };
+          const localIsNewer = (prior.updatedAt || '') > (row.updatedAt || '');
+          const chosen = localIsNewer ? { ...row, ...prior } : { ...row };
+          return { ...chosen, stock: prior.stock, ...(prior.image ? { image: prior.image } : {}) };
         });
-        return sameRows(current, next) ? current : next;
+        const ids = new Set(next.map((product) => product.id));
+        const pending = current.filter((product) => !ids.has(product.id));
+        const combined = pending.length > 0 ? [...next, ...pending] : next;
+        return sameRows(current, combined) ? current : combined;
       });
       setServices((current) => {
         const next = catalog.services as Service[];
@@ -1137,20 +1147,77 @@ export default function Page() {
           return;
         }
         let nextRevision = shopRevisionRef.current;
-        await runTransaction(db, async (transaction) => {
+        const listsDiffer = <T extends { id: string }>(current: T[], next: T[]) => (
+          current.length !== next.length || current.some((row, index) => row.id !== next[index]?.id)
+        );
+        const adopted = await runTransaction(db, async (transaction) => {
           const snap = await transaction.get(userDataRef);
-          const remoteRevision = snap.exists() ? Number(snap.data().revision) || 0 : 0;
-          if (snap.exists() && remoteRevision !== shopRevisionRef.current) throw new Error('SHOP_CONFLICT');
+          const remote = snap.exists() ? snap.data() as Record<string, unknown> : {};
+          const remoteRevision = snap.exists() ? Number(remote.revision) || 0 : 0;
+          const conflict = snap.exists() && remoteRevision !== shopRevisionRef.current;
+          const nextProducts = conflict ? keepEditedRows(stored.products, remote.products) : stored.products;
+          const nextServices = conflict ? keepEditedRows(services, remote.services) : services;
+          const nextSuppliers = conflict ? keepEditedRows(suppliers, remote.suppliers) : suppliers;
+          const nextGroups = conflict ? keepEditedRows(expenseGroups, remote.expenseGroups) : expenseGroups;
+          const nextBranches = conflict ? keepEditedRows(branches, remote.branches) : branches;
+          const nextUsers = conflict ? mergeEditedRows(users, remote.users) : users;
+          const nextCustomers = conflict ? mergeEditedRows(customers, remote.customers) : customers;
+          const nextHeld = conflict ? mergeEditedRows(heldTickets, remote.heldTickets) : heldTickets;
+          const nextSessions = conflict ? mergeEditedRows(cashSessions, remote.cashSessions) : cashSessions;
           nextRevision = remoteRevision + 1;
-          transaction.set(userDataRef, { ...removeUndefinedDeep(shopDocumentBody({ ...shopPayload, revision: nextRevision })), updatedAt: serverTimestamp() }, { merge: true });
+          transaction.set(userDataRef, {
+            ...removeUndefinedDeep(shopDocumentBody({
+              ...shopPayload,
+              products: nextProducts,
+              services: nextServices,
+              suppliers: nextSuppliers,
+              expenseGroups: nextGroups,
+              branches: nextBranches,
+              users: nextUsers,
+              customers: nextCustomers,
+              heldTickets: nextHeld,
+              cashSessions: nextSessions,
+              revision: nextRevision,
+            })),
+            updatedAt: serverTimestamp(),
+          }, { merge: true });
           if (canWriteActivity) {
             transaction.set(activityDocRef, {
               activityLogs: removeUndefinedDeep(trimmedLogs),
               updatedAt: serverTimestamp(),
             });
           }
+          if (!conflict) return null;
+          return {
+            products: nextProducts as Product[],
+            services: nextServices,
+            suppliers: nextSuppliers,
+            expenseGroups: nextGroups,
+            branches: nextBranches,
+            users: nextUsers,
+            customers: nextCustomers,
+            heldTickets: nextHeld,
+            cashSessions: nextSessions,
+          };
         });
         shopRevisionRef.current = nextRevision;
+        if (adopted) {
+          const saved = adopted;
+          if (listsDiffer(products, saved.products)) {
+            setProducts((current) => {
+              const extras = saved.products.filter((product) => !current.some((item) => item.id === product.id));
+              return extras.length > 0 ? [...current, ...extras] : current;
+            });
+          }
+          if (listsDiffer(services, saved.services)) setServices(saved.services);
+          if (listsDiffer(suppliers, saved.suppliers)) setSuppliers(saved.suppliers);
+          if (listsDiffer(expenseGroups, saved.expenseGroups)) setExpenseGroups(saved.expenseGroups);
+          if (listsDiffer(branches, saved.branches)) setBranches(saved.branches);
+          if (listsDiffer(users, saved.users)) setUsers(saved.users);
+          if (listsDiffer(customers, saved.customers)) setCustomers(saved.customers);
+          if (listsDiffer(heldTickets, saved.heldTickets)) setHeldTickets(saved.heldTickets);
+          if (listsDiffer(cashSessions, saved.cashSessions)) setCashSessions(saved.cashSessions);
+        }
         if (ownsDocument) {
           const shopName = currentShop?.shopName || 'My Shop';
           await Promise.all(staffGrants(activeShopOwnerUid, shopName, users).map((grant) => setDoc(doc(db, 'shopMemberships', grant.id), {
@@ -1172,17 +1239,11 @@ export default function Page() {
           setStatus('Product photos are too large to save. The products were saved, so a cashier can still sell them.');
         }
       } catch (error) {
-        if (error instanceof Error && error.message === 'SHOP_CONFLICT') {
-          hasLoadedUserDataRef.current = false;
-          showNotificationRef.current('Another register saved this shop. Refreshing so this till does not overwrite it.', 'info', 6000);
-          void loadUserData();
-          return;
-        }
         setStatus(`Failed to auto-save your data: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }
     };
     void saveUserData();
-  }, [activeShopOwnerUid, allow, authUser, customerPayments, db, loadUserData, branches, products, services, sales, expenses, expenseGroups, users, activityLogs, shopTimeSettings, accounts, customers, suppliers, supplierBills, supplierPayments, heldTickets, cashSessions, taxSettings, receiptSettings, registerSettings, salesEmailSettings, currentShop?.shopName]);
+  }, [activeShopOwnerUid, allow, authUser, customerPayments, db, branches, products, services, sales, expenses, expenseGroups, users, activityLogs, shopTimeSettings, accounts, customers, suppliers, supplierBills, supplierPayments, heldTickets, cashSessions, taxSettings, receiptSettings, registerSettings, salesEmailSettings, currentShop?.shopName]);
 
   const startLocalCounter = () => {
     hasLoadedUserDataRef.current = false;
@@ -1623,12 +1684,36 @@ export default function Page() {
   );
 
   const openProductForm = (form: ReturnType<typeof blankProductForm>) => {
-    const typed = form.category.trim();
+    const text = (value: unknown) => String(value ?? '');
+    const amount = (value: unknown, fallback = 0) => {
+      const parsed = finiteAmount(value);
+      return Number.isFinite(parsed) ? parsed : fallback;
+    };
+    const next = {
+      ...blankProductForm(form.branchId),
+      ...form,
+      id: text(form.id),
+      branchId: text(form.branchId),
+      name: text(form.name),
+      sku: text(form.sku),
+      barcode: text(form.barcode),
+      category: text(form.category),
+      image: text(form.image),
+      variant: text(form.variant),
+      expiryDate: text(form.expiryDate),
+      unit: form.unit || 'piece',
+      stock: amount(form.stock),
+      purchasePrice: amount(form.purchasePrice),
+      salePrice: amount(form.salePrice),
+      wholesalePrice: amount(form.wholesalePrice),
+      reorderPoint: amount(form.reorderPoint, DEFAULT_REORDER_POINT),
+    };
+    const typed = next.category.trim();
     const known = productCategories.some((name) => name.toLowerCase() === typed.toLowerCase());
-    const editing = Boolean(form.id);
+    const editing = Boolean(next.id);
     setSkuManual(editing);
-    setProductForm(editing ? form : { ...form, sku: suggestSku(form.name, form.barcode) });
-    setNewCategoryOpen(typed ? !known : productCategories.length === 0);
+    setProductForm(editing ? next : { ...next, sku: next.sku || suggestSku(next.name, next.barcode) });
+    setNewCategoryOpen(Boolean(typed) && !known);
     setShowProductModal(true);
   };
 
@@ -1638,18 +1723,23 @@ export default function Page() {
       showNotification('Cashiers sell. A manager changes the shelf.', 'error');
       return;
     }
-    const name = productForm.name.trim();
-    const barcode = productForm.barcode.trim();
+    const text = (value: unknown) => String(value ?? '').trim();
+    const name = text(productForm.name);
+    const barcode = text(productForm.barcode);
     const previousProduct = products.find((product) => product.id === productForm.id);
-    let sku = canEditSku ? productForm.sku.trim().toUpperCase() : (previousProduct?.sku || '');
+    let sku = canEditSku ? text(productForm.sku).toUpperCase() : (previousProduct?.sku || '');
     if (!sku) sku = nextSku(name, reservedProductCodes(products, productForm.id, barcode ? [barcode] : []));
     if (barcode && sku.toLowerCase() === barcode.toLowerCase()) {
       showNotification('The SKU and barcode need to be different.', 'error');
       return;
     }
     if (!name || !productForm.branchId) return;
-    if (!Number.isFinite(productForm.stock) || productForm.stock < 0 || !Number.isFinite(productForm.purchasePrice) || productForm.purchasePrice < 0 || !Number.isFinite(productForm.salePrice) || productForm.salePrice < 0) {
-      showNotification('Enter valid non-negative stock and price values.', 'error');
+    const stock = finiteAmount(productForm.stock);
+    const salePrice = finiteAmount(productForm.salePrice);
+    const typedCost = finiteAmount(productForm.purchasePrice);
+    const previousCost = finiteAmount(previousProduct?.purchasePrice);
+    if (!Number.isFinite(stock) || stock < 0 || !Number.isFinite(salePrice) || salePrice < 0) {
+      showNotification('Enter a selling price and a stock quantity that are zero or more.', 'error');
       return;
     }
     const identifiers = [sku, barcode].filter(Boolean).map((identifier) => identifier.toLowerCase());
@@ -1659,13 +1749,15 @@ export default function Page() {
       return;
     }
     const image = isProductImage(productForm.image) ? productForm.image : undefined;
-    const typedCategory = productForm.category.trim().slice(0, 40);
+    const typedCategory = text(productForm.category).slice(0, 40);
     const category = productCategories.find((item) => item.toLowerCase() === typedCategory.toLowerCase()) || typedCategory || undefined;
-    const purchasePrice = !seesCost && previousProduct ? previousProduct.purchasePrice : productForm.purchasePrice;
+    const purchasePrice = !seesCost && previousProduct
+      ? (Number.isFinite(previousCost) ? previousCost : 0)
+      : (Number.isFinite(typedCost) && typedCost >= 0 ? typedCost : (Number.isFinite(previousCost) ? previousCost : 0));
     const reorderPoint = !seesCost && previousProduct
       ? (previousProduct.reorderPoint ?? DEFAULT_REORDER_POINT)
       : (Number.isFinite(productForm.reorderPoint) && productForm.reorderPoint >= 0 ? productForm.reorderPoint : DEFAULT_REORDER_POINT);
-    const variant = productForm.variant.trim();
+    const variant = text(productForm.variant).slice(0, 40);
     const wholesalePrice = Number(productForm.wholesalePrice);
     const productDetails = {
       ...productForm,
@@ -1674,7 +1766,9 @@ export default function Page() {
       barcode: barcode || undefined,
       category,
       image,
-      purchasePrice,
+      stock,
+      purchasePrice: roundMoney(purchasePrice),
+      salePrice: roundMoney(salePrice),
       reorderPoint,
       unit: productForm.unit || 'piece',
       ...(variant ? { variant } : { variant: undefined }),
@@ -1703,7 +1797,7 @@ export default function Page() {
       logActivity('add_inventory', `Added product "${name}"`);
     }
     if (db && authUser && authUser.uid !== LOCAL_OPERATOR_ID && savedId) {
-      void setStockQty(db, activeShopOwnerUid, savedId, productForm.stock).catch(() => undefined);
+      void setStockQty(db, activeShopOwnerUid, savedId, stock).catch(() => undefined);
     }
     setProductForm(blankProductForm());
     setShowProductModal(false);
@@ -2716,7 +2810,7 @@ export default function Page() {
       showNotification('Product not found', 'error');
       return;
     }
-    setStockAdjustmentForm({ ...emptyStockForm(), productId, lines: null });
+    setStockAdjustmentForm({ ...emptyStockForm(), productId, lines: null, salePrice: String(product.salePrice ?? '') });
     setShowStockAdjustmentModal(true);
   };
 
@@ -2953,12 +3047,18 @@ export default function Page() {
     const quantity = Number(stockAdjustmentForm.quantity);
     const unitCostInput = stockAdjustmentForm.unitCost.trim();
     const unitCost = unitCostInput ? Number(unitCostInput) : undefined;
+    const salePriceInput = stockAdjustmentForm.salePrice.trim();
+    const salePrice = salePriceInput ? finiteAmount(salePriceInput) : undefined;
     if (!product || !Number.isFinite(quantity) || quantity <= 0) {
       showNotification('Choose a product and enter a quantity greater than zero.', 'error');
       return;
     }
     if (stockAdjustmentForm.reason === 'restock' && unitCostInput && (!Number.isFinite(unitCost) || (unitCost ?? -1) < 0)) {
       showNotification('Enter a valid non-negative unit cost.', 'error');
+      return;
+    }
+    if (salePriceInput && (salePrice === undefined || !Number.isFinite(salePrice) || salePrice < 0)) {
+      showNotification('Enter a selling price that is zero or more.', 'error');
       return;
     }
     if (stockAdjustmentForm.reason === 'damaged' && stockAdjustmentForm.direction !== 'remove') {
@@ -2993,10 +3093,14 @@ export default function Page() {
       ...item,
       stock: item.stock + quantityDelta,
       ...(stockAdjustmentForm.reason === 'restock' && unitCost !== undefined ? { purchasePrice: unitCost } : {}),
+      ...(salePrice !== undefined ? { salePrice: roundMoney(salePrice) } : {}),
       ...updatedAuditStamp(),
     } : item));
     if (stockAdjustmentForm.reason === 'restock') rememberSupplier(supplierName);
     logStockMovement(product, quantityDelta, stockAdjustmentForm.reason, movementNote, undefined, receiptMetadata);
+    if (db && authUser && authUser.uid !== LOCAL_OPERATOR_ID) {
+      void setStockQty(db, activeShopOwnerUid, product.id, product.stock + quantityDelta).catch(() => undefined);
+    }
     setStatus(`Stock adjusted for ${product.name}.`);
     showNotification(`${product.name}: ${quantityDelta > 0 ? '+' : ''}${quantityDelta} units recorded.`, 'success');
     setShowStockAdjustmentModal(false);
@@ -5449,7 +5553,7 @@ export default function Page() {
                     </label>
                     <label className="field">
                       <span>{productForm.id ? 'Stock on hand' : 'Opening stock'}</span>
-                      <input type="number" min="0" step="0.01" value={productForm.stock} onChange={(e) => setProductForm({ ...productForm, stock: Number(e.target.value) })} required />
+                      <input type="number" min="0" step="any" value={productForm.stock} onChange={(e) => setProductForm({ ...productForm, stock: Number(e.target.value) })} required />
                     </label>
                     {seesCost && (
                       <label className="field">
@@ -5460,16 +5564,16 @@ export default function Page() {
                     {seesCost && (
                       <label className="field">
                         <span>Purchase Price (UGX)</span>
-                        <input type="number" min="0" step="0.01" value={productForm.purchasePrice} onChange={(e) => setProductForm({ ...productForm, purchasePrice: Number(e.target.value) })} required />
+                        <input type="number" min="0" step="any" value={productForm.purchasePrice} onChange={(e) => setProductForm({ ...productForm, purchasePrice: Number(e.target.value) })} required />
                       </label>
                     )}
                     <label className="field">
                       <span>Selling Price (UGX)</span>
-                      <input type="number" min="0" step="0.01" value={productForm.salePrice} onChange={(e) => setProductForm({ ...productForm, salePrice: Number(e.target.value) })} required />
+                      <input type="number" min="0" step="any" value={productForm.salePrice} onChange={(e) => setProductForm({ ...productForm, salePrice: Number(e.target.value) })} required />
                     </label>
                     <label className="field">
                       <span>Wholesale price (UGX)</span>
-                      <input type="number" min="0" step="0.01" value={productForm.wholesalePrice} onChange={(e) => setProductForm({ ...productForm, wholesalePrice: Number(e.target.value) })} />
+                      <input type="number" min="0" step="any" value={productForm.wholesalePrice} onChange={(e) => setProductForm({ ...productForm, wholesalePrice: Number(e.target.value) })} />
                     </label>
                     <label className="field">
                       <span>Unit</span>
@@ -5564,6 +5668,10 @@ export default function Page() {
                           <input type="number" min="0.01" step="0.01" value={stockAdjustmentForm.quantity} onChange={(e) => setStockAdjustmentForm((prev) => ({ ...prev, quantity: Number(e.target.value) }))} required />
                         </label>
                         <label className="field">
+                          <span>Selling price (UGX)</span>
+                          <input type="number" min="0" step="any" value={stockAdjustmentForm.salePrice} onChange={(e) => setStockAdjustmentForm((prev) => ({ ...prev, salePrice: e.target.value }))} />
+                        </label>
+                        <label className="field">
                           <span>Reason</span>
                           <select
                             value={stockAdjustmentForm.reason}
@@ -5600,7 +5708,7 @@ export default function Page() {
                         {!stockAdjustmentForm.lines && (
                           <label className="field">
                             <span>Latest unit cost (UGX, optional)</span>
-                            <input type="number" min="0" step="0.01" value={stockAdjustmentForm.unitCost} onChange={(e) => setStockAdjustmentForm((prev) => ({ ...prev, unitCost: e.target.value }))} placeholder="Leave blank to keep current cost" />
+                            <input type="number" min="0" step="any" value={stockAdjustmentForm.unitCost} onChange={(e) => setStockAdjustmentForm((prev) => ({ ...prev, unitCost: e.target.value }))} placeholder="Leave blank to keep current cost" />
                           </label>
                         )}
                       </>

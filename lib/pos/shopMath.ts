@@ -114,6 +114,44 @@ export const stockFallback = (products: { id: string; stock: number }[]) => (
   Object.fromEntries(products.map((product) => [product.id, product.stock]))
 );
 
+/** A price or quantity typed into a field, including one that was stored as text. */
+export const finiteAmount = (value: unknown) => {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : Number.NaN;
+  if (typeof value === 'string') {
+    const trimmed = value.replace(/,/g, '').trim();
+    if (!trimmed) return Number.NaN;
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) ? parsed : Number.NaN;
+  }
+  return Number.NaN;
+};
+
+/** This till's rows win. A row another till added, which this till has not seen, stays. */
+export const keepEditedRows = <T extends { id: string }>(local: T[], remote: unknown): T[] => {
+  const seen = new Set(local.map((row) => row.id));
+  const extras = catalogRows(remote).flatMap((row) => {
+    const id = typeof row.id === 'string' ? row.id : '';
+    if (!id || seen.has(id)) return [];
+    const copy = { ...row };
+    delete copy.image;
+    return [copy as T];
+  });
+  return [...local, ...extras];
+};
+
+/** A row edited here replaces the same id. A row that exists only on the other till stays. */
+export const mergeEditedRows = <T extends { id: string }>(local: T[], remote: unknown): T[] => {
+  const map = new Map<string, T>();
+  catalogRows(remote).forEach((row) => {
+    const id = typeof row.id === 'string' ? row.id : '';
+    if (id) map.set(id, row as T);
+  });
+  local.forEach((row) => {
+    if (row.id) map.set(row.id, row);
+  });
+  return [...map.values()];
+};
+
 export const creditAllows = (owed: number, creditLimit: number | undefined, additional: number) => (
   creditLimit === undefined || roundMoney(owed + additional) <= roundMoney(creditLimit)
 );
