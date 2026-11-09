@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { billForReceipt, creditAllows, dayClose, finiteAmount, inviteEmails, keepEditedRows, ledgerReadsForRole, mergeEditedRows, needsReorder, overlayStock, preferShopCatalog, productForReturn, rankProducts, shopCatalog, shopDocumentBody, supplierOwed, tenderTotals, tendersNeedReference } from './shopMath';
+import { billForReceipt, creditAllows, dayClose, expenseWasRemoved, finiteAmount, inviteEmails, keepEditedRows, ledgerReadsForRole, mergeEditedRows, needsReorder, noteRemovedExpense, overlayStock, preferShopCatalog, productForReturn, rankProducts, shopCatalog, shopDocumentBody, supplierOwed, tenderTotals, tendersNeedReference } from './shopMath';
 
 test('invited emails are saved on the shop so a cashier can read the shelf', () => {
   assert.deepEqual(inviteEmails([
@@ -47,6 +47,14 @@ test('a price edited here is kept when another till saved first', () => {
   assert.deepEqual(customers.map((row) => row.id), ['b', 'a']);
   assert.equal(finiteAmount('2,500'), 2500);
   assert.equal(Number.isFinite(finiteAmount('')), false);
+});
+
+test('an expense the owner removed is remembered and is not entered again', () => {
+  const noted = noteRemovedExpense(['old'], 'rent');
+  assert.deepEqual(noted, ['old', 'rent']);
+  assert.equal(expenseWasRemoved(noted, 'rent'), true);
+  assert.deepEqual(noteRemovedExpense(noted, 'rent'), ['old', 'rent']);
+  assert.equal(noteRemovedExpense(undefined, 'rent').length, 1);
 });
 
 test('the register shelf comes from the shop document even when receipts have not loaded', () => {

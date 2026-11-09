@@ -18,9 +18,9 @@ import { catalogKeyError, readOwnerCatalogKey, writeOwnerCatalogKey } from '../l
 import { LOCAL_OPERATOR_ID, readLocalShop, writeLocalShop } from '../lib/pos/localShop';
 import { nextSku, reservedProductCodes } from '../lib/pos/sku';
 import { attachProductImages, compressProductPhoto, imageMapChars, isProductImage, PRODUCT_IMAGE_DOC_MAX_CHARS, readLocalProductImages, splitProductImages, writeLocalProductImages } from '../lib/pos/productImage';
-import { commitStockAndRecords, migrateShopLedger, readNamedRecords, readStockMap, setStockQty, writeRecords } from '../lib/pos/ledger';
+import { commitStockAndRecords, deleteRecords, migrateShopLedger, readNamedRecords, readStockMap, removeEmbeddedRows, setStockQty, writeRecords } from '../lib/pos/ledger';
 import { beginSalesEmailSend, buildSalesDigest, defaultSalesEmailSettings, finishSalesEmailSend, normalizeSalesEmailSettings, previousSalesPeriod, type SalesDigest, type SalesEmailSettings } from '../lib/pos/salesEmail';
-import { billForReceipt, countVariance, creditAllows, dayClose, discountNeedsManager, finiteAmount, hashPin, inviteEmails, keepEditedRows, mergeEditedRows, needsReorder, overlayStock, pinIsValid, preferShopCatalog, productForReturn, rankProducts, sellingPrice, shopCatalog, shopDocumentBody, stockFallback, supplierOwed, tenderTotals, tendersNeedReference, type SupplierBill, type SupplierPayment } from '../lib/pos/shopMath';
+import { billForReceipt, countVariance, creditAllows, dayClose, discountNeedsManager, expenseWasRemoved, finiteAmount, hashPin, inviteEmails, keepEditedRows, mergeEditedRows, needsReorder, noteRemovedExpense, overlayStock, pinIsValid, preferShopCatalog, productForReturn, rankProducts, sellingPrice, shopCatalog, shopDocumentBody, stockFallback, supplierOwed, tenderTotals, tendersNeedReference, type SupplierBill, type SupplierPayment } from '../lib/pos/shopMath';
 import { accessDenied, chooseShopId, ownShopIsReal, shopsForSignedInUser } from '../lib/pos/shopAccess';
 import { fetchFirestoreDocument, fetchMembershipsByEmail, preferShopRead, SHOP_CONNECTION_MESSAGE, ShopReadError, withTimeout } from '../lib/pos/shopRead';
 import { booksForPermissions, canViewShelf, inviteShopPatch, PERMISSION_LABELS, permissionsFor, permissionsMatchPreset, recordsForAccess, registerCatalog, resolveStaffAccess, rowsForBranch, shelfForInvite, staffEmailLists, staffGrants, STAFF_PERMISSIONS, type StaffPermission } from '../lib/pos/staffAccess';
@@ -325,6 +325,7 @@ export default function Page() {
   const [services, setServices] = useState<Service[]>([]);
   const [sales, setSales] = useState<Sale[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [removedExpenseIds, setRemovedExpenseIds] = useState<string[]>([]);
   const [expenseGroups, setExpenseGroups] = useState<ExpenseGroup[]>([]);
   const [users, setUsers] = useState<StaffUser[]>([]);
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
@@ -557,6 +558,7 @@ export default function Page() {
         setServices([]);
         setSales([]);
         setExpenses([]);
+        setRemovedExpenseIds([]);
         setAccounts([]);
         setUsers([]);
         setCustomers([]);
@@ -604,6 +606,7 @@ export default function Page() {
             setServices([]);
             setSales([]);
             setExpenses([]);
+            setRemovedExpenseIds([]);
             setExpenseGroups([]);
             setUsers([]);
             setActivityLogs([]);
@@ -620,6 +623,7 @@ export default function Page() {
             setServices(Array.isArray(data.services) ? data.services as Service[] : []);
             setSales(Array.isArray(data.sales) ? data.sales as Sale[] : []);
             setExpenses(Array.isArray(data.expenses) ? data.expenses as Expense[] : []);
+            setRemovedExpenseIds(Array.isArray(data.removedExpenseIds) ? data.removedExpenseIds.filter((item): item is string => typeof item === 'string') : []);
             setExpenseGroups(Array.isArray(data.expenseGroups) ? data.expenseGroups as ExpenseGroup[] : []);
             setUsers(Array.isArray(data.users) ? data.users as StaffUser[] : []);
             const localActivity = readLocalActivity();
@@ -964,6 +968,7 @@ export default function Page() {
         setProducts(overlayStock(embeddedProducts, stockMap));
         setSales(ledgerSales);
         setExpenses(ledgerExpenses);
+        setRemovedExpenseIds(Array.isArray(data.removedExpenseIds) ? data.removedExpenseIds.filter((item): item is string => typeof item === 'string') : []);
         setAccounts(ensureDefaultCashAccount(Array.isArray(data.accounts) ? data.accounts : []));
         setExpenseGroups(Array.isArray(data.expenseGroups) ? data.expenseGroups : []);
         setUsers(Array.isArray(data.users) ? data.users : []);
@@ -1081,6 +1086,7 @@ export default function Page() {
           editorEmails: staffLists.editorEmails,
           activityLogs: [] as ActivityLog[],
           shopTimeSettings,
+          removedExpenseIds,
           accounts,
           customers,
           suppliers,
@@ -1243,7 +1249,7 @@ export default function Page() {
       }
     };
     void saveUserData();
-  }, [activeShopOwnerUid, allow, authUser, customerPayments, db, branches, products, services, sales, expenses, expenseGroups, users, activityLogs, shopTimeSettings, accounts, customers, suppliers, supplierBills, supplierPayments, heldTickets, cashSessions, taxSettings, receiptSettings, registerSettings, salesEmailSettings, currentShop?.shopName]);
+  }, [activeShopOwnerUid, allow, authUser, customerPayments, db, branches, products, services, sales, expenses, expenseGroups, users, activityLogs, shopTimeSettings, accounts, customers, suppliers, supplierBills, supplierPayments, heldTickets, cashSessions, taxSettings, receiptSettings, registerSettings, salesEmailSettings, removedExpenseIds, currentShop?.shopName]);
 
   const startLocalCounter = () => {
     hasLoadedUserDataRef.current = false;
@@ -1297,6 +1303,7 @@ export default function Page() {
     setServices([]);
     setSales([]);
     setExpenses([]);
+    setRemovedExpenseIds([]);
     setAccounts([]);
     setExpenseGroups([]);
     setUsers([]);
@@ -1551,7 +1558,7 @@ export default function Page() {
       const newAutoExpenses: Expense[] = [];
       sharedCostServices.forEach((service) => {
         const autoExpenseId = `auto-shared-cost::${todayKey}::${service.branchId}::${service.id}`;
-        if (existingAutoExpenseKeys.has(autoExpenseId)) return;
+        if (existingAutoExpenseKeys.has(autoExpenseId) || expenseWasRemoved(removedExpenseIds, autoExpenseId)) return;
 
         newAutoExpenses.push({
           id: autoExpenseId,
@@ -1566,7 +1573,7 @@ export default function Page() {
       if (newAutoExpenses.length === 0) return prev;
       return [...newAutoExpenses, ...prev];
     });
-  }, [services, shopClock]);
+  }, [removedExpenseIds, services, shopClock]);
 
   const logActivity = (action: string, details: string, stockMovement?: StockMovementAudit) => {
     setActivityLogs((prev) => [{
@@ -3282,15 +3289,36 @@ export default function Page() {
     setShowExpenseModal(true);
   };
 
-  const deleteExpense = (id: string) => {
+  const deleteExpense = async (id: string) => {
     if (!canEditExpenses) {
       setStatus('The owner has not turned on expenses for you.');
       return;
     }
-    if (!window.confirm('Delete this expense?')) return;
-    setExpenses((prev) => prev.filter((expense) => expense.id !== id));
-    logActivity('delete_expense', `Deleted expense id "${id}"`);
-    showNotification('Expense deleted successfully!', 'success');
+    const expense = expenses.find((item) => item.id === id);
+    if (!expense) return;
+    if (!window.confirm(`Delete ${expense.title}? It leaves the books.`)) return;
+    const removedIds = noteRemovedExpense(removedExpenseIds, id);
+    try {
+      if (db && authUser && authUser.uid !== LOCAL_OPERATOR_ID) {
+        await deleteRecords(db, activeShopOwnerUid, 'expenses', [id]);
+        await removeEmbeddedRows(db, activeShopOwnerUid, 'expenses', id);
+        await setDoc(doc(db, 'users', activeShopOwnerUid, 'pos', 'data'), {
+          removedExpenseIds: removedIds,
+          updatedAt: serverTimestamp(),
+        }, { merge: true });
+      }
+    } catch (error) {
+      showNotification(error instanceof Error ? error.message : 'The expense was not deleted.', 'error');
+      return;
+    }
+    setRemovedExpenseIds(removedIds);
+    setExpenses((prev) => prev.filter((item) => item.id !== id));
+    if (expenseForm.id === id) {
+      setExpenseForm({ id: '', title: '', branchId: '', amount: 0, expenseGroupId: '', accountId: '' });
+      setShowExpenseModal(false);
+    }
+    logActivity('delete_expense', `Deleted expense "${expense.title}"`);
+    showNotification('Expense deleted.', 'success');
   };
   const canChangeRole = activeShopOwnerUid === authUser?.uid;
 
@@ -5809,6 +5837,7 @@ export default function Page() {
                   </div>
                 </div>
                 <div className="modal-footer">
+                  {expenseForm.id && <button type="button" className="delete-btn" onClick={() => void deleteExpense(expenseForm.id)}>Delete</button>}
                   <button type="button" className="edit-btn" onClick={() => setShowExpenseModal(false)}>Cancel</button>
                   <button type="submit" className="primary">Save Expense</button>
                 </div>
