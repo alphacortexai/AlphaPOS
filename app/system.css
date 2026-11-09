@@ -1714,7 +1714,8 @@ button,
 }
 .shelf-card > *,
 .modal-content > *,
-.pos-sheet > * {
+.pos-sheet > *,
+.table-wrap > * {
   position: relative;
   z-index: 1;
 }

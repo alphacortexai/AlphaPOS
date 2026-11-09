@@ -295,6 +295,18 @@ export const preferRemote = <T extends { id: string }>(embedded: T[], remote: T[
   remote.forEach((item) => map.set(item.id, item));
   return [...map.values()];
 };
+/** Ids the owner removed, so a shared-cost line for that day is not entered again. */
+export const noteRemovedExpense = (current: unknown, id: string) => {
+  const kept = Array.isArray(current)
+    ? current.filter((item): item is string => typeof item === 'string' && item.length > 0 && item !== id)
+    : [];
+  return [...kept, id].slice(-400);
+};
+
+export const expenseWasRemoved = (current: unknown, id: string) => (
+  Array.isArray(current) && current.includes(id)
+);
+
 /** Lowercase emails saved on the shop. Rules allow these people to read products and branches. */
 export const inviteEmails = (people: { email?: string }[]) => {
   const emails: string[] = [];

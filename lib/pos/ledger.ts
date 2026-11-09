@@ -84,6 +84,37 @@ export const writeRecords = async (db: Firestore, ownerUid: string, name: string
   }
 };
 
+export const deleteRecords = async (db: Firestore, ownerUid: string, name: string, ids: string[]) => {
+  const unique = [...new Set(ids.filter(Boolean))];
+  for (const group of chunk(unique, 400)) {
+    const batch = writeBatch(db);
+    group.forEach((id) => batch.delete(doc(db, ...ledgerDocumentPath(ownerUid, name, id))));
+    await batch.commit();
+  }
+};
+
+/** The copy still stored on the shop document, without the row that was removed. Null when that list does not contain it. */
+export const embeddedWithout = (value: unknown, id: string): unknown[] | null => {
+  if (!Array.isArray(value)) return null;
+  const next = value.filter((row) => {
+    if (!row || typeof row !== 'object') return false;
+    return (row as { id?: unknown }).id !== id;
+  });
+  return next.length === value.length ? null : next;
+};
+
+/** Drop one row from a list that still lives on the shop document, so a reload cannot put it back. */
+export const removeEmbeddedRows = async (db: Firestore, ownerUid: string, field: string, id: string) => {
+  const ref = doc(db, 'users', ownerUid, 'pos', 'data');
+  await runTransaction(db, async (transaction) => {
+    const snap = await transaction.get(ref);
+    if (!snap.exists()) return;
+    const next = embeddedWithout(snap.data()[field], id);
+    if (!next) return;
+    transaction.set(ref, { [field]: next.length > 0 ? next : deleteField() }, { merge: true });
+  });
+};
+
 export const setStockQty = async (db: Firestore, ownerUid: string, productId: string, qty: number) => {
   await setDoc(doc(db, ...ledgerDocumentPath(ownerUid, 'stock', productId)), { qty: roundedQty(qty), updatedAt: new Date().toISOString() });
 };
