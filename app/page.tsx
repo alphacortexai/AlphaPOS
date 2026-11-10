@@ -10,7 +10,7 @@ import RegisterDesk from '../components/pos/RegisterDesk';
 import ReceiptDialog from '../components/pos/ReceiptDialog';
 import ReturnDialog, { type ReturnableLine } from '../components/pos/ReturnDialog';
 import { ACTIVITY_KEEP, readLocalActivity, trimActivity, writeLocalActivity } from '../lib/pos/activityLog';
-import { computeAccountBalances, DEFAULT_REORDER_POINT, mergeHeardExpenses, normalizeCustomerPayments, normalizeSuppliers, paymentMatchesCustomer, postedExpense, sessionCashAdjustments, stockIsLow, stockWorth, withTenderAccounts, type CustomerPaymentRecord, type SupplierRecord } from '../lib/pos/books';
+import { computeAccountBalances, DEFAULT_REORDER_POINT, mergeHeardExpenses, normalizeCustomerPayments, normalizeSuppliers, paymentMatchesCustomer, postedExpense, recordedByEmail, sessionCashAdjustments, staffAttribution, staffBookTotals, stockIsLow, stockWorth, withTenderAccounts, type CustomerPaymentRecord, type SupplierRecord } from '../lib/pos/books';
 import { businessDayKey, businessDayRange, businessDaysThrough, formatDayKey, recentBusinessDays, reportPeriodRange, shiftDayKey, summarizeBusinessDays, summarizePeriod, type ShopClock } from '../lib/pos/reports';
 import { parseOrganiseAssignments, planCategoryUpdates, ORGANISE_PRODUCT_CAP } from '../lib/catalog/organise';
 import { parseCatalogReading, type CatalogMode } from '../lib/catalog/reading';
@@ -104,6 +104,7 @@ type Sale = {
   customerId?: string;
   voidedAt?: string;
   voidReason?: string;
+  voidedByEmail?: string;
   moneyStatus?: 'unconfirmed' | 'confirmed';
   cashierEmail?: string;
 } & AuditStamp;
@@ -1701,13 +1702,22 @@ export default function Page() {
     });
   }, [activeShopOwnerUid, allow, authUser, db, removedExpenseIds, services, shopClock]);
 
+  const actorEmail = operator?.email || authUser?.email || 'unknown';
+  const describeStaff = (email?: string) => staffAttribution(
+    email,
+    users,
+    isShopOwner ? { email: authUser?.email, name: authUser?.displayName } : undefined,
+    roleLabels,
+  );
+
   const logActivity = (action: string, details: string, stockMovement?: StockMovementAudit) => {
+    const actor = operator ? users.find((person) => person.email?.trim().toLowerCase() === operator.email.trim().toLowerCase()) : undefined;
     setActivityLogs((prev) => [{
       id: crypto.randomUUID(),
       action,
       details,
-      role,
-      userEmail: authUser?.email || 'unknown',
+      role: actor?.role || role,
+      userEmail: actorEmail,
       createdAt: new Date().toISOString(),
       ...(stockMovement ? { stockMovement } : {}),
     }, ...prev].slice(0, ACTIVITY_KEEP));
@@ -2031,6 +2041,7 @@ export default function Page() {
       amount,
       method: paymentDraft.method,
       createdAt: new Date().toISOString(),
+      createdByEmail: actorEmail,
       ...(paymentDraft.method === 'cash' && openCashSession ? { cashSessionId: openCashSession.id } : {}),
     };
     setCustomerPayments((prev) => [payment, ...prev]);
@@ -2230,6 +2241,7 @@ export default function Page() {
       id: expenseForm.id || crypto.randomUUID(),
       ...(expenseForm.id ? updatedAuditStamp() : {}),
       ...currentAuditStamp(),
+      ...(!expenseForm.id ? { createdByEmail: actorEmail } : {}),
     });
     savingExpenseRef.current = true;
     try {
@@ -2794,7 +2806,7 @@ export default function Page() {
     const customerPhone = checkoutDetails.customerPhone.trim();
     const customerId = rememberCustomer(customerName, customerPhone, checkoutDetails.customerId);
     const needsMoneyConfirm = tenders.some((tender) => tender.method === 'mobile_money' || tender.method === 'bank_transfer');
-    const sellerEmail = operator?.email || authUser?.email || 'unknown';
+    const sellerEmail = actorEmail;
     const newSales: Sale[] = registerQuote.lines.flatMap((line) => {
       const item = cart.find((cartItem) => `${cartItem.itemType}:${cartItem.itemId}` === line.key);
       if (!item) return [];
@@ -2899,6 +2911,7 @@ export default function Page() {
         returnOfTransactionId: returnTransactionId,
         paymentMethod: method,
         ...(reference.trim() ? { paymentReference: reference.trim() } : {}),
+        cashierEmail: actorEmail,
         tenders: [{ method, amount, ...(reference.trim() ? { reference: reference.trim() } : {}) }],
         ...(countDrawer && openCashSession ? { cashSessionId: openCashSession.id } : {}),
         ...(sale.customerName ? { customerName: sale.customerName } : {}),
@@ -2961,6 +2974,7 @@ export default function Page() {
       accountId: selectedSaleAccountId,
       receiptNumber: nextDocumentNumber(sales, receiptPrefix(new Date(), 'sale')),
       saleKind: 'sale',
+      cashierEmail: actorEmail,
       ...(openCashSession ? { cashSessionId: openCashSession.id } : {}),
       ...createCheckoutMetadata(),
       ...currentAuditStamp(),
@@ -3208,8 +3222,9 @@ export default function Page() {
       rememberSupplier(supplierName);
       const bill = billForReceipt(supplierName, prepared, reference, new Date().toISOString());
       if (bill) {
-        setSupplierBills((prev) => [bill, ...prev]);
-        if (db && authUser && authUser.uid !== LOCAL_OPERATOR_ID) void writeRecords(db, activeShopOwnerUid, 'supplierBills', [bill]).catch(() => undefined);
+        const stamped = { ...bill, createdByEmail: actorEmail };
+        setSupplierBills((prev) => [stamped, ...prev]);
+        if (db && authUser && authUser.uid !== LOCAL_OPERATOR_ID) void writeRecords(db, activeShopOwnerUid, 'supplierBills', [stamped]).catch(() => undefined);
       }
       if (db && authUser && authUser.uid !== LOCAL_OPERATOR_ID) {
         void commitStockAndRecords(db, activeShopOwnerUid, 'supplierBills', [], [...grouped.entries()].map(([productId, change]) => ({ productId, delta: change.qty })), stockFallback(products)).catch(() => undefined);
@@ -3329,6 +3344,8 @@ export default function Page() {
       paymentMethod: lines[0].paymentMethod,
       saleKind: lines.some((line) => line.saleKind === 'return') ? 'return' as const : 'sale' as const,
       voided: lines.some((line) => line.voidedAt),
+      seller: lines.map((line) => recordedByEmail(line)).find(Boolean) || '',
+      voidedBy: lines.map((line) => line.voidedByEmail?.trim() || '').find(Boolean) || '',
     })).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }, [filteredSales]);
   const salesHistoryTotalPages = Math.max(1, Math.ceil(groupedSales.length / salesHistoryPageSize));
@@ -3423,7 +3440,7 @@ export default function Page() {
       deltas.set(product.id, (deltas.get(product.id) || 0) + line.qty);
     });
     const voidedAt = new Date().toISOString();
-    const voided = lines.map((line) => ({ ...line, voidedAt, voidReason: reason.trim() }));
+    const voided = lines.map((line) => ({ ...line, voidedAt, voidReason: reason.trim(), voidedByEmail: actorEmail }));
     try {
       if (db && authUser && authUser.uid !== LOCAL_OPERATOR_ID) {
         await commitStockAndRecords(
@@ -4098,6 +4115,7 @@ export default function Page() {
                           {recentClosedShifts.map((session) => (
                             <li key={session.id}>
                               <strong>{session.closedAt ? new Date(session.closedAt).toLocaleString() : 'Closed shift'}</strong>
+                              <span>Opened by {describeStaff(session.openedByEmail).primary}{session.closedByEmail ? ` · Closed by ${describeStaff(session.closedByEmail).primary}` : ''}</span>
                               <span>Expected {formatUGX(session.expectedCash || 0)} · Counted {formatUGX(session.countedCash || 0)} · Variance {formatUGX(session.variance || 0)}</span>
                             </li>
                           ))}
@@ -4349,7 +4367,17 @@ export default function Page() {
                               </span>
                             )}
                           </td>
-                          <td data-label="Recorded by">{log.userEmail}</td>
+                          <td data-label="Recorded by">
+                            {(() => {
+                              const who = describeStaff(log.userEmail);
+                              return (
+                                <>
+                                  <div>{who.primary}</div>
+                                  {who.detail && <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>{who.detail}</div>}
+                                </>
+                              );
+                            })()}
+                          </td>
                           <td data-label="Note">{movement.note || '—'}</td>
                         </tr>
                       );
@@ -4649,6 +4677,7 @@ export default function Page() {
                     <tr>
                       <th>Date and time</th>
                       <th>Receipt</th>
+                      <th>Staff</th>
                       <th>Items</th>
                       <th>Customer / tender</th>
                       <th className="num">Total</th>
@@ -4662,6 +4691,19 @@ export default function Page() {
                         <tr key={saleGroup.id}>
                           <td data-label="Date and time">{new Date(saleGroup.createdAt).toLocaleString()}</td>
                           <td data-label="Receipt" style={{ fontWeight: 700 }}>{saleGroup.receiptNumber || `#${saleGroup.id.slice(0, 8)}`}</td>
+                          <td data-label="Staff">
+                            {(() => {
+                              const who = describeStaff(saleGroup.seller);
+                              const voidedBy = saleGroup.voided ? describeStaff(saleGroup.voidedBy) : null;
+                              return (
+                                <>
+                                  <div>{who.primary}</div>
+                                  {who.detail && <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>{who.detail}</div>}
+                                  {voidedBy && voidedBy.primary !== 'Not recorded' && <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>Voided by {voidedBy.primary}</div>}
+                                </>
+                              );
+                            })()}
+                          </td>
                           <td data-label="Items">
                             {saleGroup.lines.map((line) => (
                               <div key={line.id}>{line.itemName} × {line.qty}</div>
@@ -4695,7 +4737,7 @@ export default function Page() {
                       ))
                     ) : (
                       <tr>
-                        <td colSpan={seesCost ? 7 : 6} className="empty-cell">No sales recorded for this period</td>
+                        <td colSpan={seesCost ? 8 : 7} className="empty-cell">No sales recorded for this period</td>
                       </tr>
                     )}
                   </tbody>
@@ -4815,6 +4857,7 @@ export default function Page() {
                   <tr>
                     <th>Date and time</th>
                     <th>Expense</th>
+                    <th>Entered by</th>
                     <th>Branch</th>
                     <th className="num">Amount</th>
                     <th>Group</th>
@@ -4827,6 +4870,28 @@ export default function Page() {
                       <tr key={e.id}>
                         <td data-label="Date and time">{new Date(e.createdAt).toLocaleString()}</td>
                         <td data-label="Expense" style={{ fontWeight: 600 }}>{e.title}</td>
+                        <td data-label="Entered by">
+                          {e.id.startsWith('auto-shared-cost::') ? (
+                            <>
+                              <div>Automatic</div>
+                              <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>Shared monthly cost</div>
+                            </>
+                          ) : (
+                            <>
+                              {(() => {
+                                const who = describeStaff(e.createdByEmail);
+                                const editor = e.updatedByEmail && e.updatedByEmail !== e.createdByEmail ? describeStaff(e.updatedByEmail) : null;
+                                return (
+                                  <>
+                                    <div>{who.primary}</div>
+                                    {who.detail && <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>{who.detail}</div>}
+                                    {editor && <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>Edited by {editor.primary}</div>}
+                                  </>
+                                );
+                              })()}
+                            </>
+                          )}
+                        </td>
                         <td data-label="Branch">{branchMap[e.branchId]}</td>
                         <td data-label="Amount" className="num">{formatUGX(e.amount)}</td>
                         <td data-label="Group">{e.expenseGroupId ? expenseGroupMap[e.expenseGroupId] || 'Unknown group' : 'Ungrouped'}</td>
@@ -4844,7 +4909,7 @@ export default function Page() {
                     ))
                   ) : (
                     <tr>
-                      <td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>No expenses found for this view</td>
+                      <td colSpan={7} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>No expenses found for this view</td>
                     </tr>
                   )}
                 </tbody>
@@ -5013,6 +5078,40 @@ export default function Page() {
               </div>
             </div>
             <div className="card">
+              <h3>By staff</h3>
+              <p className="muted-copy">Who made each sale and who entered each expense. A voided receipt is left out. A return reduces that person's sales.</p>
+              <div className="table-wrap">
+                <table className="data-table">
+                  <thead><tr><th>Staff</th><th className="num">Receipts</th><th className="num">Sales</th><th className="num">Expenses</th></tr></thead>
+                  <tbody>
+                    {(() => {
+                      const rows = staffBookTotals(sales, expenses.map((expense) => ({
+                        amount: expense.amount,
+                        createdByEmail: expense.id.startsWith('auto-shared-cost::') ? 'Automatic' : expense.createdByEmail,
+                      })));
+                      if (rows.length === 0) return <tr><td colSpan={4}>No sales or expenses yet.</td></tr>;
+                      return rows.map((row) => {
+                        const who = row.email === 'Automatic'
+                          ? { primary: 'Automatic', detail: 'Shared monthly cost' }
+                          : describeStaff(row.email === 'Not recorded' ? '' : row.email);
+                        return (
+                          <tr key={row.email}>
+                            <td>
+                              <div>{who.primary}</div>
+                              {who.detail && <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>{who.detail}</div>}
+                            </td>
+                            <td className="num">{row.receipts}</td>
+                            <td className="num">{formatUGX(row.sales)}</td>
+                            <td className="num">{formatUGX(row.expenses)}</td>
+                          </tr>
+                        );
+                      });
+                    })()}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div className="card">
               <h3>What sold</h3>
               <div className="table-wrap">
                 <table className="data-table">
@@ -5052,7 +5151,17 @@ export default function Page() {
                   {activityLogs.length > 0 ? activityLogsPagination.rows.map((log) => (
                     <tr key={log.id}>
                       <td data-label="Time">{new Date(log.createdAt).toLocaleString()}</td>
-                      <td data-label="User">{log.userEmail}</td>
+                      <td data-label="User">
+                        {(() => {
+                          const who = describeStaff(log.userEmail);
+                          return (
+                            <>
+                              <div>{who.primary}</div>
+                              {who.detail && <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>{who.detail}</div>}
+                            </>
+                          );
+                        })()}
+                      </td>
                       <td data-label="Role"><span className="badge badge-info">{roleLabels[log.role] || log.role}</span></td>
                       <td data-label="Action" className="activity-action">{log.action.replaceAll('_', ' ')}</td>
                       <td data-label="Details">{log.details}</td>
@@ -5146,6 +5255,33 @@ export default function Page() {
                 </tbody>
               </table>
             </div>
+            {customerPayments.length > 0 && (
+              <div className="card">
+                <h3>Payments received</h3>
+                <div className="table-wrap">
+                  <table className="data-table">
+                    <thead><tr><th>Date and time</th><th>Customer</th><th>Method</th><th className="num">Amount</th><th>Recorded by</th></tr></thead>
+                    <tbody>
+                      {[...customerPayments].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).map((payment) => {
+                        const who = describeStaff(payment.createdByEmail);
+                        return (
+                          <tr key={payment.id}>
+                            <td data-label="Date and time">{new Date(payment.createdAt).toLocaleString()}</td>
+                            <td data-label="Customer">{payment.customerName}</td>
+                            <td data-label="Method">{PAYMENT_METHOD_LABELS[payment.method]}</td>
+                            <td data-label="Amount" className="num">{formatUGX(payment.amount)}</td>
+                            <td data-label="Recorded by">
+                              <div>{who.primary}</div>
+                              {who.detail && <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>{who.detail}</div>}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </section>
         )}
 
@@ -5491,12 +5627,39 @@ export default function Page() {
                     </tbody>
                   </table>
                 </div>
+                {(supplierBills.length > 0 || supplierPayments.length > 0) && (
+                  <div className="table-wrap" style={{ marginTop: 12 }}>
+                    <table className="data-table">
+                      <thead><tr><th>Date and time</th><th>Supplier</th><th>Kind</th><th className="num">Amount</th><th>Recorded by</th></tr></thead>
+                      <tbody>
+                        {[
+                          ...supplierBills.map((bill) => ({ id: bill.id, at: bill.createdAt, name: bill.supplierName, kind: 'Bill', amount: bill.amount, email: bill.createdByEmail })),
+                          ...supplierPayments.map((payment) => ({ id: payment.id, at: payment.createdAt, name: payment.supplierName, kind: 'Payment', amount: payment.amount, email: payment.createdByEmail })),
+                        ].sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime()).map((row) => {
+                          const who = describeStaff(row.email);
+                          return (
+                            <tr key={`${row.kind}-${row.id}`}>
+                              <td data-label="Date and time">{new Date(row.at).toLocaleString()}</td>
+                              <td data-label="Supplier">{row.name}</td>
+                              <td data-label="Kind">{row.kind}</td>
+                              <td data-label="Amount" className="num">{formatUGX(row.amount)}</td>
+                              <td data-label="Recorded by">
+                                <div>{who.primary}</div>
+                                {who.detail && <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>{who.detail}</div>}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
                 {supplierPayName && (
                   <form className="form" onSubmit={(event) => {
                     event.preventDefault();
                     const amount = roundMoney(Number(supplierPayAmount));
                     if (!Number.isFinite(amount) || amount <= 0) return;
-                    const payment: SupplierPayment = { id: crypto.randomUUID(), supplierName: supplierPayName, amount, method: 'cash', createdAt: new Date().toISOString() };
+                    const payment: SupplierPayment = { id: crypto.randomUUID(), supplierName: supplierPayName, amount, method: 'cash', createdAt: new Date().toISOString(), createdByEmail: actorEmail };
                     setSupplierPayments((prev) => [payment, ...prev]);
                     if (db && authUser && authUser.uid !== LOCAL_OPERATOR_ID) void writeRecords(db, activeShopOwnerUid, 'supplierPayments', [payment]).catch(() => undefined);
                     setSupplierPayName('');

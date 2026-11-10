@@ -105,6 +105,7 @@ export type CustomerPaymentRecord = {
   method: Exclude<PaymentMethod, 'on_account'>;
   createdAt: string;
   cashSessionId?: string;
+  createdByEmail?: string;
 };
 
 const PAYMENT_METHODS = new Set<CustomerPaymentRecord['method']>(['cash', 'mobile_money', 'card_terminal', 'bank_transfer', 'other']);
@@ -147,6 +148,7 @@ export const normalizeCustomerPayments = (value: unknown): CustomerPaymentRecord
       method: method as CustomerPaymentRecord['method'],
       createdAt: typeof record.createdAt === 'string' ? record.createdAt : new Date().toISOString(),
       ...(typeof record.cashSessionId === 'string' && record.cashSessionId ? { cashSessionId: record.cashSessionId } : {}),
+      ...(typeof record.createdByEmail === 'string' && record.createdByEmail.trim() ? { createdByEmail: record.createdByEmail.trim() } : {}),
     }];
   });
 };
@@ -242,4 +244,70 @@ export const sessionCashAdjustments = (
     .filter((expense) => expense.cashSessionId === sessionId)
     .reduce((sum, expense) => sum + expense.amount, 0);
   return received - spent;
+};
+
+export type StaffPerson = { name?: string; email?: string; role?: string };
+
+/** The person at the till wins. Older sales only have the account that saved them. */
+export const recordedByEmail = (record: { cashierEmail?: string; createdByEmail?: string }) => {
+  const email = record.cashierEmail?.trim() || record.createdByEmail?.trim() || '';
+  return email.toLowerCase() === 'unknown' ? '' : email;
+};
+
+/** Name when this shop knows the person, otherwise the email that was stored. */
+export const staffAttribution = (
+  email: string | undefined,
+  people: StaffPerson[],
+  owner?: { email?: string | null; name?: string | null },
+  roleLabels: Record<string, string> = {},
+): { primary: string; detail: string } => {
+  const raw = email?.trim() || '';
+  if (!raw || raw.toLowerCase() === 'unknown') return { primary: 'Not recorded', detail: '' };
+  const normalized = raw.toLowerCase();
+  const person = people.find((item) => item.email?.trim().toLowerCase() === normalized);
+  const named = person?.name?.trim() || '';
+  const role = person?.role ? (roleLabels[person.role] || person.role) : '';
+  if (named) {
+    const detail = [role, named.toLowerCase() === raw.toLowerCase() ? '' : raw].filter(Boolean).join(' · ');
+    return { primary: named, detail };
+  }
+  if (owner?.email?.trim().toLowerCase() === normalized) {
+    const ownerName = owner.name?.trim() || '';
+    if (ownerName && ownerName.toLowerCase() !== normalized && ownerName.toLowerCase() !== raw.toLowerCase()) {
+      return { primary: ownerName, detail: `Owner · ${raw}` };
+    }
+    return { primary: raw, detail: 'Owner' };
+  }
+  return { primary: raw, detail: '' };
+};
+
+export const staffBookTotals = (
+  sales: { id?: string; transactionId?: string; amount: number; voidedAt?: string; cashierEmail?: string; createdByEmail?: string }[],
+  expenses: { amount: number; createdByEmail?: string }[],
+) => {
+  const rows = new Map<string, { email: string; sales: number; expenses: number; receipts: number; seen: Set<string> }>();
+  const touch = (email: string) => {
+    const shown = email.trim() || 'Not recorded';
+    const key = shown.toLowerCase();
+    const current = rows.get(key) || { email: shown, sales: 0, expenses: 0, receipts: 0, seen: new Set<string>() };
+    rows.set(key, current);
+    return current;
+  };
+  sales.forEach((sale) => {
+    if (sale.voidedAt) return;
+    const row = touch(recordedByEmail(sale));
+    row.sales = roundMoney(row.sales + sale.amount);
+    const receipt = sale.transactionId || sale.id || '';
+    if (receipt && !row.seen.has(receipt)) {
+      row.seen.add(receipt);
+      row.receipts += 1;
+    }
+  });
+  expenses.forEach((expense) => {
+    const row = touch(expense.createdByEmail?.trim().toLowerCase() === 'unknown' ? '' : (expense.createdByEmail || ''));
+    row.expenses = roundMoney(row.expenses + expense.amount);
+  });
+  return [...rows.values()]
+    .map(({ seen, ...row }) => row)
+    .sort((a, b) => (b.sales + b.expenses) - (a.sales + a.expenses) || a.email.localeCompare(b.email));
 };
