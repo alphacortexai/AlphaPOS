@@ -80,10 +80,10 @@ service cloud.firestore {
       let editors = stringList(data, 'editorEmails');
       let staff = data is map && data.get('staffEmails', []) is list ? data.get('staffEmails', []) : [];
       return request.auth.uid == owner
+        || (bookKey(key) && membershipAllows(owner, key))
         || (hasEmail(sellers) && (key == 'sell' || key == 'salesHistory' || key == 'customers' || key == 'products' || key == 'allBranches'))
         || (hasEmail(editors) && (key == 'products' || key == 'editCatalog' || key == 'seeCost' || key == 'allBranches'))
-        || (!split && hasEmail(staff) && (key == 'sell' || key == 'salesHistory' || key == 'customers' || key == 'products' || key == 'allBranches'))
-        || (bookKey(key) && membershipAllows(owner, key));
+        || (!split && hasEmail(staff) && (key == 'sell' || key == 'salesHistory' || key == 'customers' || key == 'products' || key == 'allBranches'));
     }
     function expenseListShrunk() {
       let kept = 'expenses' in request.resource.data;

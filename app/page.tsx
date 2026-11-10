@@ -10,7 +10,7 @@ import RegisterDesk from '../components/pos/RegisterDesk';
 import ReceiptDialog from '../components/pos/ReceiptDialog';
 import ReturnDialog, { type ReturnableLine } from '../components/pos/ReturnDialog';
 import { ACTIVITY_KEEP, readLocalActivity, trimActivity, writeLocalActivity } from '../lib/pos/activityLog';
-import { computeAccountBalances, DEFAULT_REORDER_POINT, normalizeCustomerPayments, normalizeSuppliers, paymentMatchesCustomer, postedExpense, sessionCashAdjustments, stockIsLow, stockWorth, withTenderAccounts, type CustomerPaymentRecord, type SupplierRecord } from '../lib/pos/books';
+import { computeAccountBalances, DEFAULT_REORDER_POINT, mergeHeardExpenses, normalizeCustomerPayments, normalizeSuppliers, paymentMatchesCustomer, postedExpense, sessionCashAdjustments, stockIsLow, stockWorth, withTenderAccounts, type CustomerPaymentRecord, type SupplierRecord } from '../lib/pos/books';
 import { businessDayKey, businessDayRange, businessDaysThrough, formatDayKey, recentBusinessDays, reportPeriodRange, shiftDayKey, summarizeBusinessDays, summarizePeriod, type ShopClock } from '../lib/pos/reports';
 import { parseOrganiseAssignments, planCategoryUpdates, ORGANISE_PRODUCT_CAP } from '../lib/catalog/organise';
 import { parseCatalogReading, type CatalogMode } from '../lib/catalog/reading';
@@ -18,7 +18,7 @@ import { catalogKeyError, readOwnerCatalogKey, writeOwnerCatalogKey } from '../l
 import { LOCAL_OPERATOR_ID, readLocalShop, writeLocalShop } from '../lib/pos/localShop';
 import { nextSku, reservedProductCodes } from '../lib/pos/sku';
 import { attachProductImages, compressProductPhoto, imageMapChars, isProductImage, PRODUCT_IMAGE_DOC_MAX_CHARS, readLocalProductImages, splitProductImages, writeLocalProductImages } from '../lib/pos/productImage';
-import { commitStockAndRecords, deleteRecords, migrateShopLedger, readNamedRecords, readStockMap, removeEmbeddedRows, setStockQty, writeRecords } from '../lib/pos/ledger';
+import { commitStockAndRecords, deleteRecords, ledgerCollectionPath, migrateShopLedger, readNamedRecords, readStockMap, removeEmbeddedRows, setStockQty, writeRecords } from '../lib/pos/ledger';
 import { beginSalesEmailSend, buildSalesDigest, defaultSalesEmailSettings, finishSalesEmailSend, normalizeSalesEmailSettings, previousSalesPeriod, type SalesDigest, type SalesEmailSettings } from '../lib/pos/salesEmail';
 import { billForReceipt, countVariance, creditAllows, dayClose, discountNeedsManager, expenseWasRemoved, finiteAmount, hashPin, inviteEmails, keepEditedRows, mergeEditedRows, needsReorder, noteRemovedExpense, overlayStock, pinIsValid, preferShopCatalog, productForReturn, rankProducts, sellingPrice, shopCatalog, shopDocumentBody, stockFallback, supplierOwed, tenderTotals, tendersNeedReference, type SupplierBill, type SupplierPayment } from '../lib/pos/shopMath';
 import { accessDenied, chooseShopId, ownShopIsReal, shopsForSignedInUser } from '../lib/pos/shopAccess';
@@ -315,6 +315,8 @@ export default function Page() {
   const shopRevisionRef = useRef(0);
   const invitePatchRef = useRef<string | null>(null);
   const savingExpenseRef = useRef(false);
+  const activitySaveRef = useRef('');
+  const imageSaveRef = useRef('');
   const activeShopOwnerUidRef = useRef('');
   const shopLoadGenRef = useRef(0);
   const [shopEpoch, setShopEpoch] = useState(0);
@@ -1070,6 +1072,28 @@ export default function Page() {
   }, [activeShopOwnerUid, authUser, db]);
 
   useEffect(() => {
+    if (!db || !authUser || !activeShopOwnerUid || authUser.uid === LOCAL_OPERATOR_ID) return;
+    if (!allow('expenses') && !allow('reports')) return;
+    const ownerUid = activeShopOwnerUid;
+    let heardRemote = false;
+    const unsubscribe = onSnapshot(collection(db, ...ledgerCollectionPath(ownerUid, 'expenses')), (snap) => {
+      if (snap.metadata.hasPendingWrites) return;
+      const remote = snap.docs.flatMap((entry) => {
+        const row = entry.data() as Expense;
+        return row?.id ? [row] : [];
+      });
+      if (remote.length === 0 && !heardRemote) return;
+      heardRemote = true;
+      setExpenses((prev) => {
+        const next = mergeHeardExpenses(prev, remote, Date.now(), true);
+        if (next.rows.length === prev.length && next.rows.every((row, index) => JSON.stringify(row) === JSON.stringify(prev[index]))) return prev;
+        return next.rows;
+      });
+    }, () => undefined);
+    return () => unsubscribe();
+  }, [activeShopOwnerUid, allow, authUser, db]);
+
+  useEffect(() => {
     const saveUserData = async () => {
       if (!authUser || !hasLoadedUserDataRef.current || !activeShopOwnerUid || isSwitchingShopRef.current) return;
       if (authUser.uid !== LOCAL_OPERATOR_ID && !db) return;
@@ -1140,18 +1164,32 @@ export default function Page() {
             }, { merge: true });
             invitePatchRef.current = patchKey;
           }
-          if (canWriteActivity) {
-            await setDoc(activityDocRef, {
-              activityLogs: removeUndefinedDeep(trimmedLogs),
-              updatedAt: serverTimestamp(),
-            });
+          const activityKey = `${activeShopOwnerUid}:${JSON.stringify(trimmedLogs)}`;
+          if (canWriteActivity && activitySaveRef.current !== activityKey) {
+            try {
+              await setDoc(activityDocRef, {
+                activityLogs: removeUndefinedDeep(trimmedLogs),
+                updatedAt: serverTimestamp(),
+              });
+              activitySaveRef.current = activityKey;
+            } catch (error) {
+              if (!accessDenied(error)) throw error;
+              activitySaveRef.current = activityKey;
+            }
           }
-          if (canWriteCatalog && photosFit) {
-            await setDoc(doc(db, 'users', activeShopOwnerUid, 'pos', 'images'), {
-              images: stored.images,
-              updatedAt: serverTimestamp(),
-            });
-          } else if (canWriteCatalog && stored.products.length > 0) {
+          const imageKey = photosFit ? `${activeShopOwnerUid}:${JSON.stringify(stored.images)}` : '';
+          if (canWriteCatalog && photosFit && imageSaveRef.current !== imageKey) {
+            try {
+              await setDoc(doc(db, 'users', activeShopOwnerUid, 'pos', 'images'), {
+                images: stored.images,
+                updatedAt: serverTimestamp(),
+              });
+              imageSaveRef.current = imageKey;
+            } catch (error) {
+              if (!accessDenied(error)) throw error;
+              imageSaveRef.current = imageKey;
+            }
+          } else if (canWriteCatalog && stored.products.length > 0 && !photosFit) {
             setStatus('Product photos are too large to save. The products were saved, so a cashier can still sell them.');
           }
           return;
