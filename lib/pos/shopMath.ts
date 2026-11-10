@@ -30,6 +30,7 @@ export type SupplierBill = {
   createdAt: string;
   reference?: string;
   note?: string;
+  createdByEmail?: string;
 };
 
 export type SupplierPayment = {
@@ -39,6 +40,7 @@ export type SupplierPayment = {
   method: Exclude<PaymentMethod, 'on_account'>;
   createdAt: string;
   reference?: string;
+  createdByEmail?: string;
 };
 
 export const postedLines = <T extends { voidedAt?: string }>(lines: T[]) => lines.filter((line) => !line.voidedAt);

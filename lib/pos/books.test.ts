@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mergeHeardExpenses, postedExpense, stockWorth } from './books';
+import { mergeHeardExpenses, postedExpense, staffAttribution, staffBookTotals, stockWorth } from './books';
 
 test('adds cost and selling price for units on hand', () => {
   const worth = stockWorth([
@@ -74,6 +74,35 @@ test('a new expense keeps the time it was entered', () => {
   const saved = postedExpense(undefined, { id: 'tea', title: 'Tea', amount: 2000, createdAt: '2026-11-10T08:00:00.000Z' });
   assert.equal(saved.createdAt, '2026-11-10T08:00:00.000Z');
   assert.equal(saved.title, 'Tea');
+});
+
+test('a sale names the staff member, and keeps the email when the name is unknown', () => {
+  const people = [{ name: 'Amina', email: 'amina@shop.test', role: 'cashier' }];
+  const known = staffAttribution('Amina@shop.test', people, undefined, { cashier: 'Cashier' });
+  assert.equal(known.primary, 'Amina');
+  assert.equal(known.detail, 'Cashier · Amina@shop.test');
+  const owner = staffAttribution('owner@shop.test', [], { email: 'owner@shop.test', name: 'Grace' });
+  assert.equal(owner.primary, 'Grace');
+  assert.equal(owner.detail, 'Owner · owner@shop.test');
+  assert.equal(staffAttribution('walkin@shop.test', people).primary, 'walkin@shop.test');
+  assert.equal(staffAttribution('unknown', people).primary, 'Not recorded');
+});
+
+test('staff totals count a receipt once and keep who entered the expense', () => {
+  const rows = staffBookTotals(
+    [
+      { id: 'a', transactionId: 't1', amount: 1000, cashierEmail: 'amina@shop.test' },
+      { id: 'b', transactionId: 't1', amount: 500, cashierEmail: 'amina@shop.test' },
+      { id: 'c', transactionId: 't2', amount: 2000, createdByEmail: 'owner@shop.test', voidedAt: '2026-11-10T09:00:00.000Z' },
+      { id: 'd', amount: -300, cashierEmail: 'amina@shop.test' },
+    ],
+    [{ amount: 400, createdByEmail: 'amina@shop.test' }],
+  );
+  const amina = rows.find((row) => row.email === 'amina@shop.test');
+  assert.equal(amina?.sales, 1200);
+  assert.equal(amina?.receipts, 2);
+  assert.equal(amina?.expenses, 400);
+  assert.equal(rows.some((row) => row.email === 'owner@shop.test'), false);
 });
 
 test('treats a missing price as zero', () => {
