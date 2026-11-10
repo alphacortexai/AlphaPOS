@@ -208,6 +208,28 @@ export const postedExpense = <T extends { id: string; createdAt?: string; create
     : next
 );
 
+/** Remote expense rows win. A line saved a moment ago stays until its record arrives. An empty first read does not wipe the list already on screen. */
+export const mergeHeardExpenses = <T extends { id: string; createdAt?: string }>(
+  current: T[],
+  remote: T[],
+  now: number,
+  heardRemote: boolean,
+  pendingMs = 20000,
+): { rows: T[]; heardRemote: boolean } => {
+  if (remote.length === 0 && !heardRemote) return { rows: current, heardRemote: false };
+  const remoteIds = new Set(remote.map((row) => row.id));
+  const pending = current.filter((row) => {
+    if (!row.id || remoteIds.has(row.id)) return false;
+    const at = new Date(row.createdAt || '').getTime();
+    return Number.isFinite(at) && now - at >= 0 && now - at < pendingMs;
+  });
+  const rows = (pending.length > 0 ? [...remote, ...pending] : [...remote]).sort((a, b) => {
+    const at = new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+    return at || a.id.localeCompare(b.id);
+  });
+  return { rows, heardRemote: true };
+};
+
 export const sessionCashAdjustments = (
   expenses: { amount: number; cashSessionId?: string }[],
   payments: { amount: number; method: PaymentMethod | CustomerPaymentRecord['method']; cashSessionId?: string }[],
