@@ -327,3 +327,22 @@ export const shopDocumentBody = <T extends Record<string, unknown>>(payload: T) 
   delete rest.supplierPayments;
   return { ...rest, ledgerSplit: true };
 };
+
+/** Stable identity of the shared shop document. Ledger rows are not part of it. */
+export const shopSaveFingerprint = (ownerUid: string, body: unknown) => JSON.stringify({ ownerUid, body });
+
+/**
+ * The owner screen rewrites one shared shop document. Opening a shop that already
+ * has a revision only remembers it. A later edit writes. A paused key waits for a
+ * different edit instead of retrying the same clash.
+ */
+export const ownerShopWrite = (input: {
+  savedKey: string;
+  pausedKey: string;
+  nextKey: string;
+  loadedRevision: number;
+}) => {
+  if (input.savedKey === '' && input.loadedRevision > 0) return 'baseline' as const;
+  if (input.savedKey === input.nextKey || input.pausedKey === input.nextKey) return 'skip' as const;
+  return 'write' as const;
+};

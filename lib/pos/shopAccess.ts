@@ -62,6 +62,12 @@ export const accessDenied = (error: unknown) => {
   return code.includes('permission-denied') || /permission/i.test(message);
 };
 
+/** Firestore rejected a transaction because another write landed on the same document first. */
+export const saveWasInterrupted = (error: unknown) => {
+  const message = error instanceof Error ? error.message : '';
+  return /stored version/i.test(message) && /base version/i.test(message);
+};
+
 /** The shop document's saved role belongs to whoever last saved it. The invite grant decides, and it never makes a guest the owner. */
 export const openedRole = (input: {
   userUid: string;

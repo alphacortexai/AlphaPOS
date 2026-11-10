@@ -20,8 +20,8 @@ import { nextSku, reservedProductCodes } from '../lib/pos/sku';
 import { attachProductImages, compressProductPhoto, imageMapChars, isProductImage, PRODUCT_IMAGE_DOC_MAX_CHARS, readLocalProductImages, splitProductImages, writeLocalProductImages } from '../lib/pos/productImage';
 import { commitStockAndRecords, deleteRecords, ledgerCollectionPath, migrateShopLedger, readNamedRecords, readStockMap, removeEmbeddedRows, setStockQty, writeRecords } from '../lib/pos/ledger';
 import { beginSalesEmailSend, buildSalesDigest, defaultSalesEmailSettings, finishSalesEmailSend, normalizeSalesEmailSettings, previousSalesPeriod, type SalesDigest, type SalesEmailSettings } from '../lib/pos/salesEmail';
-import { billForReceipt, countVariance, creditAllows, dayClose, discountNeedsManager, expenseWasRemoved, finiteAmount, hashPin, inviteEmails, keepEditedRows, mergeEditedRows, needsReorder, noteRemovedExpense, overlayStock, pinIsValid, preferShopCatalog, productForReturn, rankProducts, sellingPrice, shopCatalog, shopDocumentBody, stockFallback, supplierOwed, tenderTotals, tendersNeedReference, type SupplierBill, type SupplierPayment } from '../lib/pos/shopMath';
-import { accessDenied, chooseShopId, ownShopIsReal, shopsForSignedInUser } from '../lib/pos/shopAccess';
+import { billForReceipt, countVariance, creditAllows, dayClose, discountNeedsManager, expenseWasRemoved, finiteAmount, hashPin, inviteEmails, keepEditedRows, mergeEditedRows, needsReorder, noteRemovedExpense, overlayStock, ownerShopWrite, pinIsValid, preferShopCatalog, productForReturn, rankProducts, sellingPrice, shopCatalog, shopDocumentBody, shopSaveFingerprint, stockFallback, supplierOwed, tenderTotals, tendersNeedReference, type SupplierBill, type SupplierPayment } from '../lib/pos/shopMath';
+import { accessDenied, chooseShopId, ownShopIsReal, saveWasInterrupted, shopsForSignedInUser } from '../lib/pos/shopAccess';
 import { fetchFirestoreDocument, fetchMembershipsByEmail, preferShopRead, SHOP_CONNECTION_MESSAGE, ShopReadError, withTimeout } from '../lib/pos/shopRead';
 import { booksForPermissions, canViewShelf, inviteShopPatch, PERMISSION_LABELS, permissionsFor, permissionsMatchPreset, recordsForAccess, registerCatalog, resolveStaffAccess, rowsForBranch, shelfForInvite, staffEmailLists, staffGrants, STAFF_PERMISSIONS, type StaffPermission } from '../lib/pos/staffAccess';
 import { completeGoogleRedirect, googleSignInError, startGoogleSignIn } from '../lib/pos/googleSignIn';
@@ -317,6 +317,11 @@ export default function Page() {
   const savingExpenseRef = useRef(false);
   const activitySaveRef = useRef('');
   const imageSaveRef = useRef('');
+  const ownerSaveKeyRef = useRef('');
+  const ownerSavePausedRef = useRef('');
+  const ownerSaveAttemptRef = useRef('');
+  const saveFlightRef = useRef({ running: false, again: false });
+  const performSaveRef = useRef<() => Promise<void>>(async () => {});
   const activeShopOwnerUidRef = useRef('');
   const shopLoadGenRef = useRef(0);
   const [shopEpoch, setShopEpoch] = useState(0);
@@ -1094,6 +1099,13 @@ export default function Page() {
   }, [activeShopOwnerUid, allow, authUser, db]);
 
   useEffect(() => {
+    ownerSaveKeyRef.current = '';
+    ownerSavePausedRef.current = '';
+    activitySaveRef.current = '';
+    imageSaveRef.current = '';
+  }, [activeShopOwnerUid]);
+
+  useEffect(() => {
     const saveUserData = async () => {
       if (!authUser || !hasLoadedUserDataRef.current || !activeShopOwnerUid || isSwitchingShopRef.current) return;
       if (authUser.uid !== LOCAL_OPERATOR_ID && !db) return;
@@ -1194,29 +1206,61 @@ export default function Page() {
           }
           return;
         }
-        let nextRevision = shopRevisionRef.current;
-        const listsDiffer = <T extends { id: string }>(current: T[], next: T[]) => (
-          current.length !== next.length || current.some((row, index) => row.id !== next[index]?.id)
-        );
-        const adopted = await runTransaction(db, async (transaction) => {
-          const snap = await transaction.get(userDataRef);
-          const remote = snap.exists() ? snap.data() as Record<string, unknown> : {};
-          const remoteRevision = snap.exists() ? Number(remote.revision) || 0 : 0;
-          const conflict = snap.exists() && remoteRevision !== shopRevisionRef.current;
-          const nextProducts = conflict ? keepEditedRows(stored.products, remote.products) : stored.products;
-          const nextServices = conflict ? keepEditedRows(services, remote.services) : services;
-          const nextSuppliers = conflict ? keepEditedRows(suppliers, remote.suppliers) : suppliers;
-          const nextGroups = conflict ? keepEditedRows(expenseGroups, remote.expenseGroups) : expenseGroups;
-          const nextBranches = conflict ? keepEditedRows(branches, remote.branches) : branches;
-          const nextUsers = conflict ? mergeEditedRows(users, remote.users) : users;
-          const nextCustomers = conflict ? mergeEditedRows(customers, remote.customers) : customers;
-          const nextHeld = conflict ? mergeEditedRows(heldTickets, remote.heldTickets) : heldTickets;
-          const nextSessions = conflict ? mergeEditedRows(cashSessions, remote.cashSessions) : cashSessions;
-          nextRevision = remoteRevision + 1;
-          transaction.set(userDataRef, {
-            ...removeUndefinedDeep(shopDocumentBody({
-              ...shopPayload,
-              products: nextProducts,
+        const bodyKey = shopSaveFingerprint(activeShopOwnerUid, removeUndefinedDeep(shopDocumentBody(shopPayload)));
+        const activityKey = `${activeShopOwnerUid}:${JSON.stringify(trimmedLogs)}`;
+        const imageKey = photosFit ? `${activeShopOwnerUid}:${JSON.stringify(stored.images)}` : '';
+        ownerSaveAttemptRef.current = bodyKey;
+        const shopWrite = ownerShopWrite({
+          savedKey: ownerSaveKeyRef.current,
+          pausedKey: ownerSavePausedRef.current,
+          nextKey: bodyKey,
+          loadedRevision: shopRevisionRef.current,
+        });
+        const shopStillThisSave = () => !activeShopOwnerUidRef.current || activeShopOwnerUidRef.current === activeShopOwnerUid;
+        if (shopWrite === 'baseline') {
+          if (!shopStillThisSave()) return;
+          ownerSaveKeyRef.current = bodyKey;
+          if (canWriteActivity) activitySaveRef.current = activityKey;
+          if (photosFit) imageSaveRef.current = imageKey;
+        } else if (shopWrite === 'write') {
+          let nextRevision = shopRevisionRef.current;
+          const listsDiffer = <T extends { id: string }>(current: T[], next: T[]) => (
+            current.length !== next.length || current.some((row, index) => row.id !== next[index]?.id)
+          );
+          const adopted = await runTransaction(db, async (transaction) => {
+            const snap = await transaction.get(userDataRef);
+            const remote = snap.exists() ? snap.data() as Record<string, unknown> : {};
+            const remoteRevision = snap.exists() ? Number(remote.revision) || 0 : 0;
+            const conflict = snap.exists() && remoteRevision !== shopRevisionRef.current;
+            const nextProducts = conflict ? keepEditedRows(stored.products, remote.products) : stored.products;
+            const nextServices = conflict ? keepEditedRows(services, remote.services) : services;
+            const nextSuppliers = conflict ? keepEditedRows(suppliers, remote.suppliers) : suppliers;
+            const nextGroups = conflict ? keepEditedRows(expenseGroups, remote.expenseGroups) : expenseGroups;
+            const nextBranches = conflict ? keepEditedRows(branches, remote.branches) : branches;
+            const nextUsers = conflict ? mergeEditedRows(users, remote.users) : users;
+            const nextCustomers = conflict ? mergeEditedRows(customers, remote.customers) : customers;
+            const nextHeld = conflict ? mergeEditedRows(heldTickets, remote.heldTickets) : heldTickets;
+            const nextSessions = conflict ? mergeEditedRows(cashSessions, remote.cashSessions) : cashSessions;
+            nextRevision = remoteRevision + 1;
+            transaction.set(userDataRef, {
+              ...removeUndefinedDeep(shopDocumentBody({
+                ...shopPayload,
+                products: nextProducts,
+                services: nextServices,
+                suppliers: nextSuppliers,
+                expenseGroups: nextGroups,
+                branches: nextBranches,
+                users: nextUsers,
+                customers: nextCustomers,
+                heldTickets: nextHeld,
+                cashSessions: nextSessions,
+                revision: nextRevision,
+              })),
+              updatedAt: serverTimestamp(),
+            }, { merge: true });
+            if (!conflict) return null;
+            return {
+              products: nextProducts as Product[],
               services: nextServices,
               suppliers: nextSuppliers,
               expenseGroups: nextGroups,
@@ -1225,48 +1269,26 @@ export default function Page() {
               customers: nextCustomers,
               heldTickets: nextHeld,
               cashSessions: nextSessions,
-              revision: nextRevision,
-            })),
-            updatedAt: serverTimestamp(),
-          }, { merge: true });
-          if (canWriteActivity) {
-            transaction.set(activityDocRef, {
-              activityLogs: removeUndefinedDeep(trimmedLogs),
-              updatedAt: serverTimestamp(),
-            });
+            };
+          });
+          shopRevisionRef.current = nextRevision;
+          if (adopted) {
+            const saved = adopted;
+            if (listsDiffer(products, saved.products)) {
+              setProducts((current) => {
+                const extras = saved.products.filter((product) => !current.some((item) => item.id === product.id));
+                return extras.length > 0 ? [...current, ...extras] : current;
+              });
+            }
+            if (listsDiffer(services, saved.services)) setServices(saved.services);
+            if (listsDiffer(suppliers, saved.suppliers)) setSuppliers(saved.suppliers);
+            if (listsDiffer(expenseGroups, saved.expenseGroups)) setExpenseGroups(saved.expenseGroups);
+            if (listsDiffer(branches, saved.branches)) setBranches(saved.branches);
+            if (listsDiffer(users, saved.users)) setUsers(saved.users);
+            if (listsDiffer(customers, saved.customers)) setCustomers(saved.customers);
+            if (listsDiffer(heldTickets, saved.heldTickets)) setHeldTickets(saved.heldTickets);
+            if (listsDiffer(cashSessions, saved.cashSessions)) setCashSessions(saved.cashSessions);
           }
-          if (!conflict) return null;
-          return {
-            products: nextProducts as Product[],
-            services: nextServices,
-            suppliers: nextSuppliers,
-            expenseGroups: nextGroups,
-            branches: nextBranches,
-            users: nextUsers,
-            customers: nextCustomers,
-            heldTickets: nextHeld,
-            cashSessions: nextSessions,
-          };
-        });
-        shopRevisionRef.current = nextRevision;
-        if (adopted) {
-          const saved = adopted;
-          if (listsDiffer(products, saved.products)) {
-            setProducts((current) => {
-              const extras = saved.products.filter((product) => !current.some((item) => item.id === product.id));
-              return extras.length > 0 ? [...current, ...extras] : current;
-            });
-          }
-          if (listsDiffer(services, saved.services)) setServices(saved.services);
-          if (listsDiffer(suppliers, saved.suppliers)) setSuppliers(saved.suppliers);
-          if (listsDiffer(expenseGroups, saved.expenseGroups)) setExpenseGroups(saved.expenseGroups);
-          if (listsDiffer(branches, saved.branches)) setBranches(saved.branches);
-          if (listsDiffer(users, saved.users)) setUsers(saved.users);
-          if (listsDiffer(customers, saved.customers)) setCustomers(saved.customers);
-          if (listsDiffer(heldTickets, saved.heldTickets)) setHeldTickets(saved.heldTickets);
-          if (listsDiffer(cashSessions, saved.cashSessions)) setCashSessions(saved.cashSessions);
-        }
-        if (ownsDocument) {
           const shopName = currentShop?.shopName || 'My Shop';
           await Promise.all(staffGrants(activeShopOwnerUid, shopName, users).map((grant) => setDoc(doc(db, 'shopMemberships', grant.id), {
             ownerUid: grant.ownerUid,
@@ -1277,20 +1299,68 @@ export default function Page() {
             ...(grant.branchId ? { branchId: grant.branchId } : {}),
             updatedAt: serverTimestamp(),
           }, { merge: true })));
+          if (!shopStillThisSave()) return;
+          ownerSaveKeyRef.current = bodyKey;
+          ownerSavePausedRef.current = '';
         }
-        if (canWriteCatalog && photosFit) {
+        if (canWriteActivity && activitySaveRef.current !== activityKey) {
+          await setDoc(activityDocRef, {
+            activityLogs: removeUndefinedDeep(trimmedLogs),
+            updatedAt: serverTimestamp(),
+          });
+          activitySaveRef.current = activityKey;
+        }
+        if (canWriteCatalog && photosFit && imageSaveRef.current !== imageKey) {
           await setDoc(doc(db, 'users', activeShopOwnerUid, 'pos', 'images'), {
             images: stored.images,
             updatedAt: serverTimestamp(),
           });
-        } else if (canWriteCatalog && stored.products.length > 0) {
+          imageSaveRef.current = imageKey;
+        } else if (canWriteCatalog && stored.products.length > 0 && !photosFit && imageSaveRef.current !== 'too-large') {
+          imageSaveRef.current = 'too-large';
           setStatus('Product photos are too large to save. The products were saved, so a cashier can still sell them.');
         }
       } catch (error) {
+        if (saveWasInterrupted(error)) throw error;
         setStatus(`Failed to auto-save your data: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }
     };
-    void saveUserData();
+    performSaveRef.current = saveUserData;
+    const flight = saveFlightRef.current;
+    const execute = async () => {
+      if (flight.running) {
+        flight.again = true;
+        return;
+      }
+      flight.running = true;
+      let clashes = 0;
+      try {
+        do {
+          flight.again = false;
+          try {
+            await performSaveRef.current();
+            clashes = 0;
+          } catch (error) {
+            if (saveWasInterrupted(error) && clashes < 3) {
+              clashes += 1;
+              flight.again = true;
+              await new Promise((resolve) => setTimeout(resolve, 250 * clashes));
+              continue;
+            }
+            if (saveWasInterrupted(error)) {
+              ownerSavePausedRef.current = ownerSaveAttemptRef.current;
+              setStatus('Another screen saved the shop at the same time. Your next change to the shop will be saved.');
+            } else {
+              setStatus(`Failed to auto-save your data: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            }
+          }
+        } while (flight.again);
+      } finally {
+        flight.running = false;
+        if (flight.again) void execute();
+      }
+    };
+    void execute();
   }, [activeShopOwnerUid, allow, authUser, customerPayments, db, branches, products, services, sales, expenses, expenseGroups, users, activityLogs, shopTimeSettings, accounts, customers, suppliers, supplierBills, supplierPayments, heldTickets, cashSessions, taxSettings, receiptSettings, registerSettings, salesEmailSettings, removedExpenseIds, currentShop?.shopName]);
 
   const startLocalCounter = () => {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { accessDenied, chooseShopId, openedRole, ownShopIsReal, shopsForSignedInUser } from './shopAccess';
+import { accessDenied, chooseShopId, openedRole, ownShopIsReal, saveWasInterrupted, shopsForSignedInUser } from './shopAccess';
 
 test('a cashier invite does not also make them the owner of an empty shop', () => {
   const shops = shopsForSignedInUser({
@@ -51,6 +51,12 @@ test('a blocked shop read is not treated as an empty shop', () => {
   assert.equal(accessDenied({ code: 'firestore/permission-denied' }), true);
   assert.equal(accessDenied(new Error('Missing or insufficient permissions.')), true);
   assert.equal(accessDenied(new Error('offline')), false);
+});
+
+test('a shop saved by someone else is a version clash, not a broken save', () => {
+  assert.equal(saveWasInterrupted(new Error('the stored version (1794300766204334) does not match the required base version (1794300764606048)')), true);
+  assert.equal(saveWasInterrupted(new Error('Missing or insufficient permissions.')), false);
+  assert.equal(saveWasInterrupted(new Error('offline')), false);
 });
 
 test('a copied shop name does not make an invited person the owner', () => {
