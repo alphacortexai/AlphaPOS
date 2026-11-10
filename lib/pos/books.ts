@@ -192,6 +192,22 @@ export const computeAccountBalances = (
   return balances;
 };
 
+/** An edit keeps the day and the person who first recorded the expense, so reports do not drop it. */
+export const postedExpense = <T extends { id: string; createdAt?: string; createdByUid?: string; createdByEmail?: string }>(
+  existing: T | undefined,
+  next: T,
+): T => (
+  existing
+    ? {
+      ...existing,
+      ...next,
+      ...(existing.createdAt ? { createdAt: existing.createdAt } : {}),
+      ...(existing.createdByUid ? { createdByUid: existing.createdByUid } : {}),
+      ...(existing.createdByEmail ? { createdByEmail: existing.createdByEmail } : {}),
+    }
+    : next
+);
+
 export const sessionCashAdjustments = (
   expenses: { amount: number; cashSessionId?: string }[],
   payments: { amount: number; method: PaymentMethod | CustomerPaymentRecord['method']; cashSessionId?: string }[],

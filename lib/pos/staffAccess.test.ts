@@ -160,6 +160,13 @@ test('a cashier, a stock manager, and anyone else invited sees every product on 
   assert.equal(permissionsFor('manager').includes('products'), true);
 });
 
+test('a manager can open the books and a cashier cannot', () => {
+  assert.equal(booksForPermissions(permissionsFor('manager'), false).expenses, true);
+  assert.equal(booksForPermissions(permissionsFor('admin'), false).expenses, true);
+  assert.equal(booksForPermissions(permissionsFor('cashier'), false).expenses, false);
+  assert.equal(booksForPermissions(permissionsFor('shop_owner'), true).expenses, true);
+});
+
 test('an empty permission list stays empty instead of falling back to the role', () => {
   const access = resolveStaffAccess({
     userUid: 'person',

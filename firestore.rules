@@ -49,6 +49,29 @@ service cloud.firestore {
         || (list.size() == 5 && (list[0] == email() || list[1] == email() || list[2] == email() || list[3] == email() || list[4] == email()))
         || (list.size() == 6 && (list[0] == email() || list[1] == email() || list[2] == email() || list[3] == email() || list[4] == email() || list[5] == email()));
     }
+    // Expenses, reports, balances, and the activity log are not on the seller or editor lists.
+    // Those switches live on the invite, so the books follow that record.
+    function bookKey(key) {
+      return key == 'expenses' || key == 'reports' || key == 'accounts' || key == 'activity';
+    }
+    function membershipAllows(owner, key) {
+      let path = /databases/$(database)/documents/shopMemberships/$(owner + '_' + email());
+      let grant = exists(path) ? get(path).data : null;
+      let permissions = grant is map && grant.keys().hasAny(['permissions']) && grant.get('permissions', []) is list
+        ? grant.get('permissions', [])
+        : [];
+      let openRole = grant is map && !grant.keys().hasAny(['permissions']) && grant.get('role', '') in ['manager', 'admin'];
+      return bookKey(key)
+        && grant is map
+        && email() != ''
+        && sameMail(grant.get('email', ''))
+        && (
+          !grant.keys().hasAny(['ownerUid'])
+          || grant.get('ownerUid', '') == null
+          || grant.get('ownerUid', '') == owner
+        )
+        && ((permissions.size() > 0 && key in permissions) || openRole);
+    }
     // sellerEmails and editorEmails hold up to six people. Until those fields exist, up to six people listed on the shop may sell.
     function hasPerm(owner, key) {
       let data = shopData(owner);
@@ -59,7 +82,14 @@ service cloud.firestore {
       return request.auth.uid == owner
         || (hasEmail(sellers) && (key == 'sell' || key == 'salesHistory' || key == 'customers' || key == 'products' || key == 'allBranches'))
         || (hasEmail(editors) && (key == 'products' || key == 'editCatalog' || key == 'seeCost' || key == 'allBranches'))
-        || (!split && hasEmail(staff) && (key == 'sell' || key == 'salesHistory' || key == 'customers' || key == 'products' || key == 'allBranches'));
+        || (!split && hasEmail(staff) && (key == 'sell' || key == 'salesHistory' || key == 'customers' || key == 'products' || key == 'allBranches'))
+        || (bookKey(key) && membershipAllows(owner, key));
+    }
+    function expenseListShrunk() {
+      let kept = 'expenses' in request.resource.data;
+      let next = kept ? request.resource.data.get('expenses', []) : [];
+      let prior = resource.data.get('expenses', []);
+      return !kept || (prior is list && next is list && next.size() <= prior.size());
     }
     function isStaff(owner) {
       return request.auth.uid == owner || emailListed(shopData(owner)) || hasPerm(owner, 'editCatalog');
@@ -72,10 +102,12 @@ service cloud.firestore {
       return changed.hasOnly([
         'products', 'services', 'suppliers', 'expenseGroups',
         'customers', 'heldTickets', 'cashSessions',
+        'expenses', 'removedExpenseIds',
         'revision', 'updatedAt', 'ledgerSplit'
       ])
       && (!changed.hasAny(['products', 'services', 'suppliers', 'expenseGroups']) || hasPerm(owner, 'editCatalog'))
-      && (!changed.hasAny(['customers', 'heldTickets', 'cashSessions']) || hasPerm(owner, 'sell'));
+      && (!changed.hasAny(['customers', 'heldTickets', 'cashSessions']) || hasPerm(owner, 'sell'))
+      && (!changed.hasAny(['expenses', 'removedExpenseIds']) || (hasPerm(owner, 'expenses') && (!changed.hasAny(['expenses']) || expenseListShrunk())));
     }
 
     match /shopMemberships/{id} {

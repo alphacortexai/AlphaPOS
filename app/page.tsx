@@ -10,7 +10,7 @@ import RegisterDesk from '../components/pos/RegisterDesk';
 import ReceiptDialog from '../components/pos/ReceiptDialog';
 import ReturnDialog, { type ReturnableLine } from '../components/pos/ReturnDialog';
 import { ACTIVITY_KEEP, readLocalActivity, trimActivity, writeLocalActivity } from '../lib/pos/activityLog';
-import { computeAccountBalances, DEFAULT_REORDER_POINT, normalizeCustomerPayments, normalizeSuppliers, paymentMatchesCustomer, sessionCashAdjustments, stockIsLow, stockWorth, withTenderAccounts, type CustomerPaymentRecord, type SupplierRecord } from '../lib/pos/books';
+import { computeAccountBalances, DEFAULT_REORDER_POINT, normalizeCustomerPayments, normalizeSuppliers, paymentMatchesCustomer, postedExpense, sessionCashAdjustments, stockIsLow, stockWorth, withTenderAccounts, type CustomerPaymentRecord, type SupplierRecord } from '../lib/pos/books';
 import { businessDayKey, businessDayRange, businessDaysThrough, formatDayKey, recentBusinessDays, reportPeriodRange, shiftDayKey, summarizeBusinessDays, summarizePeriod, type ShopClock } from '../lib/pos/reports';
 import { parseOrganiseAssignments, planCategoryUpdates, ORGANISE_PRODUCT_CAP } from '../lib/catalog/organise';
 import { parseCatalogReading, type CatalogMode } from '../lib/catalog/reading';
@@ -314,6 +314,7 @@ export default function Page() {
   const isSwitchingShopRef = useRef(false);
   const shopRevisionRef = useRef(0);
   const invitePatchRef = useRef<string | null>(null);
+  const savingExpenseRef = useRef(false);
   const activeShopOwnerUidRef = useRef('');
   const shopLoadGenRef = useRef(0);
   const [shopEpoch, setShopEpoch] = useState(0);
@@ -943,10 +944,13 @@ export default function Page() {
             });
           }
           if (stale() && !shopStillOpen()) return false;
-          const orEmpty = <T,>(work: Promise<T>, empty: T) => withTimeout(work, 8000, SHOP_CONNECTION_MESSAGE).catch(() => empty);
+          const orEmpty = <T,>(work: Promise<T>, empty: T, blocked?: string) => withTimeout(work, 8000, SHOP_CONNECTION_MESSAGE).catch((error: unknown) => {
+            if (blocked && accessDenied(error)) ledgerNote = ` ${blocked}`;
+            return empty;
+          });
           const [remoteSales, remoteExpenses, remotePayments, remoteBills, remoteSupplierPayments, remoteStock] = await Promise.all([
             ledgerReads.sales ? orEmpty(readNamedRecords<Sale>(db, selectedShopOwnerUid, 'sales'), []) : Promise.resolve([]),
-            ledgerReads.expenses ? orEmpty(readNamedRecords<Expense>(db, selectedShopOwnerUid, 'expenses'), []) : Promise.resolve([]),
+            ledgerReads.expenses ? orEmpty(readNamedRecords<Expense>(db, selectedShopOwnerUid, 'expenses'), [], 'Expenses are still blocked for this sign-in, so they are not in the books.') : Promise.resolve([]),
             ledgerReads.payments ? orEmpty(readNamedRecords<CustomerPayment>(db, selectedShopOwnerUid, 'payments'), []) : Promise.resolve([]),
             ledgerReads.supplierBills ? orEmpty(readNamedRecords<SupplierBill>(db, selectedShopOwnerUid, 'supplierBills'), []) : Promise.resolve([]),
             ledgerReads.supplierPayments ? orEmpty(readNamedRecords<SupplierPayment>(db, selectedShopOwnerUid, 'supplierPayments'), []) : Promise.resolve([]),
@@ -1544,10 +1548,12 @@ export default function Page() {
   });
 
   useEffect(() => {
+    if (!allow('expenses')) return;
     const todayKey = businessDayKey(new Date(), shopClock);
     const sharedCostServices = services.filter((service) => service.serviceType === 'shared_cost' && service.monthlySharedCost > 0);
     if (sharedCostServices.length === 0) return;
 
+    let created: Expense[] = [];
     setExpenses((prev) => {
       const existingAutoExpenseKeys = new Set(
         prev
@@ -1566,14 +1572,26 @@ export default function Page() {
           branchId: service.branchId,
           amount: roundMoney(service.monthlySharedCost / 30),
           expenseGroupId: service.expenseGroupId || undefined,
-          ...currentAuditStamp(),
+          createdAt: new Date().toISOString(),
+          createdByUid: authUser?.uid || 'unknown',
+          createdByEmail: authUser?.email || 'unknown',
         });
       });
 
       if (newAutoExpenses.length === 0) return prev;
+      created = newAutoExpenses;
       return [...newAutoExpenses, ...prev];
     });
-  }, [removedExpenseIds, services, shopClock]);
+    if (created.length === 0 || !db || !authUser || authUser.uid === LOCAL_OPERATOR_ID || !activeShopOwnerUid) return;
+    const saved = created;
+    void writeRecords(db, activeShopOwnerUid, 'expenses', saved).catch((error: unknown) => {
+      const ids = new Set(saved.map((expense) => expense.id));
+      setExpenses((prev) => prev.filter((expense) => !ids.has(expense.id)));
+      setStatus(accessDenied(error)
+        ? 'A shared cost was blocked, so it is not in the books.'
+        : 'A shared cost was not saved.');
+    });
+  }, [activeShopOwnerUid, allow, authUser, db, removedExpenseIds, services, shopClock]);
 
   const logActivity = (action: string, details: string, stockMovement?: StockMovementAudit) => {
     setActivityLogs((prev) => [{
@@ -2007,10 +2025,30 @@ export default function Page() {
   };
 
   const transferUngroupedExpenses = () => {
-    if (!transferExpenseGroupId) return;
-    setExpenses((prev) => prev.map((expense) => (!expense.expenseGroupId ? { ...expense, expenseGroupId: transferExpenseGroupId, ...updatedAuditStamp() } : expense)));
-    setStatus('Ungrouped expenses transferred successfully.');
+    if (!transferExpenseGroupId || !allow('expenses')) return;
+    let moved: Expense[] = [];
+    setExpenses((prev) => {
+      moved = [];
+      return prev.map((expense) => {
+        if (expense.expenseGroupId) return expense;
+        const next = { ...expense, expenseGroupId: transferExpenseGroupId, ...updatedAuditStamp() };
+        moved.push(next);
+        return next;
+      });
+    });
     setTransferExpenseGroupId('');
+    if (moved.length === 0 || !db || !authUser || authUser.uid === LOCAL_OPERATOR_ID || !activeShopOwnerUid) {
+      setStatus('Ungrouped expenses transferred successfully.');
+      return;
+    }
+    const saved = moved;
+    void writeRecords(db, activeShopOwnerUid, 'expenses', saved).then(() => {
+      setStatus('Ungrouped expenses transferred successfully.');
+    }).catch((error: unknown) => {
+      const ids = new Set(saved.map((expense) => expense.id));
+      setExpenses((prev) => prev.map((expense) => (ids.has(expense.id) ? { ...expense, expenseGroupId: undefined } : expense)));
+      showNotification(accessDenied(error) ? 'The shop blocked this change, so the expenses stayed ungrouped.' : 'Those expenses were not moved.', 'error');
+    });
   };
 
   const saveExpenseGroupEdit = (groupId: string) => {
@@ -2057,28 +2095,52 @@ export default function Page() {
     return { total, segments };
   }, [expenseChartRange, expenseGroupMap, expenses, shopClock]);
 
-  const saveExpense = (e: React.FormEvent) => {
+  const saveExpense = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!expenseForm.title || !expenseForm.branchId || expenseForm.amount <= 0) return;
+    if (savingExpenseRef.current) return;
+    if (!allow('expenses')) {
+      showNotification('The owner has not turned on expenses for you.', 'error');
+      return;
+    }
+    if (!expenseForm.title.trim() || !expenseForm.branchId || !(expenseForm.amount > 0)) {
+      showNotification('Enter a title, a branch, and an amount greater than zero.', 'error');
+      return;
+    }
     const selectedAccountId = expenseForm.accountId || defaultAccount?.id;
     if (!selectedAccountId) {
       showNotification('Please create an account first (CASH is created by default).', 'error');
       return;
     }
-    if (expenseForm.id) {
-      const updated = { ...expenseForm, accountId: selectedAccountId, id: expenseForm.id, ...updatedAuditStamp() };
-      setExpenses((prev) => prev.map((ex) => (ex.id === expenseForm.id ? { ...ex, ...updated } : ex)));
-      if (db && authUser && authUser.uid !== LOCAL_OPERATOR_ID) void writeRecords(db, activeShopOwnerUid, 'expenses', [updated as Expense]).catch(() => undefined);
-      setStatus('Expense updated.');
-      logActivity('edit_expense', `Updated expense "${expenseForm.title}"`);
-    } else {
-      const cashSessionId = selectedAccountId === defaultAccount?.id && openCashSession ? openCashSession.id : undefined;
-      const created = { ...expenseForm, accountId: selectedAccountId, ...(cashSessionId ? { cashSessionId } : {}), id: crypto.randomUUID(), ...currentAuditStamp() };
-      setExpenses((prev) => [...prev, created]);
-      if (db && authUser && authUser.uid !== LOCAL_OPERATOR_ID) void writeRecords(db, activeShopOwnerUid, 'expenses', [created]).catch(() => undefined);
-      setStatus('Expense recorded.');
-      logActivity('add_expense', `Added expense "${expenseForm.title}"`);
+    const existing = expenseForm.id ? expenses.find((expense) => expense.id === expenseForm.id) : undefined;
+    const cashSessionId = !expenseForm.id && selectedAccountId === defaultAccount?.id && openCashSession ? openCashSession.id : undefined;
+    const record: Expense = postedExpense(existing, {
+      ...expenseForm,
+      title: expenseForm.title.trim(),
+      accountId: selectedAccountId,
+      ...(cashSessionId ? { cashSessionId } : {}),
+      ...(expenseForm.id && selectedAccountId !== defaultAccount?.id ? { cashSessionId: undefined } : {}),
+      id: expenseForm.id || crypto.randomUUID(),
+      ...(expenseForm.id ? updatedAuditStamp() : {}),
+      ...currentAuditStamp(),
+    });
+    savingExpenseRef.current = true;
+    try {
+      if (db && authUser && authUser.uid !== LOCAL_OPERATOR_ID) {
+        if (!activeShopOwnerUid) throw new Error('Open the shop again, then record the expense.');
+        await writeRecords(db, activeShopOwnerUid, 'expenses', [record]);
+      }
+    } catch (error) {
+      showNotification(accessDenied(error)
+        ? 'The shop blocked this expense, so it was not recorded.'
+        : (error instanceof Error ? error.message : 'The expense was not saved.'), 'error');
+      return;
+    } finally {
+      savingExpenseRef.current = false;
     }
+    setExpenses((prev) => (expenseForm.id ? prev.map((ex) => (ex.id === expenseForm.id ? record : ex)) : [...prev, record]));
+    setExpensesPage(1);
+    setStatus(expenseForm.id ? 'Expense updated.' : 'Expense recorded.');
+    logActivity(expenseForm.id ? 'edit_expense' : 'add_expense', `${expenseForm.id ? 'Updated' : 'Added'} expense "${record.title}"`);
     setExpenseForm({ id: '', title: '', branchId: '', amount: 0, expenseGroupId: '', accountId: defaultAccount?.id || '' });
     setShowExpenseModal(false);
   };
@@ -3194,7 +3256,9 @@ export default function Page() {
   };
 
   const filteredExpenses = useMemo(() => {
-    const scoped = rowsForBranch(expenses, staffBranchId, branches.length);
+    const scoped = [...rowsForBranch(expenses, staffBranchId, branches.length)].sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+    );
     if (expensesViewMode === 'all') return scoped;
     return scoped.filter((expense) => {
       const expenseDate = new Date(expense.createdAt);
