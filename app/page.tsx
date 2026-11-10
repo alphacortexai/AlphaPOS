@@ -10,7 +10,8 @@ import RegisterDesk from '../components/pos/RegisterDesk';
 import ReceiptDialog from '../components/pos/ReceiptDialog';
 import ReturnDialog, { type ReturnableLine } from '../components/pos/ReturnDialog';
 import { ACTIVITY_KEEP, readLocalActivity, trimActivity, writeLocalActivity } from '../lib/pos/activityLog';
-import { computeAccountBalances, DEFAULT_REORDER_POINT, mergeHeardExpenses, normalizeCustomerPayments, normalizeSuppliers, paymentMatchesCustomer, postedExpense, recordedByEmail, sessionCashAdjustments, staffAttribution, staffBookTotals, stockIsLow, stockWorth, withTenderAccounts, type CustomerPaymentRecord, type SupplierRecord } from '../lib/pos/books';
+import { computeAccountBalances, DEFAULT_REORDER_POINT, mergeHeardExpenses, normalizeCustomerPayments, normalizeSuppliers, paymentMatchesCustomer, postedExpense, recordedByEmail, sessionCashAdjustments, staffAttribution, staffBookTotals, stockIsLow, stockWorth, TENDER_ACCOUNT_NAME, withTenderAccounts, type CustomerPaymentRecord, type SupplierRecord } from '../lib/pos/books';
+import { planHistoricalEntry } from '../lib/pos/historicalEntry';
 import { businessDayKey, businessDayRange, businessDaysThrough, formatDayKey, recentBusinessDays, reportPeriodRange, shiftDayKey, summarizeBusinessDays, summarizePeriod, type ShopClock } from '../lib/pos/reports';
 import { parseOrganiseAssignments, planCategoryUpdates, ORGANISE_PRODUCT_CAP } from '../lib/catalog/organise';
 import { parseCatalogReading, type CatalogMode } from '../lib/catalog/reading';
@@ -106,11 +107,13 @@ type Sale = {
   voidedAt?: string;
   voidReason?: string;
   voidedByEmail?: string;
+  enteredAt?: string;
+  backdateReason?: string;
   moneyStatus?: 'unconfirmed' | 'confirmed';
   cashierEmail?: string;
 } & AuditStamp;
 type ExpenseGroup = { id: string; name: string } & AuditStamp;
-type Expense = { id: string; title: string; branchId: string; amount: number; expenseGroupId?: string; accountId?: string; cashSessionId?: string } & AuditStamp;
+type Expense = { id: string; title: string; branchId: string; amount: number; expenseGroupId?: string; accountId?: string; cashSessionId?: string; enteredAt?: string; backdateReason?: string; receiptImage?: string } & AuditStamp;
 type Supplier = SupplierRecord;
 type CustomerPayment = CustomerPaymentRecord;
 type StaffUser = { id: string; name: string; email: string; role: Role; branchId: string; permissions?: StaffPermission[]; pinHash?: string } & AuditStamp;
@@ -201,6 +204,18 @@ const periodStart = (period: 'day' | 'week' | 'month' | 'year', date: Date = new
   if (period === 'month') return new Date(d.getFullYear(), d.getMonth(), 1);
   return new Date(d.getFullYear(), 0, 1);
 };
+
+const blankExpenseForm = (branchId = '', accountId = '') => ({
+  id: '',
+  title: '',
+  branchId,
+  amount: 0,
+  expenseGroupId: '',
+  accountId,
+  occurredOn: '',
+  backdateReason: '',
+  receiptImage: '',
+});
 
 const blankProductForm = (branchId = '') => ({
   id: '',
@@ -400,7 +415,9 @@ export default function Page() {
   const [checkoutDetails, setCheckoutDetails] = useState(emptyCheckout);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [selectedBranchForSale, setSelectedBranchForSale] = useState('');
-  const [expenseForm, setExpenseForm] = useState({ id: '', title: '', branchId: '', amount: 0, expenseGroupId: '', accountId: '' });
+  const [expenseForm, setExpenseForm] = useState(blankExpenseForm());
+  const [missedSaleOpen, setMissedSaleOpen] = useState(false);
+  const [missedSale, setMissedSale] = useState({ day: '', reason: '', method: 'cash' as Exclude<PaymentMethod, 'on_account'>, reference: '', lines: [{ productId: '', qty: '1' }] });
   const [accountForm, setAccountForm] = useState({ name: '', openingBalance: 0 });
   const [saleAccountId, setSaleAccountId] = useState('');
   const [accountTopUpForm, setAccountTopUpForm] = useState({ accountId: '', amount: 0 });
@@ -412,7 +429,7 @@ export default function Page() {
   const [userForm, setUserForm] = useState({ id: '', name: '', email: '', role: 'cashier' as Role, branchId: '', pin: '', permissions: permissionsFor('cashier') });
   const [customerDraft, setCustomerDraft] = useState({ name: '', phone: '', creditLimit: '', priceList: 'retail' as 'retail' | 'wholesale', notes: '' });
   const [shopNameForm, setShopNameForm] = useState('');
-  const [settingsTab, setSettingsTab] = useState<'shop' | 'branches' | 'time' | 'backup' | 'tax' | 'receipt' | 'register' | 'email' | 'assistant'>('shop');
+  const [settingsTab, setSettingsTab] = useState<'shop' | 'branches' | 'time' | 'backup' | 'stock' | 'tax' | 'receipt' | 'register' | 'email' | 'assistant'>('shop');
   const [salesEmailSettings, setSalesEmailSettings] = useState<SalesEmailSettings>(defaultSalesEmailSettings);
   const [signInNotice, setSignInNotice] = useState('');
   const [signingIn, setSigningIn] = useState(false);
@@ -1441,7 +1458,7 @@ export default function Page() {
     setCheckoutDetails(emptyCheckout);
     setCart([]);
     setSaleAccountId('');
-    setExpenseForm({ id: '', title: '', branchId: '', amount: 0, expenseGroupId: '', accountId: '' });
+    setExpenseForm(blankExpenseForm());
     setUserForm({ id: '', name: '', email: '', role: 'cashier', branchId: '', pin: '', permissions: permissionsFor('cashier') });
   };
 
@@ -2233,17 +2250,36 @@ export default function Page() {
       return;
     }
     const existing = expenseForm.id ? expenses.find((expense) => expense.id === expenseForm.id) : undefined;
-    const cashSessionId = !expenseForm.id && selectedAccountId === defaultAccount?.id && openCashSession ? openCashSession.id : undefined;
+    const todayKey = businessDayKey(new Date(), shopClock);
+    const occurredOn = expenseForm.id ? businessDayKey(new Date(existing?.createdAt || Date.now()), shopClock) : (expenseForm.occurredOn || todayKey);
+    const canBackdate = isShopOwner || allow('reports');
+    if (occurredOn !== todayKey && !canBackdate) {
+      showNotification('Only the owner or a manager can record an expense for an earlier day.', 'error');
+      return;
+    }
+    const when = planHistoricalEntry({ dayKey: occurredOn, now: new Date(), clock: shopClock, reason: expenseForm.backdateReason });
+    if (!when.ok) {
+      showNotification(when.error, 'error');
+      return;
+    }
+    const cashSessionId = !expenseForm.id && !when.backdated && selectedAccountId === defaultAccount?.id && openCashSession ? openCashSession.id : undefined;
     const record: Expense = postedExpense(existing, {
-      ...expenseForm,
+      id: expenseForm.id || crypto.randomUUID(),
       title: expenseForm.title.trim(),
+      branchId: expenseForm.branchId,
+      amount: expenseForm.amount,
+      expenseGroupId: expenseForm.expenseGroupId,
       accountId: selectedAccountId,
       ...(cashSessionId ? { cashSessionId } : {}),
       ...(expenseForm.id && selectedAccountId !== defaultAccount?.id ? { cashSessionId: undefined } : {}),
-      id: expenseForm.id || crypto.randomUUID(),
+      ...(expenseForm.receiptImage ? { receiptImage: expenseForm.receiptImage } : {}),
       ...(expenseForm.id ? updatedAuditStamp() : {}),
       ...currentAuditStamp(),
-      ...(!expenseForm.id ? { createdByEmail: actorEmail } : {}),
+      ...(!expenseForm.id ? {
+        createdByEmail: actorEmail,
+        createdAt: when.createdAt,
+        ...(when.backdated ? { enteredAt: when.enteredAt, backdateReason: when.backdateReason } : {}),
+      } : {}),
     });
     savingExpenseRef.current = true;
     try {
@@ -2261,9 +2297,9 @@ export default function Page() {
     }
     setExpenses((prev) => (expenseForm.id ? prev.map((ex) => (ex.id === expenseForm.id ? record : ex)) : [...prev, record]));
     setExpensesPage(1);
-    setStatus(expenseForm.id ? 'Expense updated.' : 'Expense recorded.');
-    logActivity(expenseForm.id ? 'edit_expense' : 'add_expense', `${expenseForm.id ? 'Updated' : 'Added'} expense "${record.title}"`);
-    setExpenseForm({ id: '', title: '', branchId: '', amount: 0, expenseGroupId: '', accountId: defaultAccount?.id || '' });
+    setStatus(expenseForm.id ? 'Expense updated.' : when.backdated ? `Expense recorded for ${occurredOn}.` : 'Expense recorded.');
+    logActivity(expenseForm.id ? 'edit_expense' : 'add_expense', when.backdated ? `Recorded expense "${record.title}" for ${occurredOn}. ${when.backdateReason}` : `${expenseForm.id ? 'Updated' : 'Added'} expense "${record.title}"`);
+    setExpenseForm(blankExpenseForm(expenseForm.branchId, defaultAccount?.id || ''));
     setShowExpenseModal(false);
   };
 
@@ -3348,6 +3384,8 @@ export default function Page() {
       voided: lines.some((line) => line.voidedAt),
       seller: lines.map((line) => recordedByEmail(line)).find(Boolean) || '',
       voidedBy: lines.map((line) => line.voidedByEmail?.trim() || '').find(Boolean) || '',
+      enteredAt: lines.find((line) => line.enteredAt)?.enteredAt,
+      backdateReason: lines.find((line) => line.backdateReason)?.backdateReason,
     })).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }, [filteredSales]);
   const salesHistoryTotalPages = Math.max(1, Math.ceil(groupedSales.length / salesHistoryPageSize));
@@ -3471,12 +3509,117 @@ export default function Page() {
     showNotification('Receipt voided. It stays in the book, and the stock was put back.', 'success');
   };
 
+  const saveMissedSale = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!canManageSalesAndExpenses) {
+      showNotification('Only the owner or a manager can record a missed sale.', 'error');
+      return;
+    }
+    const when = planHistoricalEntry({ dayKey: missedSale.day, now: new Date(), clock: shopClock, reason: missedSale.reason });
+    if (!when.ok) {
+      showNotification(when.error, 'error');
+      return;
+    }
+    if (!when.backdated || !when.backdateReason) {
+      showNotification('Use the register for a sale today. This form is for a sale that was left out.', 'error');
+      return;
+    }
+    const chosenMap = new Map<string, { product: Product; qty: number }>();
+    missedSale.lines.forEach((line) => {
+      const product = products.find((item) => item.id === line.productId);
+      const qty = Number(line.qty);
+      if (!product || !Number.isFinite(qty) || qty <= 0) return;
+      const current = chosenMap.get(product.id);
+      chosenMap.set(product.id, { product, qty: (current?.qty || 0) + qty });
+    });
+    const chosen = [...chosenMap.values()];
+    if (chosen.length === 0) {
+      showNotification('Choose a product and a quantity.', 'error');
+      return;
+    }
+    const short = chosen.find((line) => line.product.stock < line.qty);
+    if (short) {
+      showNotification(`${short.product.name} only has ${short.product.stock} on the shelf now.`, 'error');
+      return;
+    }
+    const quote = settleCart(chosen.map((line) => ({
+      key: line.product.id,
+      unitPrice: line.product.salePrice,
+      qty: line.qty,
+      effectiveUnitPrice: line.product.salePrice,
+      unitCost: line.product.purchasePrice,
+    })), { mode: 'none', value: 0 }, taxSettings);
+    const tenders: Tender[] = [{ method: missedSale.method, amount: quote.total, ...(missedSale.reference.trim() ? { reference: missedSale.reference.trim() } : {}) }];
+    if (tendersNeedReference(tenders)) {
+      showNotification('Enter the mobile money or bank transaction code.', 'error');
+      return;
+    }
+    const accountName = TENDER_ACCOUNT_NAME[missedSale.method];
+    const account = accounts.find((item) => item.name.trim().toLowerCase() === accountName.toLowerCase()) || defaultAccount;
+    if (!account) {
+      showNotification('Add an account before recording the sale.', 'error');
+      return;
+    }
+    const transactionId = crypto.randomUUID();
+    const receiptNumber = nextDocumentNumber(sales, receiptPrefix(new Date(when.createdAt), 'sale'));
+    const needsMoneyConfirm = missedSale.method === 'mobile_money' || missedSale.method === 'bank_transfer';
+    const newSales: Sale[] = quote.lines.flatMap((line) => {
+      const item = chosen.find((entry) => entry.product.id === line.key);
+      if (!item) return [];
+      return [{
+        id: crypto.randomUUID(),
+        type: 'product' as const,
+        itemName: item.product.name,
+        branchId: item.product.branchId,
+        productId: item.product.id,
+        qty: line.qty,
+        amount: line.amount,
+        cost: line.cost,
+        taxAmount: line.taxAmount,
+        discountAmount: line.discountAmount,
+        accountId: account.id,
+        transactionId,
+        receiptNumber,
+        saleKind: 'sale' as const,
+        paymentMethod: missedSale.method,
+        ...(missedSale.reference.trim() ? { paymentReference: missedSale.reference.trim() } : {}),
+        ...(needsMoneyConfirm ? { moneyStatus: 'unconfirmed' as const } : {}),
+        tenders,
+        cashierEmail: actorEmail,
+        createdAt: when.createdAt,
+        enteredAt: when.enteredAt,
+        backdateReason: when.backdateReason,
+        createdByUid: authUser?.uid || 'unknown',
+        createdByEmail: actorEmail,
+      }];
+    });
+    try {
+      if (db && authUser && authUser.uid !== LOCAL_OPERATOR_ID && activeShopOwnerUid) {
+        await commitStockAndRecords(db, activeShopOwnerUid, 'sales', newSales, newSales.flatMap((line) => line.productId ? [{ productId: line.productId, delta: -line.qty }] : []), stockFallback(products));
+      }
+    } catch (error) {
+      showNotification(error instanceof Error ? error.message : 'The missed sale was not saved.', 'error');
+      return;
+    }
+    setSales((prev) => [...newSales, ...prev]);
+    setProducts((prev) => prev.map((product) => {
+      const sold = chosen.find((line) => line.product.id === product.id);
+      return sold ? { ...product, stock: Math.round((product.stock - sold.qty) * 1000) / 1000 } : product;
+    }));
+    chosen.forEach((line) => logStockMovement(line.product, -line.qty, 'sale', `Missed sale ${receiptNumber}`));
+    logActivity('missed_sale', `Recorded ${receiptNumber} for ${missedSale.day}. ${when.backdateReason}`);
+    setMissedSaleOpen(false);
+    setSalesHistoryViewMode('day');
+    setSalesDateFilter(missedSale.day);
+    showNotification(`${receiptNumber} recorded for ${missedSale.day}.`, 'success');
+  };
+
   const editExpense = (expense: Expense) => {
     if (!canEditExpenses) {
       setStatus('The owner has not turned on expenses for you.');
       return;
     }
-    setExpenseForm({ id: expense.id, title: expense.title, branchId: expense.branchId, amount: expense.amount, expenseGroupId: expense.expenseGroupId || '', accountId: expense.accountId || defaultAccount?.id || '' });
+    setExpenseForm({ ...blankExpenseForm(expense.branchId, expense.accountId || defaultAccount?.id || ''), id: expense.id, title: expense.title, amount: expense.amount, expenseGroupId: expense.expenseGroupId || '', occurredOn: businessDayKey(new Date(expense.createdAt), shopClock), backdateReason: expense.backdateReason || '', receiptImage: expense.receiptImage || '' });
     setShowExpenseModal(true);
   };
 
@@ -3505,7 +3648,7 @@ export default function Page() {
     setRemovedExpenseIds(removedIds);
     setExpenses((prev) => prev.filter((item) => item.id !== id));
     if (expenseForm.id === id) {
-      setExpenseForm({ id: '', title: '', branchId: '', amount: 0, expenseGroupId: '', accountId: '' });
+      setExpenseForm(blankExpenseForm());
       setShowExpenseModal(false);
     }
     logActivity('delete_expense', `Deleted expense "${expense.title}"`);
@@ -4233,26 +4376,15 @@ export default function Page() {
                 <button type="button" className={productPane === 'movements' ? 'active' : ''} onClick={() => setProductPane('movements')}>Movements</button>
                 <button type="button" className={productPane === 'count' ? 'active' : ''} onClick={() => setProductPane('count')}>Count</button>
               </div>
-              {productPane === 'shelf' && (canEditCatalog || isShopOwner) && (
+              {productPane === 'shelf' && canEditCatalog && (
                 <div className="page-tools-actions">
-                  {canEditCatalog && (
-                    <>
-                      <button className="edit-btn" disabled={products.length === 0} onClick={() => {
-                        setStockAdjustmentForm({ ...emptyStockForm(), lines: [{ productId: '', quantity: '', unitCost: '' }] });
-                        setShowStockAdjustmentModal(true);
-                      }}>Receive stock</button>
-                      <button className="primary" onClick={() => openProductForm(blankProductForm(branches[0]?.id || ''))}>
-                        Add product
-                      </button>
-                    </>
-                  )}
-                  {isShopOwner && (
-                    <>
-                      <button type="button" className="edit-btn" disabled={products.length === 0} onClick={downloadStockFile}>Download stock</button>
-                      <button type="button" className="edit-btn" onClick={() => stockFileInputRef.current?.click()}>Upload stock</button>
-                      <input ref={stockFileInputRef} type="file" accept=".csv,text/csv,text/plain" onChange={uploadStockFile} style={{ display: 'none' }} />
-                    </>
-                  )}
+                  <button className="edit-btn" disabled={products.length === 0} onClick={() => {
+                    setStockAdjustmentForm({ ...emptyStockForm(), lines: [{ productId: '', quantity: '', unitCost: '' }] });
+                    setShowStockAdjustmentModal(true);
+                  }}>Receive stock</button>
+                  <button className="primary" onClick={() => openProductForm(blankProductForm(branches[0]?.id || ''))}>
+                    Add product
+                  </button>
                 </div>
               )}
             </div>
@@ -4714,8 +4846,9 @@ export default function Page() {
 
         {view === 'sales_history' && allow('salesHistory') && (
           <section>
-            <div className="page-header">
+            <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
               <h2>Sales History</h2>
+              {canManageSalesAndExpenses && <button type="button" className="edit-btn" onClick={() => { setMissedSale({ day: shiftDayKey(businessDayKey(new Date(), shopClock), -1), reason: '', method: 'cash', reference: '', lines: [{ productId: '', qty: '1' }] }); setMissedSaleOpen(true); }}>Add a missed sale</button>}
             </div>
             <div>
               <div className="filter-bar sales-history-filter-bar">
@@ -4781,7 +4914,10 @@ export default function Page() {
                     {groupedSales.length > 0 ? (
                       paginatedSales.map((saleGroup) => (
                         <tr key={saleGroup.id}>
-                          <td data-label="Date and time">{new Date(saleGroup.createdAt).toLocaleString()}</td>
+                          <td data-label="Date and time">
+                            <div>{new Date(saleGroup.createdAt).toLocaleString()}</div>
+                            {saleGroup.backdateReason && <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>Entered {saleGroup.enteredAt ? new Date(saleGroup.enteredAt).toLocaleString() : 'later'} · {saleGroup.backdateReason}</div>}
+                          </td>
                           <td data-label="Receipt" style={{ fontWeight: 700 }}>{saleGroup.receiptNumber || `#${saleGroup.id.slice(0, 8)}`}</td>
                           <td data-label="Staff">
                             {(() => {
@@ -4858,7 +4994,7 @@ export default function Page() {
                 <button type="button" className={expensePane === 'groups' ? 'active' : ''} onClick={() => setExpensePane('groups')}>Groups</button>
               </div>
               {expensePane === 'list' && (
-                <button className="primary" onClick={() => { setExpenseForm({ id: '', title: '', branchId: branches[0]?.id || '', amount: 0, expenseGroupId: '', accountId: defaultAccount?.id || '' }); setShowExpenseModal(true); }}>
+                <button className="primary" onClick={() => { setExpenseForm({ ...blankExpenseForm(branches[0]?.id || '', defaultAccount?.id || ''), occurredOn: businessDayKey(new Date(), shopClock) }); setShowExpenseModal(true); }}>
                   Add expense
                 </button>
               )}
@@ -4960,7 +5096,11 @@ export default function Page() {
                   {filteredExpenses.length > 0 ? (
                     expensesPagination.rows.map((e) => (
                       <tr key={e.id}>
-                        <td data-label="Date and time">{new Date(e.createdAt).toLocaleString()}</td>
+                        <td data-label="Date and time">
+                          <div>{new Date(e.createdAt).toLocaleString()}</div>
+                          {e.backdateReason && <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>Entered {e.enteredAt ? new Date(e.enteredAt).toLocaleString() : 'later'} · {e.backdateReason}</div>}
+                          {e.receiptImage && <a href={e.receiptImage} target="_blank" rel="noreferrer">Receipt</a>}
+                        </td>
                         <td data-label="Expense" style={{ fontWeight: 600 }}>{e.title}</td>
                         <td data-label="Entered by">
                           {e.id.startsWith('auto-shared-cost::') ? (
@@ -5395,6 +5535,7 @@ export default function Page() {
               <button type="button" className={settingsTab === 'email' ? 'active' : ''} onClick={() => setSettingsTab('email')}>Sales email</button>
               <p>Records</p>
               <button type="button" className={settingsTab === 'backup' ? 'active' : ''} onClick={() => setSettingsTab('backup')}>Backup</button>
+              <button type="button" className={settingsTab === 'stock' ? 'active' : ''} onClick={() => setSettingsTab('stock')}>Stock file</button>
             </nav>
             <div className="settings-panel">
 
@@ -5626,14 +5767,11 @@ export default function Page() {
                     <button type="button" className="primary" onClick={downloadShopBackup}>Download Full Backup</button>
                     <button type="button" className="edit-btn" onClick={() => backupFileInputRef.current?.click()}>Upload & Restore Backup</button>
                     <input ref={backupFileInputRef} type="file" accept="application/json,.json" onChange={restoreShopBackup} style={{ display: 'none' }} />
-                    <button type="button" className="edit-btn" disabled={products.length === 0} onClick={downloadStockFile}>Download stock</button>
-                    <button type="button" className="edit-btn" onClick={() => stockFileInputRef.current?.click()}>Upload stock</button>
-                    <input ref={stockFileInputRef} type="file" accept=".csv,text/csv,text/plain" onChange={uploadStockFile} style={{ display: 'none' }} />
                   </div>
                 ) : (
                   <p style={{ marginTop: '1rem', color: 'var(--danger)', fontWeight: 600 }}>Only the shop owner can export or restore a full shop backup.</p>
                 )}
-                <p className="muted-copy" style={{ marginTop: '1rem' }}>Download stock is a spreadsheet of product names, quantities, prices, branches, and codes. Upload that same file to update quantities and add products. Photos stay on the products already on the shelf. Products missing from the file are not removed.</p>
+                <p className="muted-copy" style={{ marginTop: '1rem' }}>A spreadsheet of the shelf, for moving stock to another system, is under Stock file.</p>
                 <div style={{ marginTop: '1.5rem', padding: '1rem', border: '1px solid var(--border)', borderRadius: '0.75rem', background: '#f8fafc' }}>
                   <strong>Restore checklist</strong>
                   <ol style={{ color: 'var(--text-muted)', marginBottom: 0 }}>
@@ -5642,6 +5780,22 @@ export default function Page() {
                     <li>Confirm products, sales, expenses, accounts, staff, and branches are visible again.</li>
                   </ol>
                 </div>
+              </div>
+            )}
+            {settingsTab === 'stock' && (
+              <div className="card">
+                <h3>Stock file</h3>
+                <p className="muted-copy">Download every product as a spreadsheet: name, quantity, prices, branch, SKU, barcode, category, and expiry. Another shop system can open it. Upload the same kind of file to update quantities and add products that are not on the shelf. Photos stay where they are. A product missing from the file is not removed.</p>
+                <p className="muted-copy">{products.length} product{products.length === 1 ? '' : 's'} on the shelf.</p>
+                {isShopOwner ? (
+                  <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginTop: '1.5rem' }}>
+                    <button type="button" className="primary" disabled={products.length === 0} onClick={downloadStockFile}>Download stock</button>
+                    <button type="button" className="edit-btn" onClick={() => stockFileInputRef.current?.click()}>Upload stock</button>
+                    <input ref={stockFileInputRef} type="file" accept=".csv,text/csv,text/plain" onChange={uploadStockFile} style={{ display: 'none' }} />
+                  </div>
+                ) : (
+                  <p style={{ marginTop: '1rem', color: 'var(--danger)', fontWeight: 600 }}>Only the shop owner can download or upload the stock file.</p>
+                )}
               </div>
             )}
             </div>
@@ -6222,6 +6376,68 @@ export default function Page() {
           </div>
         )}
 
+        {missedSaleOpen && (
+          <div className="modal-overlay">
+            <div className="modal-content">
+              <div className="modal-header">
+                <h3>Missed sale</h3>
+                <button type="button" className="modal-close" onClick={() => setMissedSaleOpen(false)}>&times;</button>
+              </div>
+              <form onSubmit={(event) => { void saveMissedSale(event); }}>
+                <div className="modal-body">
+                  <p className="muted-copy">The sale is counted on the day it happened. The books also keep the day it was typed in, who typed it, and why. It does not change today’s till count. If it was wrong, void the receipt. It is not deleted.</p>
+                  <div className="form">
+                    <label className="field">
+                      <span>Day it happened</span>
+                      <input type="date" value={missedSale.day} max={shiftDayKey(businessDayKey(new Date(), shopClock), -1)} min={shiftDayKey(businessDayKey(new Date(), shopClock), -91)} onChange={(event) => setMissedSale((prev) => ({ ...prev, day: event.target.value }))} required />
+                    </label>
+                    <label className="field">
+                      <span>Payment</span>
+                      <select value={missedSale.method} onChange={(event) => setMissedSale((prev) => ({ ...prev, method: event.target.value as Exclude<PaymentMethod, 'on_account'> }))}>
+                        <option value="cash">Cash</option>
+                        <option value="mobile_money">Mobile money</option>
+                        <option value="card_terminal">Card</option>
+                        <option value="bank_transfer">Bank</option>
+                        <option value="other">Other</option>
+                      </select>
+                    </label>
+                    {missedSale.method !== 'cash' && missedSale.method !== 'other' && (
+                      <label className="field form-span">
+                        <span>Transaction code</span>
+                        <input value={missedSale.reference} onChange={(event) => setMissedSale((prev) => ({ ...prev, reference: event.target.value }))} required />
+                      </label>
+                    )}
+                    {missedSale.lines.map((line, index) => (
+                      <div key={`${index}-${line.productId}`} className="form-span" style={{ display: 'grid', gridTemplateColumns: '1fr 120px', gap: '0.75rem' }}>
+                        <label className="field">
+                          <span>Product</span>
+                          <select value={line.productId} onChange={(event) => setMissedSale((prev) => ({ ...prev, lines: prev.lines.map((item, itemIndex) => itemIndex === index ? { ...item, productId: event.target.value } : item) }))} required>
+                            <option value="">Select product</option>
+                            {products.map((product) => <option key={product.id} value={product.id}>{product.name} ({product.stock} on shelf)</option>)}
+                          </select>
+                        </label>
+                        <label className="field">
+                          <span>Quantity</span>
+                          <input type="number" min="0.001" step="0.001" value={line.qty} onChange={(event) => setMissedSale((prev) => ({ ...prev, lines: prev.lines.map((item, itemIndex) => itemIndex === index ? { ...item, qty: event.target.value } : item) }))} required />
+                        </label>
+                      </div>
+                    ))}
+                    <button type="button" className="edit-btn form-span" onClick={() => setMissedSale((prev) => ({ ...prev, lines: [...prev.lines, { productId: '', qty: '1' }] }))}>Add another product</button>
+                    <label className="field form-span">
+                      <span>Why it was not entered that day</span>
+                      <input value={missedSale.reason} onChange={(event) => setMissedSale((prev) => ({ ...prev, reason: event.target.value }))} maxLength={180} placeholder="Sale omitted during yesterday's operations" required />
+                    </label>
+                  </div>
+                </div>
+                <div className="modal-footer">
+                  <button type="button" className="edit-btn" onClick={() => setMissedSaleOpen(false)}>Cancel</button>
+                  <button type="submit" className="primary">Save missed sale</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
         {/* Expense Modal */}
         {showExpenseModal && (
           <div className="modal-overlay">
@@ -6262,6 +6478,33 @@ export default function Page() {
                       <span>Amount (UGX)</span>
                       <input type="number" value={expenseForm.amount} onChange={(e) => setExpenseForm({ ...expenseForm, amount: Number(e.target.value) })} required />
                     </label>
+                    {!expenseForm.id && (isShopOwner || allow('reports')) && (
+                      <label className="field">
+                        <span>Day it happened</span>
+                        <input type="date" value={expenseForm.occurredOn} max={businessDayKey(new Date(), shopClock)} min={shiftDayKey(businessDayKey(new Date(), shopClock), -91)} onChange={(e) => setExpenseForm({ ...expenseForm, occurredOn: e.target.value })} required />
+                      </label>
+                    )}
+                    {!expenseForm.id && expenseForm.occurredOn && expenseForm.occurredOn !== businessDayKey(new Date(), shopClock) && (
+                      <label className="field form-span">
+                        <span>Why it was not entered that day</span>
+                        <input value={expenseForm.backdateReason} onChange={(e) => setExpenseForm({ ...expenseForm, backdateReason: e.target.value })} maxLength={180} placeholder="Paid for transport yesterday and it was not entered" required />
+                      </label>
+                    )}
+                    {!expenseForm.id && (
+                      <label className="field form-span">
+                        <span>Receipt photo, if you have one</span>
+                        <input type="file" accept="image/*" onChange={(event) => {
+                          const file = event.target.files?.[0];
+                          event.target.value = '';
+                          if (!file) return;
+                          void compressProductPhoto(file).then((image) => setExpenseForm((prev) => ({ ...prev, receiptImage: image }))).catch((error: unknown) => {
+                            showNotification(error instanceof Error ? error.message : 'That receipt photo could not be kept.', 'error');
+                          });
+                        }} />
+                        {expenseForm.receiptImage && <span className="muted-copy">Receipt photo attached.</span>}
+                      </label>
+                    )}
+                    {expenseForm.id && expenseForm.backdateReason && <p className="muted-copy form-span">This expense stays on {expenseForm.occurredOn}. It was entered later: {expenseForm.backdateReason}</p>}
                     {!expenseForm.id && openCashSession && (expenseForm.accountId || defaultAccount?.id) === defaultAccount?.id && (
                       <p className="muted-copy form-span">Cash taken from the open drawer is deducted from the expected till.</p>
                     )}
