@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { billForReceipt, creditAllows, dayClose, expenseWasRemoved, finiteAmount, inviteEmails, keepEditedRows, ledgerReadsForRole, mergeEditedRows, needsReorder, noteRemovedExpense, overlayStock, preferShopCatalog, productForReturn, rankProducts, shopCatalog, shopDocumentBody, supplierOwed, tenderTotals, tendersNeedReference } from './shopMath';
+import { billForReceipt, creditAllows, dayClose, expenseWasRemoved, finiteAmount, inviteEmails, keepEditedRows, ledgerReadsForRole, mergeEditedRows, needsReorder, noteRemovedExpense, overlayStock, ownerShopWrite, preferShopCatalog, productForReturn, rankProducts, shopCatalog, shopDocumentBody, shopSaveFingerprint, supplierOwed, tenderTotals, tendersNeedReference } from './shopMath';
 
 test('invited emails are saved on the shop so a cashier can read the shelf', () => {
   assert.deepEqual(inviteEmails([
@@ -104,6 +104,25 @@ test('the shop document does not keep the receipt list', () => {
   assert.equal('sales' in body, false);
   assert.equal(body.ledgerSplit, true);
   assert.equal(body.shopName, 'Corner');
+});
+
+test('an expense does not make the owner rewrite the shop document', () => {
+  const shelf = { shopName: 'C & E', products: [{ id: 'soap', salePrice: 1000 }] };
+  const loaded = shopSaveFingerprint('owner', shopDocumentBody({ ...shelf, expenses: [], sales: [] }));
+  const withExpense = shopSaveFingerprint('owner', shopDocumentBody({
+    ...shelf,
+    expenses: [{ id: 'rent', amount: 50000 }],
+    sales: [{ id: 'sale-1' }],
+    customerPayments: [{ id: 'pay-1' }],
+  }));
+  assert.equal(loaded, withExpense);
+  const edited = shopSaveFingerprint('owner', shopDocumentBody({ ...shelf, products: [{ id: 'soap', salePrice: 1200 }] }));
+  assert.notEqual(loaded, edited);
+  assert.equal(ownerShopWrite({ savedKey: '', pausedKey: '', nextKey: loaded, loadedRevision: 523 }), 'baseline');
+  assert.equal(ownerShopWrite({ savedKey: loaded, pausedKey: '', nextKey: withExpense, loadedRevision: 523 }), 'skip');
+  assert.equal(ownerShopWrite({ savedKey: loaded, pausedKey: '', nextKey: edited, loadedRevision: 523 }), 'write');
+  assert.equal(ownerShopWrite({ savedKey: '', pausedKey: '', nextKey: loaded, loadedRevision: 0 }), 'write');
+  assert.equal(ownerShopWrite({ savedKey: loaded, pausedKey: edited, nextKey: edited, loadedRevision: 523 }), 'skip');
 });
 
 test('close of day splits tenders and lists unconfirmed mobile money', () => {
