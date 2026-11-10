@@ -19,6 +19,7 @@ import { LOCAL_OPERATOR_ID, readLocalShop, writeLocalShop } from '../lib/pos/loc
 import { nextSku, reservedProductCodes } from '../lib/pos/sku';
 import { attachProductImages, compressProductPhoto, imageMapChars, isProductImage, PRODUCT_IMAGE_DOC_MAX_CHARS, readLocalProductImages, splitProductImages, writeLocalProductImages } from '../lib/pos/productImage';
 import { commitStockAndRecords, deleteRecords, ledgerCollectionPath, migrateShopLedger, readNamedRecords, readStockMap, removeEmbeddedRows, setStockQty, writeRecords } from '../lib/pos/ledger';
+import { applyStockFile, parseStockFile, stockFileCsv } from '../lib/pos/stockFile';
 import { beginSalesEmailSend, buildSalesDigest, defaultSalesEmailSettings, finishSalesEmailSend, normalizeSalesEmailSettings, previousSalesPeriod, type SalesDigest, type SalesEmailSettings } from '../lib/pos/salesEmail';
 import { billForReceipt, countVariance, creditAllows, dayClose, discountNeedsManager, expenseWasRemoved, finiteAmount, hashPin, inviteEmails, keepEditedRows, mergeEditedRows, needsReorder, noteRemovedExpense, overlayStock, ownerShopWrite, pinIsValid, preferShopCatalog, productForReturn, rankProducts, sellingPrice, shopCatalog, shopDocumentBody, shopSaveFingerprint, stockFallback, supplierOwed, tenderTotals, tendersNeedReference, type SupplierBill, type SupplierPayment } from '../lib/pos/shopMath';
 import { accessDenied, chooseShopId, ownShopIsReal, saveWasInterrupted, shopsForSignedInUser } from '../lib/pos/shopAccess';
@@ -328,6 +329,7 @@ export default function Page() {
   const [shopEpoch, setShopEpoch] = useState(0);
   const notificationTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const backupFileInputRef = useRef<HTMLInputElement | null>(null);
+  const stockFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [branches, setBranches] = useState<Branch[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -3630,6 +3632,85 @@ export default function Page() {
     setStatus('Full shop backup exported successfully.');
   };
 
+  const downloadStockFile = () => {
+    if (!activeShopOwnerUid) {
+      showNotification('Open a shop before downloading stock.', 'error');
+      return;
+    }
+    if (products.length === 0) {
+      showNotification('There are no products to download.', 'error');
+      return;
+    }
+    const branchName = new Map(branches.map((branch) => [branch.id, branch.name]));
+    const csv = stockFileCsv(products.map((product) => ({
+      id: product.id,
+      name: product.name,
+      sku: product.sku || '',
+      barcode: product.barcode || '',
+      branch: branchName.get(product.branchId) || '',
+      category: product.category || '',
+      variant: product.variant || '',
+      unit: product.unit || 'piece',
+      stock: product.stock,
+      cost: product.purchasePrice,
+      salePrice: product.salePrice,
+      ...(typeof product.wholesalePrice === 'number' ? { wholesalePrice: product.wholesalePrice } : {}),
+      reorderPoint: product.reorderPoint ?? DEFAULT_REORDER_POINT,
+      expiry: product.expiryDate || '',
+    })));
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    const safeShopName = (currentShop?.shopName || 'shop').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'shop';
+    link.href = url;
+    link.download = `alphapos-${safeShopName}-stock-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    logActivity('stock_export', `Downloaded stock for ${products.length} product${products.length === 1 ? '' : 's'}.`);
+    showNotification('Stock file downloaded. It opens in a spreadsheet.', 'success');
+  };
+
+  const uploadStockFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file || !isShopOwner) return;
+    let text = '';
+    try {
+      text = await file.text();
+    } catch {
+      showNotification('That file could not be read.', 'error');
+      return;
+    }
+    const parsed = parseStockFile(text);
+    if (parsed.rows.length === 0) {
+      showNotification(parsed.errors[0] || 'That file has no products.', 'error');
+      return;
+    }
+    const applied = applyStockFile(products, branches, parsed.rows, () => crypto.randomUUID());
+    const skipped = parsed.errors.length > 0 ? ` ${parsed.errors.length} row${parsed.errors.length === 1 ? ' was' : 's were'} skipped.` : '';
+    if (!window.confirm(`Upload ${parsed.rows.length} product${parsed.rows.length === 1 ? '' : 's'} from ${file.name}? ${applied.added} will be added and ${applied.updated} will be updated.${skipped} Products that are not in the file stay on the shelf.`)) return;
+    const known = new Set(products.map((product) => product.id));
+    const next = applied.products.map((product) => (
+      known.has(product.id) ? { ...product, ...updatedAuditStamp() } : { ...product, ...currentAuditStamp() }
+    ));
+    try {
+      if (db && authUser && authUser.uid !== LOCAL_OPERATOR_ID && activeShopOwnerUid && applied.stockWrites.length > 0) {
+        const savedAt = new Date().toISOString();
+        await writeRecords(db, activeShopOwnerUid, 'stock', applied.stockWrites.map((row) => ({ id: row.id, qty: row.qty, updatedAt: savedAt })));
+      }
+    } catch (error) {
+      showNotification(accessDenied(error) ? 'The shop blocked this stock file, so nothing changed.' : 'The stock file was not saved.', 'error');
+      return;
+    }
+    setBranches(applied.branches);
+    setProducts(next);
+    logActivity('stock_import', `Uploaded stock from ${file.name}: ${applied.updated} updated, ${applied.added} added.`);
+    showNotification(`Stock uploaded. ${applied.added} added, ${applied.updated} updated.${parsed.errors[0] ? ` ${parsed.errors[0]}` : ''}`, 'success');
+    setStatus(`Stock file applied: ${applied.updated} updated, ${applied.added} added.`);
+  };
+
   const restoreShopBackup = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     event.target.value = '';
@@ -4152,15 +4233,26 @@ export default function Page() {
                 <button type="button" className={productPane === 'movements' ? 'active' : ''} onClick={() => setProductPane('movements')}>Movements</button>
                 <button type="button" className={productPane === 'count' ? 'active' : ''} onClick={() => setProductPane('count')}>Count</button>
               </div>
-              {productPane === 'shelf' && canEditCatalog && (
+              {productPane === 'shelf' && (canEditCatalog || isShopOwner) && (
                 <div className="page-tools-actions">
-                  <button className="edit-btn" disabled={products.length === 0} onClick={() => {
-                    setStockAdjustmentForm({ ...emptyStockForm(), lines: [{ productId: '', quantity: '', unitCost: '' }] });
-                    setShowStockAdjustmentModal(true);
-                  }}>Receive stock</button>
-                  <button className="primary" onClick={() => openProductForm(blankProductForm(branches[0]?.id || ''))}>
-                    Add product
-                  </button>
+                  {canEditCatalog && (
+                    <>
+                      <button className="edit-btn" disabled={products.length === 0} onClick={() => {
+                        setStockAdjustmentForm({ ...emptyStockForm(), lines: [{ productId: '', quantity: '', unitCost: '' }] });
+                        setShowStockAdjustmentModal(true);
+                      }}>Receive stock</button>
+                      <button className="primary" onClick={() => openProductForm(blankProductForm(branches[0]?.id || ''))}>
+                        Add product
+                      </button>
+                    </>
+                  )}
+                  {isShopOwner && (
+                    <>
+                      <button type="button" className="edit-btn" disabled={products.length === 0} onClick={downloadStockFile}>Download stock</button>
+                      <button type="button" className="edit-btn" onClick={() => stockFileInputRef.current?.click()}>Upload stock</button>
+                      <input ref={stockFileInputRef} type="file" accept=".csv,text/csv,text/plain" onChange={uploadStockFile} style={{ display: 'none' }} />
+                    </>
+                  )}
                 </div>
               )}
             </div>
@@ -5534,10 +5626,14 @@ export default function Page() {
                     <button type="button" className="primary" onClick={downloadShopBackup}>Download Full Backup</button>
                     <button type="button" className="edit-btn" onClick={() => backupFileInputRef.current?.click()}>Upload & Restore Backup</button>
                     <input ref={backupFileInputRef} type="file" accept="application/json,.json" onChange={restoreShopBackup} style={{ display: 'none' }} />
+                    <button type="button" className="edit-btn" disabled={products.length === 0} onClick={downloadStockFile}>Download stock</button>
+                    <button type="button" className="edit-btn" onClick={() => stockFileInputRef.current?.click()}>Upload stock</button>
+                    <input ref={stockFileInputRef} type="file" accept=".csv,text/csv,text/plain" onChange={uploadStockFile} style={{ display: 'none' }} />
                   </div>
                 ) : (
                   <p style={{ marginTop: '1rem', color: 'var(--danger)', fontWeight: 600 }}>Only the shop owner can export or restore a full shop backup.</p>
                 )}
+                <p className="muted-copy" style={{ marginTop: '1rem' }}>Download stock is a spreadsheet of product names, quantities, prices, branches, and codes. Upload that same file to update quantities and add products. Photos stay on the products already on the shelf. Products missing from the file are not removed.</p>
                 <div style={{ marginTop: '1.5rem', padding: '1rem', border: '1px solid var(--border)', borderRadius: '0.75rem', background: '#f8fafc' }}>
                   <strong>Restore checklist</strong>
                   <ol style={{ color: 'var(--text-muted)', marginBottom: 0 }}>
