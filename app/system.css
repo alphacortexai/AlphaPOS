@@ -717,6 +717,65 @@ a:focus-visible,
 .shop-choice:hover { background: #ececef !important; }
 .shop-choice span,
 .shop-choice-leave { color: var(--text-muted) !important; }
+.onboard-steps {
+  display: flex;
+  gap: 8px;
+  margin: 0 0 18px;
+  padding: 0;
+  list-style: none;
+}
+.onboard-steps li {
+  flex: 1;
+  padding-top: 8px;
+  border-top: 2px solid rgba(0, 0, 0, 0.12);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-align: left;
+}
+.onboard-steps li.is-current,
+.onboard-steps li.is-done {
+  color: var(--text);
+  border-top-color: var(--primary);
+}
+.onboard-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  text-align: left;
+}
+.onboard-form .field span {
+  text-transform: none;
+  letter-spacing: -0.01em;
+  font-size: 13px;
+  font-weight: 600;
+}
+.onboard-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+}
+.onboard-quiet {
+  background: transparent;
+  border: 0;
+  color: var(--text-muted);
+  font: inherit;
+  font-weight: 600;
+  min-height: 40px;
+  cursor: pointer;
+}
+.onboard-quiet:hover:not(:disabled) { color: var(--text); }
+.onboard-quiet:disabled { cursor: not-allowed; opacity: 0.45; }
+.onboard-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+}
 .shop-choice-leave { color: var(--primary) !important; font-weight: 500; }
 
 /* Register */
