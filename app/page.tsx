@@ -199,6 +199,15 @@ type CartItem = {
   discountPercent?: number;
 };
 
+const GoogleMark = () => (
+  <svg className="auth-google-mark" viewBox="0 0 18 18" aria-hidden="true">
+    <path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 0 1-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615z" />
+    <path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z" />
+    <path fill="#FBBC05" d="M3.964 10.706A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.706V4.962H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.038l3.007-2.332z" />
+    <path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.962L3.964 7.294C4.672 5.167 6.656 3.58 9 3.58z" />
+  </svg>
+);
+
 const periodStart = (period: 'day' | 'week' | 'month' | 'year', date: Date = new Date()) => {
   const d = new Date(date);
   if (period === 'day') return new Date(d.getFullYear(), d.getMonth(), d.getDate());
@@ -4149,24 +4158,34 @@ export default function Page() {
             <p className="auth-loading">Opening AlphaPOS</p>
           </div>
         ) : (
-          <div className="auth-layout">
+          <div className="auth-layout auth-welcome">
             <Logo variant="stacked" />
             <div className="auth-copy">
-              <h1>The counter, ready when the shop opens.</h1>
-              <p>Sell, take payment, and keep the books in one place.</p>
+              <h1>Your business, running smoothly from the counter.</h1>
+              <p>Sell faster, manage payments, track stock, and keep your business organized — all in one place.</p>
             </div>
-            <section className="auth-card" aria-label="Sign in">
-              <h2>Sign in</h2>
-              <p className="auth-lede">{firebaseApp ? 'Use the Google account for this shop.' : 'This browser keeps the shop on this device.'}</p>
+            <section className="auth-card" aria-label={invitedEmail ? 'Sign in' : 'Get started'}>
               {signInNotice && <p className="auth-local-note">{signInNotice}</p>}
               {invitedEmail && <p className="auth-local-note">This invite is for {invitedEmail}. Sign in with Google using that address.</p>}
               {firebaseApp ? (
                 <>
-                  <button className="auth-action" type="button" onClick={handleLogin} disabled={signingIn}>{signingIn ? 'Opening Google…' : 'Sign in with Google'}</button>
-                  <p className="auth-fine">Staff open the link in their invite, or sign in with the same email.</p>
+                  <button className="auth-google" type="button" onClick={handleLogin} disabled={signingIn} aria-label={invitedEmail ? 'Sign in with Google' : 'Get started with Google'}>
+                    <GoogleMark />
+                    <span>{signingIn ? 'Opening Google…' : invitedEmail ? 'Sign in' : 'Get started'}</span>
+                  </button>
+                  {!invitedEmail && (
+                    <p className="auth-switch">
+                      Already have an account?{' '}
+                      <button type="button" onClick={handleLogin} disabled={signingIn} aria-label="Sign in with Google">Sign in</button>
+                    </p>
+                  )}
+                  <p className="auth-fine">{invitedEmail ? 'Use the Google account for that email.' : 'Get started and Sign in both continue with Google. Staff open the link in their invite.'}</p>
                 </>
               ) : (
-                <button className="auth-action" type="button" onClick={startLocalCounter}>Open the counter</button>
+                <>
+                  <button className="auth-action" type="button" onClick={startLocalCounter}>Get started</button>
+                  <p className="auth-fine">This browser keeps the shop on this device.</p>
+                </>
               )}
             </section>
           </div>
