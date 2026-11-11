@@ -7,6 +7,7 @@ import { collection, deleteDoc, doc, getDoc, getDocFromServer, getDocs, incremen
 import Logo from '../components/brand/Logo';
 import CatalogAssistant, { type CatalogCategoryRow, type CatalogCreateRow, type CatalogPriceRow } from '../components/pos/CatalogAssistant';
 import RegisterDesk from '../components/pos/RegisterDesk';
+import ShopOnboarding from '../components/pos/ShopOnboarding';
 import ReceiptDialog from '../components/pos/ReceiptDialog';
 import ReturnDialog, { type ReturnableLine } from '../components/pos/ReturnDialog';
 import { ACTIVITY_KEEP, readLocalActivity, trimActivity, writeLocalActivity } from '../lib/pos/activityLog';
@@ -23,6 +24,7 @@ import { commitStockAndRecords, deleteRecords, ledgerCollectionPath, migrateShop
 import { applyStockFile, parseStockFile, stockFileCsv } from '../lib/pos/stockFile';
 import { beginSalesEmailSend, buildSalesDigest, defaultSalesEmailSettings, finishSalesEmailSend, normalizeSalesEmailSettings, previousSalesPeriod, type SalesDigest, type SalesEmailSettings } from '../lib/pos/salesEmail';
 import { billForReceipt, countVariance, creditAllows, dayClose, discountNeedsManager, expenseWasRemoved, finiteAmount, hashPin, inviteEmails, keepEditedRows, mergeEditedRows, needsReorder, noteRemovedExpense, overlayStock, ownerShopWrite, pinIsValid, preferShopCatalog, productForReturn, rankProducts, sellingPrice, shopCatalog, shopDocumentBody, shopSaveFingerprint, stockFallback, supplierOwed, tenderTotals, tendersNeedReference, type SupplierBill, type SupplierPayment } from '../lib/pos/shopMath';
+import { needsOwnerOnboarding, onboardBranchError, onboardLocationError, onboardShopError, onboardStaffError, type OnboardingRole } from '../lib/pos/onboarding';
 import { accessDenied, chooseShopId, ownShopIsReal, saveWasInterrupted, shopsForSignedInUser } from '../lib/pos/shopAccess';
 import { fetchFirestoreDocument, fetchMembershipsByEmail, preferShopRead, SHOP_CONNECTION_MESSAGE, ShopReadError, withTimeout } from '../lib/pos/shopRead';
 import { booksForPermissions, canViewShelf, inviteShopPatch, PERMISSION_LABELS, permissionsFor, permissionsMatchPreset, recordsForAccess, registerCatalog, resolveStaffAccess, rowsForBranch, shelfForInvite, staffEmailLists, staffGrants, STAFF_PERMISSIONS, type StaffPermission } from '../lib/pos/staffAccess';
@@ -341,6 +343,7 @@ export default function Page() {
   const performSaveRef = useRef<() => Promise<void>>(async () => {});
   const activeShopOwnerUidRef = useRef('');
   const shopLoadGenRef = useRef(0);
+  const onboardingLockRef = useRef(false);
   const [shopEpoch, setShopEpoch] = useState(0);
   const notificationTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const backupFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -429,6 +432,15 @@ export default function Page() {
   const [userForm, setUserForm] = useState({ id: '', name: '', email: '', role: 'cashier' as Role, branchId: '', pin: '', permissions: permissionsFor('cashier') });
   const [customerDraft, setCustomerDraft] = useState({ name: '', phone: '', creditLimit: '', priceList: 'retail' as 'retail' | 'wholesale', notes: '' });
   const [shopNameForm, setShopNameForm] = useState('');
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
+  const [onboardingComplete, setOnboardingComplete] = useState(false);
+  const [onboardingStep, setOnboardingStep] = useState<'shop' | 'branch' | 'staff'>('shop');
+  const [onboardingShopName, setOnboardingShopName] = useState('');
+  const [onboardingBranchName, setOnboardingBranchName] = useState('');
+  const [onboardingBranchLocation, setOnboardingBranchLocation] = useState('');
+  const [onboardingStaff, setOnboardingStaff] = useState({ name: '', email: '', role: 'cashier' as OnboardingRole });
+  const [onboardingError, setOnboardingError] = useState('');
+  const [onboardingBusy, setOnboardingBusy] = useState(false);
   const [settingsTab, setSettingsTab] = useState<'shop' | 'branches' | 'time' | 'backup' | 'stock' | 'tax' | 'receipt' | 'register' | 'email' | 'assistant'>('shop');
   const [salesEmailSettings, setSalesEmailSettings] = useState<SalesEmailSettings>(defaultSalesEmailSettings);
   const [signInNotice, setSignInNotice] = useState('');
@@ -597,6 +609,8 @@ export default function Page() {
         setTaxSettings(defaultTaxSettings);
         setReceiptSettings(defaultReceiptSettings);
         setSalesEmailSettings(defaultSalesEmailSettings);
+        setOnboardingOpen(false);
+        setOnboardingComplete(false);
       }
     });
     })();
@@ -610,6 +624,19 @@ export default function Page() {
       if (!authUser) return false;
       const loadGen = ++shopLoadGenRef.current;
       const stale = () => loadGen !== shopLoadGenRef.current;
+      const settleOnboarding = (ownsShop: boolean, shop: Record<string, unknown> | null | undefined) => {
+        const needed = needsOwnerOnboarding({ ownsShop, shop });
+        setOnboardingComplete(Boolean(ownsShop && shop?.onboardingComplete === true));
+        setOnboardingOpen(needed);
+        setOnboardingBusy(false);
+        if (!needed) return;
+        setOnboardingStep('shop');
+        setOnboardingShopName('');
+        setOnboardingBranchName('');
+        setOnboardingBranchLocation('');
+        setOnboardingStaff({ name: '', email: '', role: 'cashier' });
+        setOnboardingError('');
+      };
       const applyRetailCollections = (data?: Record<string, unknown>) => {
         setCustomers(normalizeCustomers(data?.customers));
         setHeldTickets(normalizeHeldTickets(data?.heldTickets));
@@ -671,6 +698,7 @@ export default function Page() {
           }
           setRole('shop_owner');
           setAwaitingShopChoice(false);
+          settleOnboarding(true, data);
           setShopsResolved(true);
           hasLoadedUserDataRef.current = true;
           isSwitchingShopRef.current = false;
@@ -694,6 +722,7 @@ export default function Page() {
         setInviteBlocked('');
         if (expectedEmail && normalizedEmail && expectedEmail !== normalizedEmail) {
           setInviteBlocked(`This invite is for ${expectedEmail}. You are signed in as ${normalizedEmail}. Sign out, then open the link and choose that Google account.`);
+          settleOnboarding(false, null);
           setShopsResolved(true);
           hasLoadedUserDataRef.current = false;
           return false;
@@ -813,6 +842,7 @@ export default function Page() {
         }));
         if (invitedShop && invitedShop !== authUser.uid && !namedMemberships.some((shop) => shop.ownerUid === invitedShop) && !ownShopIsReal(ownData ?? undefined)) {
           setRole('cashier');
+          settleOnboarding(false, null);
           setAvailableShops([]);
           setBranches([]);
           setProducts([]);
@@ -836,6 +866,7 @@ export default function Page() {
         if (namedMemberships.length > 1 && !invitedMatch && !rememberedMatch && !activeMatch) {
           setAvailableShops(namedMemberships);
           setAwaitingShopChoice(true);
+          settleOnboarding(false, null);
           setShopsResolved(true);
           hasLoadedUserDataRef.current = false;
           isSwitchingShopRef.current = false;
@@ -906,6 +937,7 @@ export default function Page() {
           const access = applyAccess();
           setShopsResolved(true);
           if (connectionDropped) {
+            settleOnboarding(false, null);
             hasLoadedUserDataRef.current = false;
             isSwitchingShopRef.current = false;
             setRegisterNotice(SHOP_CONNECTION_MESSAGE);
@@ -913,6 +945,7 @@ export default function Page() {
             return true;
           }
           if (selectedShopOwnerUid !== authUser.uid) {
+            settleOnboarding(false, null);
             hasLoadedUserDataRef.current = false;
             isSwitchingShopRef.current = false;
             const notice = rulesBlocked
@@ -933,6 +966,7 @@ export default function Page() {
           setCustomerPayments([]);
           shopRevisionRef.current = 0;
           applyRetailCollections();
+          settleOnboarding(true, null);
           hasLoadedUserDataRef.current = true;
           isSwitchingShopRef.current = false;
           setStatus(`Viewing ${selectedShop?.shopName || 'selected shop'} as ${roleLabels[access.role]}.`);
@@ -1018,6 +1052,7 @@ export default function Page() {
         setActivityLogs(ledgerReads.activity ? trimActivity(sideLogs ?? inlineLogs) : []);
         applyRetailCollections(data as Record<string, unknown>);
         if (authUser.uid !== selectedShopOwnerUid) invitePatchRef.current = null;
+        settleOnboarding(authUser.uid === selectedShopOwnerUid, data);
         hasLoadedUserDataRef.current = true;
         isSwitchingShopRef.current = false;
         const shelfNote = authUser.uid === selectedShopOwnerUid ? '' : ` ${catalog.branches.length} ${catalog.branches.length === 1 ? 'branch' : 'branches'}, ${embeddedProducts.length} products.`;
@@ -1128,6 +1163,7 @@ export default function Page() {
   useEffect(() => {
     const saveUserData = async () => {
       if (!authUser || !hasLoadedUserDataRef.current || !activeShopOwnerUid || isSwitchingShopRef.current) return;
+      if (onboardingOpen) return;
       if (authUser.uid !== LOCAL_OPERATOR_ID && !db) return;
       try {
         const stored = splitProductImages(products);
@@ -1156,6 +1192,7 @@ export default function Page() {
           receiptSettings,
           registerSettings,
           salesEmailSettings,
+          ...(onboardingComplete ? { onboardingComplete: true } : {}),
         };
         if (authUser.uid === LOCAL_OPERATOR_ID) {
           const nextRevision = (shopRevisionRef.current || 0) + 1;
@@ -1381,7 +1418,7 @@ export default function Page() {
       }
     };
     void execute();
-  }, [activeShopOwnerUid, allow, authUser, customerPayments, db, branches, products, services, sales, expenses, expenseGroups, users, activityLogs, shopTimeSettings, accounts, customers, suppliers, supplierBills, supplierPayments, heldTickets, cashSessions, taxSettings, receiptSettings, registerSettings, salesEmailSettings, removedExpenseIds, currentShop?.shopName]);
+  }, [activeShopOwnerUid, allow, authUser, customerPayments, db, branches, products, services, sales, expenses, expenseGroups, users, activityLogs, shopTimeSettings, accounts, customers, suppliers, supplierBills, supplierPayments, heldTickets, cashSessions, taxSettings, receiptSettings, registerSettings, salesEmailSettings, removedExpenseIds, currentShop?.shopName, onboardingOpen, onboardingComplete]);
 
   const startLocalCounter = () => {
     hasLoadedUserDataRef.current = false;
@@ -1460,6 +1497,7 @@ export default function Page() {
     setSaleAccountId('');
     setExpenseForm(blankExpenseForm());
     setUserForm({ id: '', name: '', email: '', role: 'cashier', branchId: '', pin: '', permissions: permissionsFor('cashier') });
+    setOnboardingOpen(false);
   };
 
   const handleShopSwitch = (nextOwnerUid: string) => {
@@ -2303,15 +2341,16 @@ export default function Page() {
     setShowExpenseModal(false);
   };
 
-  const saveShopMembership = async (email: string, staffRole: Role, staffPermissions: StaffPermission[], branchId: string) => {
+  const saveShopMembership = async (email: string, staffRole: Role, staffPermissions: StaffPermission[], branchId: string, shopNameOverride?: string) => {
     if (!db || !activeShopOwnerUid || !isShopOwner) return;
     const normalizedEmail = email.toLowerCase().trim();
     if (!normalizedEmail) return;
+    const shopName = shopNameOverride?.trim() || availableShops.find(s => s.ownerUid === activeShopOwnerUid)?.shopName || 'My Shop';
     const shopMembershipRef = doc(db, 'shopMemberships', `${activeShopOwnerUid}_${normalizedEmail}`);
     await setDoc(shopMembershipRef, {
       ownerUid: activeShopOwnerUid,
       email: normalizedEmail,
-      shopName: availableShops.find(s => s.ownerUid === activeShopOwnerUid)?.shopName || 'My Shop',
+      shopName,
       role: staffRole,
       permissions: permissionsFor(staffRole, staffPermissions),
       branchId,
@@ -2330,12 +2369,12 @@ export default function Page() {
     }, { merge: true });
   };
 
-  const emailStaffSignInLink = async (email: string, staffRole: Role, staffPermissions: StaffPermission[], branchId: string) => {
-    await saveShopMembership(email, staffRole, staffPermissions, branchId);
+  const emailStaffSignInLink = async (email: string, staffRole: Role, staffPermissions: StaffPermission[], branchId: string, shopNameOverride?: string) => {
+    await saveShopMembership(email, staffRole, staffPermissions, branchId, shopNameOverride);
     if (!firebaseApp || !authUser || authUser.uid === LOCAL_OPERATOR_ID) {
       throw new Error('Sign in with Firebase before emailing a staff link. This browser-only counter cannot send email.');
     }
-    const shopName = availableShops.find((shop) => shop.ownerUid === activeShopOwnerUid)?.shopName || 'My Shop';
+    const shopName = shopNameOverride?.trim() || availableShops.find((shop) => shop.ownerUid === activeShopOwnerUid)?.shopName || 'My Shop';
     const idToken = await getAuth(firebaseApp).currentUser?.getIdToken();
     if (!idToken) throw new Error('Sign in again before sending email.');
     const inviteLink = await createStaffInviteLink(email, activeShopOwnerUid);
@@ -3695,6 +3734,97 @@ export default function Page() {
     }
   };
 
+  const continueOnboardingShop = () => {
+    const error = onboardShopError(onboardingShopName);
+    setOnboardingError(error);
+    if (!error) setOnboardingStep('branch');
+  };
+
+  const continueOnboardingBranch = () => {
+    const error = onboardBranchError(onboardingBranchName) || onboardLocationError(onboardingBranchLocation);
+    setOnboardingError(error);
+    if (!error) setOnboardingStep('staff');
+  };
+
+  const finishOnboarding = async (invite: boolean) => {
+    if (onboardingLockRef.current) return;
+    const shopError = onboardShopError(onboardingShopName);
+    const branchError = onboardBranchError(onboardingBranchName) || onboardLocationError(onboardingBranchLocation);
+    if (shopError || branchError) {
+      setOnboardingError(shopError || branchError);
+      setOnboardingStep(shopError ? 'shop' : 'branch');
+      return;
+    }
+    const shopName = onboardingShopName.trim();
+    const branchName = onboardingBranchName.trim();
+    const location = onboardingBranchLocation.trim() || branchName;
+    let staff: { name: string; email: string; role: OnboardingRole } | null = null;
+    if (invite) {
+      const staffError = onboardStaffError({
+        name: onboardingStaff.name,
+        email: onboardingStaff.email,
+        ownerEmail: authUser?.email,
+      });
+      if (staffError) {
+        setOnboardingError(staffError);
+        return;
+      }
+      staff = {
+        name: onboardingStaff.name.trim(),
+        email: onboardingStaff.email.trim(),
+        role: onboardingStaff.role,
+      };
+    }
+    onboardingLockRef.current = true;
+    setOnboardingBusy(true);
+    setOnboardingError('');
+    const branchId = branches[0]?.id || crypto.randomUUID();
+    const createdAt = branches[0]?.createdAt || new Date().toISOString();
+    setAvailableShops((prev) => prev.map((shop) => (
+      shop.ownerUid === activeShopOwnerUid ? { ...shop, shopName } : shop
+    )));
+    setBranches((prev) => {
+      if (prev.length > 1) return prev.map((branch, index) => (index === 0 ? { ...branch, name: branchName, location } : branch));
+      return [{ id: prev[0]?.id || branchId, name: branchName, location, createdAt: prev[0]?.createdAt || createdAt }];
+    });
+    if (staff) {
+      const invited = staff;
+      setUsers((prev) => [...prev, {
+        id: crypto.randomUUID(),
+        name: invited.name,
+        email: invited.email,
+        role: invited.role,
+        branchId,
+        permissions: permissionsFor(invited.role),
+        ...currentAuditStamp(),
+      }]);
+      logActivity('add_user', `Invited ${invited.email} as ${roleLabels[invited.role]} during setup`);
+    }
+    logActivity('shop_setup', `Set up ${shopName} at ${branchName}`);
+    setOnboardingComplete(true);
+    setOnboardingOpen(false);
+    setView('sales');
+    const ready = `${shopName} is ready. Add products and services when you want to sell.`;
+    setStatus(ready);
+    const canEmail = Boolean(staff && db && firebaseApp && authUser && authUser.uid !== LOCAL_OPERATOR_ID);
+    try {
+      if (!staff) {
+        showNotification(ready, 'success', 5000);
+      } else if (!canEmail) {
+        showNotification(`${staff.name} is on the staff list. Email a sign-in link from Staff once the shop is signed in.`, 'success', 6000);
+      } else {
+        await emailStaffSignInLink(staff.email, staff.role, permissionsFor(staff.role), branchId, shopName);
+      }
+    } catch (error) {
+      const message = `${staff?.name || 'Staff'} is saved. The sign-in email was not sent. ${staffSignInError(error)}`;
+      setStatus(message);
+      showNotification(message, 'error', 7000);
+    } finally {
+      onboardingLockRef.current = false;
+      setOnboardingBusy(false);
+    }
+  };
+
   const saveBranch = (e: React.FormEvent) => {
     e.preventDefault();
     if (!branchForm.name || !branchForm.location) return;
@@ -3928,6 +4058,7 @@ export default function Page() {
           receiptSettings: restoredReceiptSettings,
           registerSettings: restoredRegisterSettings,
           salesEmailSettings: restoredSalesEmailSettings,
+          onboardingComplete: true,
         }),
         restoredFromBackupAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -3985,6 +4116,8 @@ export default function Page() {
       setReceiptSettings(restoredReceiptSettings);
       setRegisterSettings(restoredRegisterSettings);
       setSalesEmailSettings(restoredSalesEmailSettings);
+      setOnboardingComplete(true);
+      setOnboardingOpen(false);
       setRole('shop_owner');
       setAvailableShops((prev) => prev.map((shop) => shop.ownerUid === activeShopOwnerUid ? { ...shop, shopName: restoredShopName, role: 'shop_owner' } : shop));
       showNotification('Backup restored successfully. Your POS data has been reuploaded.', 'success');
@@ -4060,7 +4193,7 @@ export default function Page() {
     );
   }
 
-  if (authUser && authUser.uid !== LOCAL_OPERATOR_ID && !shopsResolved) {
+  if (authUser && !shopsResolved) {
     return (
       <div className="auth-container">
         <div className="auth-glow auth-glow-a" aria-hidden="true" />
@@ -4101,6 +4234,39 @@ export default function Page() {
           </section>
         </div>
       </div>
+    );
+  }
+
+  if (onboardingOpen && ownsThisShop) {
+    return (
+      <ShopOnboarding
+        step={onboardingStep}
+        shopName={onboardingShopName}
+        branchName={onboardingBranchName}
+        branchLocation={onboardingBranchLocation}
+        staffName={onboardingStaff.name}
+        staffEmail={onboardingStaff.email}
+        staffRole={onboardingStaff.role}
+        error={onboardingError}
+        busy={onboardingBusy}
+        canEmail={Boolean(db && firebaseApp && authUser.uid !== LOCAL_OPERATOR_ID)}
+        leaveLabel={authUser.uid === LOCAL_OPERATOR_ID ? 'Close' : 'Sign out'}
+        onShopName={(value) => { setOnboardingShopName(value); setOnboardingError(''); }}
+        onBranchName={(value) => { setOnboardingBranchName(value); setOnboardingError(''); }}
+        onBranchLocation={(value) => { setOnboardingBranchLocation(value); setOnboardingError(''); }}
+        onStaffName={(value) => { setOnboardingStaff((prev) => ({ ...prev, name: value })); setOnboardingError(''); }}
+        onStaffEmail={(value) => { setOnboardingStaff((prev) => ({ ...prev, email: value })); setOnboardingError(''); }}
+        onStaffRole={(value) => setOnboardingStaff((prev) => ({ ...prev, role: value }))}
+        onContinueShop={continueOnboardingShop}
+        onContinueBranch={continueOnboardingBranch}
+        onBack={() => {
+          setOnboardingError('');
+          setOnboardingStep((step) => (step === 'staff' ? 'branch' : 'shop'));
+        }}
+        onSkipStaff={() => { void finishOnboarding(false); }}
+        onInvite={() => { void finishOnboarding(true); }}
+        onLeave={() => { void handleLogout(); }}
+      />
     );
   }
 
