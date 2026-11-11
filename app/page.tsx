@@ -4167,16 +4167,16 @@ export default function Page() {
               <h1>Your business, running smoothly from the counter.</h1>
               <p>Sell faster, manage payments, track stock, and keep your business organized — all in one place.</p>
             </div>
-            <section className="auth-card" aria-label={invitedEmail ? 'Sign in' : 'Get started'}>
+            <section className="auth-card" aria-label={invitedEmail ? 'Sign in' : 'Open a new shop'}>
               {signInNotice && <p className="auth-local-note">{signInNotice}</p>}
               {invitedEmail && <p className="auth-local-note">This invite is for {invitedEmail}. Sign in with Google using that address.</p>}
               {firebaseApp ? (
                 <>
                   <div className="auth-choices">
                     {!invitedEmail && (
-                      <button className="auth-google" type="button" onClick={() => { void handleLogin('start'); }} disabled={signingIn} aria-label="Get started with Google">
+                      <button className="auth-google" type="button" onClick={() => { void handleLogin('start'); }} disabled={signingIn} aria-label="Open a new shop with Google">
                         <GoogleMark />
-                        <span>{signingIn && googleIntent === 'start' ? 'Opening Google…' : 'Get started'}</span>
+                        <span>{signingIn && googleIntent === 'start' ? 'Opening Google…' : 'Open a New Shop'}</span>
                       </button>
                     )}
                     {!invitedEmail && <p className="auth-switch">Already have an account?</p>}
@@ -4189,7 +4189,7 @@ export default function Page() {
                 </>
               ) : (
                 <>
-                  <button className="auth-action" type="button" onClick={startLocalCounter}>Get started</button>
+                  <button className="auth-action" type="button" onClick={startLocalCounter}>Open a New Shop</button>
                   <p className="auth-fine">This browser keeps the shop on this device.</p>
                 </>
               )}

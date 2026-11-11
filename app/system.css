@@ -2268,6 +2268,7 @@ button.edit-btn:active:not(:disabled),
 .auth-google:hover:not(:disabled) { background: #f7f7f8; }
 .auth-google:focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; }
 .auth-google:disabled { cursor: not-allowed; opacity: 0.55; }
+.auth-google span { white-space: nowrap; }
 .auth-google-mark { width: 18px; height: 18px; flex: 0 0 auto; }
 .auth-choices {
   display: flex;
