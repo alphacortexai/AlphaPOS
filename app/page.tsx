@@ -454,6 +454,7 @@ export default function Page() {
   const [salesEmailSettings, setSalesEmailSettings] = useState<SalesEmailSettings>(defaultSalesEmailSettings);
   const [signInNotice, setSignInNotice] = useState('');
   const [signingIn, setSigningIn] = useState(false);
+  const [googleIntent, setGoogleIntent] = useState<'start' | 'signin' | ''>('');
   const [supplierBills, setSupplierBills] = useState<SupplierBill[]>([]);
   const [supplierPayments, setSupplierPayments] = useState<SupplierPayment[]>([]);
   const [operator, setOperator] = useState<{ id: string; name: string; email: string } | null>(null);
@@ -1437,15 +1438,17 @@ export default function Page() {
     setView('sales');
   };
 
-  const handleLogin = async () => {
+  const handleLogin = async (intent: 'start' | 'signin' = 'start') => {
     if (!firebaseApp) return;
     const auth = getAuth(firebaseApp);
     setSignInNotice('');
+    setGoogleIntent(intent);
     setSigningIn(true);
     try {
       await startGoogleSignIn(auth, invitedEmail);
     } catch (error) {
       setSigningIn(false);
+      setGoogleIntent('');
       setSignInNotice(googleSignInError(error));
     }
   };
@@ -4169,17 +4172,20 @@ export default function Page() {
               {invitedEmail && <p className="auth-local-note">This invite is for {invitedEmail}. Sign in with Google using that address.</p>}
               {firebaseApp ? (
                 <>
-                  <button className="auth-google" type="button" onClick={handleLogin} disabled={signingIn} aria-label={invitedEmail ? 'Sign in with Google' : 'Get started with Google'}>
-                    <GoogleMark />
-                    <span>{signingIn ? 'Opening Google…' : invitedEmail ? 'Sign in' : 'Get started'}</span>
-                  </button>
-                  {!invitedEmail && (
-                    <p className="auth-switch">
-                      Already have an account?{' '}
-                      <button type="button" onClick={handleLogin} disabled={signingIn} aria-label="Sign in with Google">Sign in</button>
-                    </p>
-                  )}
-                  <p className="auth-fine">{invitedEmail ? 'Use the Google account for that email.' : 'Get started and Sign in both continue with Google. Staff open the link in their invite.'}</p>
+                  <div className="auth-choices">
+                    {!invitedEmail && (
+                      <button className="auth-google" type="button" onClick={() => { void handleLogin('start'); }} disabled={signingIn} aria-label="Get started with Google">
+                        <GoogleMark />
+                        <span>{signingIn && googleIntent === 'start' ? 'Opening Google…' : 'Get started'}</span>
+                      </button>
+                    )}
+                    {!invitedEmail && <p className="auth-switch">Already have an account?</p>}
+                    <button className="auth-google" type="button" onClick={() => { void handleLogin('signin'); }} disabled={signingIn} aria-label="Sign in with Google">
+                      <GoogleMark />
+                      <span>{signingIn && googleIntent !== 'start' ? 'Opening Google…' : 'Sign in'}</span>
+                    </button>
+                  </div>
+                  <p className="auth-fine">{invitedEmail ? 'Use the Google account for that email.' : 'Both continue with Google. Staff open the link in their invite.'}</p>
                 </>
               ) : (
                 <>
