@@ -2178,3 +2178,55 @@ button.edit-btn:active:not(:disabled),
     transition: none !important;
   }
 }
+
+.onboard-layout { width: min(440px, 100%); }
+.onboard-steps {
+  display: flex;
+  gap: 6px;
+  margin: 0 0 14px;
+}
+.onboard-steps span {
+  flex: 1;
+  height: 4px;
+  border-radius: 980px;
+  background: rgba(0, 0, 0, 0.08);
+}
+.onboard-steps span.is-current,
+.onboard-steps span.is-done { background: var(--primary); }
+.onboard-steps span.is-done { opacity: 0.35; }
+.onboard-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 16px;
+  text-align: left;
+}
+.onboard-form .field { gap: 6px; }
+.auth-container .onboard-error {
+  margin: 0;
+  color: var(--danger) !important;
+  font-size: 13px !important;
+}
+.onboard-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+.onboard-back,
+.onboard-skip,
+.auth-container .onboard-leave {
+  border: 0;
+  background: transparent;
+  color: var(--primary) !important;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.onboard-back,
+.onboard-skip { min-height: 40px; padding: 0; }
+.onboard-back:disabled,
+.onboard-skip:disabled,
+.onboard-leave:disabled { opacity: 0.38; cursor: default; }
+.auth-container .onboard-leave { margin-top: 14px; }
+.onboard-layout .auth-copy h1 { max-width: 16ch; }
