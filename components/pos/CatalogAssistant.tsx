@@ -261,7 +261,7 @@ export default function CatalogAssistant({
   };
 
   return (
-    <section className="assistant-page">
+    <div className="assistant-catalog">
       <div className="page-tools">
         <p className="muted-copy">Only the shop owner can use this. It adds products, updates purchase prices, or suggests categories. It does not sell anything.</p>
       </div>
@@ -439,6 +439,6 @@ export default function CatalogAssistant({
           )}
         </>
       )}
-    </section>
+    </div>
   );
 }
