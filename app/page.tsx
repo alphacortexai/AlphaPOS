@@ -6,6 +6,7 @@ import { getAuth, onAuthStateChanged, signOut } from 'firebase/auth';
 import { collection, deleteDoc, doc, getDoc, getDocFromServer, getDocs, increment, onSnapshot, query, runTransaction, serverTimestamp, setDoc, where } from 'firebase/firestore';
 import Logo from '../components/brand/Logo';
 import CatalogAssistant, { type CatalogCategoryRow, type CatalogCreateRow, type CatalogPriceRow } from '../components/pos/CatalogAssistant';
+import ShopChat from '../components/pos/ShopChat';
 import RegisterDesk from '../components/pos/RegisterDesk';
 import ShopOnboarding from '../components/pos/ShopOnboarding';
 import ReceiptDialog from '../components/pos/ReceiptDialog';
@@ -451,6 +452,7 @@ export default function Page() {
   const [onboardingError, setOnboardingError] = useState('');
   const [onboardingBusy, setOnboardingBusy] = useState(false);
   const [settingsTab, setSettingsTab] = useState<'shop' | 'branches' | 'time' | 'backup' | 'stock' | 'tax' | 'receipt' | 'register' | 'email' | 'assistant'>('shop');
+  const [assistantPane, setAssistantPane] = useState<'ask' | 'catalog'>('ask');
   const [salesEmailSettings, setSalesEmailSettings] = useState<SalesEmailSettings>(defaultSalesEmailSettings);
   const [signInNotice, setSignInNotice] = useState('');
   const [signingIn, setSigningIn] = useState(false);
@@ -4547,16 +4549,27 @@ export default function Page() {
         )}
 
         {view === 'assistant' && isShopOwner && (
-          <CatalogAssistant
-            products={products}
-            branches={branches}
-            categories={productCategories}
-            onCreate={addProductsFromAssistant}
-            onUpdatePrices={updatePurchasePricesFromAssistant}
-            onApplyCategories={applyCategoriesFromAssistant}
-            requestReading={readCatalogPhoto}
-            requestOrganise={organiseCatalog}
-          />
+          <section className="assistant-page">
+            <div className="pane-switch" role="tablist" aria-label="Assistant">
+              <button type="button" className={assistantPane === 'ask' ? 'active' : ''} onClick={() => setAssistantPane('ask')}>Ask</button>
+              <button type="button" className={assistantPane === 'catalog' ? 'active' : ''} onClick={() => setAssistantPane('catalog')}>Catalog</button>
+            </div>
+            <div hidden={assistantPane !== 'ask'}>
+              <ShopChat snapshot={{ shopName: currentShop?.shopName, products, services, sales, expenses, branches, clock: shopClock }} />
+            </div>
+            <div hidden={assistantPane !== 'catalog'}>
+              <CatalogAssistant
+                products={products}
+                branches={branches}
+                categories={productCategories}
+                onCreate={addProductsFromAssistant}
+                onUpdatePrices={updatePurchasePricesFromAssistant}
+                onApplyCategories={applyCategoriesFromAssistant}
+                requestReading={readCatalogPhoto}
+                requestOrganise={organiseCatalog}
+              />
+            </div>
+          </section>
         )}
 
         {view === 'products' && canSeeShelf && (
@@ -5803,7 +5816,7 @@ export default function Page() {
             {settingsTab === 'assistant' && (
               <div className="card">
                 <h3>Product assistant</h3>
-                <p className="muted-copy">Paste a Gemini API key from Google AI Studio (aistudio.google.com/apikey). It is used only to read product photos and to suggest categories. Staff cannot open this page, and the key is not included in a shop backup.</p>
+                <p className="muted-copy">Paste a Gemini API key from Google AI Studio (aistudio.google.com/apikey). It is used only to read product photos and to suggest categories. Questions about sales, stock, prices, profit, and services are answered from the shop&apos;s records and do not use this key. Staff cannot open this page, and the key is not included in a shop backup.</p>
                 <p className="muted-copy">{catalogKey ? 'A key is saved for this shop.' : 'No key is saved yet.'}</p>
                 <div className="form" style={{ marginTop: '1rem' }}>
                   <label className="field">
