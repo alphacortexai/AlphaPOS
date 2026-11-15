@@ -116,7 +116,7 @@ test('initialize and ask_shop answer from the shop records', () => {
   assert.equal(tools.kind, 'json');
   if (tools.kind !== 'json') return;
   const names = (tools.body.result as { tools: { name: string }[] }).tools.map((tool) => tool.name);
-  assert.deepEqual(names, ['ask_shop', 'shop_status']);
+  assert.deepEqual(names, ['ask_shop', 'shop_balances', 'shop_status']);
 
   const answer = handleMcpMessage({
     jsonrpc: '2.0',
@@ -132,6 +132,26 @@ test('initialize and ask_shop answer from the shop records', () => {
 
   const note = handleMcpMessage({ jsonrpc: '2.0', method: 'notifications/initialized' }, link, now);
   assert.equal(note.kind, 'accept');
+
+  const waiting = handleMcpMessage({
+    jsonrpc: '2.0',
+    id: 'b',
+    method: 'tools/call',
+    params: { name: 'shop_balances', arguments: { kind: 'accounts' } },
+  }, link, now);
+  assert.equal(waiting.kind, 'json');
+  if (waiting.kind !== 'json') return;
+  assert.match((waiting.body.result as { content: { text: string }[] }).content[0].text, /Ask again in a moment/);
+
+  const withBooks = handleMcpMessage({
+    jsonrpc: '2.0',
+    id: 'c',
+    method: 'tools/call',
+    params: { name: 'shop_balances', arguments: { kind: 'accounts', name: 'cash' } },
+  }, { ...link, books: { accounts: [{ name: 'CASH', balance: 15500 }], customers: [], suppliers: [] } }, now);
+  assert.equal(withBooks.kind, 'json');
+  if (withBooks.kind !== 'json') return;
+  assert.match((withBooks.body.result as { content: { text: string }[] }).content[0].text, /CASH: UGX 15,500/);
 });
 
 const firestoreLink = (tokenHash: string) => ({

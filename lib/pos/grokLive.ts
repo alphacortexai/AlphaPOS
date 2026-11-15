@@ -1,6 +1,7 @@
 import { createSign } from 'node:crypto';
 import { catalogRows, finiteAmount, overlayStock } from './shopMath';
 import { decodeFirestoreDocument } from './shopRead';
+import { shopBooks } from './grokBooks';
 import { buildGrokSnapshot, GrokLinkError, grokLinkId, isGrokToken, loadGrokLink, type GrokShopLink, type GrokSource } from './grokLink';
 
 type ServiceAccount = {
@@ -187,20 +188,36 @@ export const loadLiveShop = async (input: {
   if (!shop) return null;
   const split = shop.ledgerSplit === true;
   const base = ['users', ownerUid, 'pos', 'data'].map(encodeURIComponent).join('/');
-  const [sales, expenses, stockRows] = split
+  const empty: Record<string, unknown>[] = [];
+  const [sales, expenses, stockRows, payments, supplierBills, supplierPayments] = split
     ? await Promise.all([
       listDocuments(account.projectId, `${base}/sales`, bearer, fetchImpl),
       listDocuments(account.projectId, `${base}/expenses`, bearer, fetchImpl),
       listDocuments(account.projectId, `${base}/stock`, bearer, fetchImpl),
+      listDocuments(account.projectId, `${base}/payments`, bearer, fetchImpl),
+      listDocuments(account.projectId, `${base}/supplierBills`, bearer, fetchImpl),
+      listDocuments(account.projectId, `${base}/supplierPayments`, bearer, fetchImpl),
     ])
-    : [[], [], []] as [Record<string, unknown>[], Record<string, unknown>[], Record<string, unknown>[]];
+    : [empty, empty, empty, empty, empty, empty];
   const stock: Record<string, number> = {};
   stockRows.forEach((row) => {
     const id = text(row.id);
     if (id) stock[id] = amount(row.qty);
   });
-  const built = buildGrokSnapshot(shopSource(shop, sales, expenses, stock), { now });
-  return { ...built, live: true };
+  const source = shopSource(shop, sales, expenses, stock);
+  const built = buildGrokSnapshot(source, { now });
+  const books = shopBooks({
+    accounts: shop.accounts,
+    sales: sales.length > 0 ? sales : source.sales,
+    expenses: expenses.length > 0 ? expenses : source.expenses,
+    payments: payments.length > 0 ? payments : shop.customerPayments,
+    customers: shop.customers,
+    suppliers: shop.suppliers,
+    supplierBills: supplierBills.length > 0 ? supplierBills : shop.supplierBills,
+    supplierPayments: supplierPayments.length > 0 ? supplierPayments : shop.supplierPayments,
+    cashSessions: shop.cashSessions,
+  });
+  return { ...built, live: true, books };
 };
 
 export const loadShopForToken = async (input: {

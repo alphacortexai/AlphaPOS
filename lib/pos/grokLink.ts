@@ -1,4 +1,5 @@
 import { answerShopQuestion, type ShopChatBranch, type ShopChatExpense, type ShopChatProduct, type ShopChatSale, type ShopChatService, type ShopChatSnapshot } from './assistantChat';
+import { formatShopBalances, type GrokBooks } from './grokBooks';
 import type { ShopClock } from './reports';
 import { decodeFirestoreDocument } from './shopRead';
 
@@ -7,7 +8,7 @@ export const GROK_SNAPSHOT_BUDGET = 650_000;
 const PROTOCOLS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 const DEFAULT_PROTOCOL = '2025-03-26';
 
-const INSTRUCTIONS = 'This connector reads one AlphaPOS shop. Use ask_shop for sales, profit, expenses, stock, prices, services, and best sellers. Put the period and any product or service name in the question. Use shop_status to see when the register last sent the records. Do not claim a sale was recorded or a price was changed. Customer names and phone numbers are not available.';
+const INSTRUCTIONS = 'This connector reads one AlphaPOS shop. Use ask_shop for sales, profit, expenses, stock, prices, services, and best sellers. Put the period and any product or service name in the question. Use shop_balances for cash, mobile money, bank, and other account balances, what customers owe the shop, and what the shop owes suppliers. Use shop_status to see when these figures were read. Do not claim a sale was recorded or a price was changed. Phone numbers are not available. Customer names are available only for balances owed.';
 
 export type GrokSource = {
   shopName?: string;
@@ -75,6 +76,7 @@ export type GrokShopLink = {
   updatedAt: string;
   salesTruncatedBefore: string;
   live?: boolean;
+  books?: GrokBooks;
 };
 
 export class GrokLinkError extends Error {
@@ -368,6 +370,18 @@ const TOOLS = [
     },
   },
   {
+    name: 'shop_balances',
+    description: 'Account balances for cash, mobile money, card, bank, and any other account, plus what customers owe the shop and what the shop owes suppliers. Also reports expected cash when a drawer is open. This does not move money.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        kind: { type: 'string', description: 'accounts, customers, suppliers, or all. Omit this for all three.' },
+        name: { type: 'string', description: 'Optional account, customer, or supplier name.' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'shop_status',
     description: 'Report the shop name, when the register last sent these records, and how many products, services, branches, and sales lines are included.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
@@ -422,6 +436,10 @@ const callTool = (link: GrokShopLink, name: string, args: Record<string, unknown
     const question = clip(args.question, 500);
     if (!question) return toolText('Ask a question such as sales today, profit this month, or what is low on stock.', true);
     return toolText(askText(link, question, now));
+  }
+  if (name === 'shop_balances') {
+    if (!link.books) return toolText('Account balances, customer balances, and supplier balances are read with the shop. Ask again in a moment.');
+    return toolText(formatShopBalances(link.books, clip(args.kind, 40), clip(args.name, 80)));
   }
   return null;
 };
