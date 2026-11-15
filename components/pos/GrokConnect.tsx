@@ -332,7 +332,7 @@ export function GrokConnectCard() {
       )}
       {panel.mode === 'ready' && (
         <>
-          <p className="muted-copy">Connect this shop to Grok. Grok can ask about sales, profit, expenses, stock, prices, and services. It cannot ring a sale or change a price. Customer names and phone numbers are not sent. The connection stays with the owner and is not part of a shop backup.</p>
+          <p className="muted-copy">Connect this shop to Grok. Grok can ask about sales, profit, expenses, stock, prices, services, account balances, what customers owe, and what the shop owes suppliers. It cannot ring a sale or change a price. Phone numbers are not sent. The connection stays with the owner and is not part of a shop backup.</p>
           <p className="muted-copy">Each question reads the latest sales saved in Firebase, including while this page is closed. A sale shows up after the till saves it.</p>
           {!panel.connected && (
             <button type="button" className="primary" onClick={panel.connect} disabled={panel.busy}>Connect to Grok</button>
@@ -343,7 +343,7 @@ export function GrokConnectCard() {
                 <li>Open grok.com/connectors.</li>
                 <li>Choose New Connector, then Custom.</li>
                 <li>Paste the shop address. If Grok asks for a bearer token, paste the token as well.</li>
-                <li>Ask Grok about sales, stock, prices, or profit.</li>
+                <li>Ask Grok about sales, stock, prices, profit, account balances, or who owes the shop.</li>
               </ol>
               {panel.publicOrigin ? (
                 <p className="muted-copy">Anyone with this address can ask about this shop’s figures. Disconnect to turn that off.</p>

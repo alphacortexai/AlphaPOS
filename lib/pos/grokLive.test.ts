@@ -92,6 +92,7 @@ test('a live read uses saved sales and the latest stock while the page is closed
           salePrice: field(2000),
         } } }] } },
         services: { arrayValue: { values: [] } },
+        accounts: { arrayValue: { values: [{ mapValue: { fields: { id: field('cash'), name: field('CASH'), openingBalance: field(0), isDefault: field(true) } } }] } },
       })), { status: 200 });
     }
     return new Response('missing', { status: 404 });
@@ -108,5 +109,7 @@ test('a live read uses saved sales and the latest stock while the page is closed
   assert.equal(link?.snapshot.products[0]?.stock, 9);
   assert.equal(link?.snapshot.sales[0]?.amount, 4000);
   assert.equal(JSON.stringify(link?.snapshot).includes('0700111222'), false);
+  assert.equal(JSON.stringify(link?.books).includes('0700111222'), false);
+  assert.equal(link?.books?.accounts.find((account) => account.name === 'CASH')?.balance, 4000);
   assert.equal(seen.some((url) => url.includes('apiKey') || url.includes('key=')), false);
 });
