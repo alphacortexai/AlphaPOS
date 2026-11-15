@@ -74,13 +74,14 @@ export type GrokShopLink = {
   snapshot: ShopChatSnapshot;
   updatedAt: string;
   salesTruncatedBefore: string;
+  live?: boolean;
 };
 
 export class GrokLinkError extends Error {
   readonly kind: 'denied' | 'key' | 'unavailable';
 
-  constructor(kind: 'denied' | 'key' | 'unavailable') {
-    super(kind);
+  constructor(kind: 'denied' | 'key' | 'unavailable', detail?: string) {
+    super(detail || kind);
     this.kind = kind;
   }
 }
@@ -384,7 +385,9 @@ const statusText = (link: GrokShopLink, now: Date) => {
   const age = link.updatedAt ? now.getTime() - new Date(link.updatedAt).getTime() : Number.POSITIVE_INFINITY;
   const lines = [
     `Shop: ${snapshot.shopName || 'This shop'}`,
-    sent ? `Records sent from the register at ${sent} shop time.` : 'The register has not reported a send time.',
+    link.live
+      ? 'These figures were read from the shop just now. A sale shows up after the till saves it.'
+      : (sent ? `Records sent from the register at ${sent} shop time.` : 'The register has not reported a send time.'),
     `Products: ${snapshot.products.length}`,
     `Services: ${snapshot.services.length}`,
     `Branches: ${snapshot.branches.map((branch) => branch.name).join(', ') || 'None'}`,
@@ -397,7 +400,7 @@ const statusText = (link: GrokShopLink, now: Date) => {
       ? `Older sales before ${from} shop time are not in this connection, so a long period can be short.`
       : 'Older sales are not in this connection, so a long period can be short.');
   }
-  if (age > 12 * 60 * 60 * 1000) lines.push('Open AlphaPOS while signed in as the owner to refresh these records.');
+  if (!link.live && age > 12 * 60 * 60 * 1000) lines.push('Open AlphaPOS while signed in as the owner to refresh these records.');
   return lines.join('\n');
 };
 
@@ -406,7 +409,7 @@ const askText = (link: GrokShopLink, question: string, now: Date) => {
   const lines = reply.lines.map((line) => `${line.label}: ${line.detail}`);
   const text = [reply.text, ...lines].join('\n');
   const age = link.updatedAt ? now.getTime() - new Date(link.updatedAt).getTime() : Number.POSITIVE_INFINITY;
-  if (age > 12 * 60 * 60 * 1000) {
+  if (!link.live && age > 12 * 60 * 60 * 1000) {
     const sent = link.updatedAt ? formatShopTime(link.updatedAt, link.snapshot.clock) : '';
     return `${text}\n\nThese records were last sent from the register${sent ? ` at ${sent} shop time` : ''}. Open AlphaPOS while signed in as the owner to refresh them.`;
   }
@@ -540,6 +543,7 @@ export const respondToMcp = async (input: {
   referer: string;
   now?: Date;
   fetchImpl?: typeof fetch;
+  loadLink?: (token: string) => Promise<GrokShopLink | null>;
 }): Promise<McpHttpResult> => {
   const protocol = input.protocolHeader && PROTOCOLS.includes(input.protocolHeader) ? input.protocolHeader : DEFAULT_PROTOCOL;
   const token = tokenFromRequest(input);
@@ -548,7 +552,7 @@ export const respondToMcp = async (input: {
       'WWW-Authenticate': 'Bearer realm="AlphaPOS"',
     });
   }
-  if (!input.projectId || !input.apiKey) {
+  if (!input.loadLink && (!input.projectId || !input.apiKey)) {
     return httpResult(503, rpcError(null, -32000, 'Firebase is not configured, so Grok cannot read this shop yet.'), input.accept, protocol);
   }
   let parsed: unknown;
@@ -561,17 +565,20 @@ export const respondToMcp = async (input: {
   if (!messages.length) return httpResult(400, rpcError(null, -32600, 'Invalid request.'), input.accept, protocol);
   let link: GrokShopLink | null;
   try {
-    link = await loadGrokLink({
-      projectId: input.projectId,
-      apiKey: input.apiKey,
-      token,
-      referer: input.referer,
-      fetchImpl: input.fetchImpl,
-    });
+    link = input.loadLink
+      ? await input.loadLink(token)
+      : await loadGrokLink({
+        projectId: input.projectId,
+        apiKey: input.apiKey,
+        token,
+        referer: input.referer,
+        fetchImpl: input.fetchImpl,
+      });
   } catch (error) {
     const kind = error instanceof GrokLinkError ? error.kind : 'unavailable';
+    const message = error instanceof GrokLinkError && error.message !== error.kind ? error.message : grokLinkFailureMessage(kind);
     const status = kind === 'unavailable' ? 502 : 503;
-    return httpResult(status, rpcError(null, -32000, grokLinkFailureMessage(kind)), input.accept, protocol);
+    return httpResult(status, rpcError(null, -32000, message), input.accept, protocol);
   }
   if (!link) {
     const onlyNotifications = messages.every((message) => {
@@ -596,4 +603,5 @@ export const firebaseMcpConfig = () => ({
   projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID || '',
   apiKey: process.env.FIREBASE_MCP_API_KEY || process.env.NEXT_PUBLIC_FIREBASE_API_KEY || process.env.VITE_FIREBASE_API_KEY || '',
   referer: process.env.GROK_MCP_REFERER || 'https://www.alphapos.store/',
+  serviceAccount: process.env.FIREBASE_SERVICE_ACCOUNT || '',
 });

@@ -333,7 +333,7 @@ export function GrokConnectCard() {
       {panel.mode === 'ready' && (
         <>
           <p className="muted-copy">Connect this shop to Grok. Grok can ask about sales, profit, expenses, stock, prices, and services. It cannot ring a sale or change a price. Customer names and phone numbers are not sent. The connection stays with the owner and is not part of a shop backup.</p>
-          <p className="muted-copy">While you are signed in as the owner and this shop is open, AlphaPOS sends an updated copy for Grok to read.</p>
+          <p className="muted-copy">Each question reads the latest sales saved in Firebase, including while this page is closed. A sale shows up after the till saves it.</p>
           {!panel.connected && (
             <button type="button" className="primary" onClick={panel.connect} disabled={panel.busy}>Connect to Grok</button>
           )}

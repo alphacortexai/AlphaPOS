@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { firebaseMcpConfig, respondToMcp } from '../../../lib/pos/grokLink';
+import { loadShopForToken } from '../../../lib/pos/grokLive';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -37,6 +38,13 @@ export async function POST(request: Request) {
     projectId: config.projectId,
     apiKey: config.apiKey,
     referer: config.referer,
+    loadLink: (token) => loadShopForToken({
+      token,
+      serviceAccount: config.serviceAccount,
+      projectId: config.projectId,
+      apiKey: config.apiKey,
+      referer: config.referer,
+    }),
   });
   return new NextResponse(result.body, { status: result.status, headers: { ...cors, ...result.headers } });
 }
