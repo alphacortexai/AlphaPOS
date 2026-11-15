@@ -1,5 +1,5 @@
 import { answerShopQuestion, type ShopChatBranch, type ShopChatExpense, type ShopChatProduct, type ShopChatSale, type ShopChatService, type ShopChatSnapshot } from './assistantChat';
-import { formatShopBalances, type GrokBooks } from './grokBooks';
+import { booksQuestion, formatShopBalances, type GrokBooks } from './grokBooks';
 import type { ShopClock } from './reports';
 import { decodeFirestoreDocument } from './shopRead';
 
@@ -8,7 +8,7 @@ export const GROK_SNAPSHOT_BUDGET = 650_000;
 const PROTOCOLS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 const DEFAULT_PROTOCOL = '2025-03-26';
 
-const INSTRUCTIONS = 'This connector reads one AlphaPOS shop. Use ask_shop for sales, profit, expenses, stock, prices, services, and best sellers. Put the period and any product or service name in the question. Use shop_balances for cash, mobile money, bank, and other account balances, what customers owe the shop, and what the shop owes suppliers. Use shop_status to see when these figures were read. Do not claim a sale was recorded or a price was changed. Phone numbers are not available. Customer names are available only for balances owed.';
+const INSTRUCTIONS = 'This connector reads one AlphaPOS shop. Use ask_shop for sales, profit, expenses, stock, prices, services, best sellers, account balances, what customers owe, and what the shop owes suppliers. A question about cash, mobile money, bank, float, or the drawer is a balance question, even when it names a day. shop_balances answers the same balance questions. Use shop_status to see when these figures were read. Do not claim a sale was recorded or a price was changed. Phone numbers are not available. Customer names are available only for balances owed.';
 
 export type GrokSource = {
   shopName?: string;
@@ -359,7 +359,7 @@ export const formatShopTime = (iso: string, clock: ShopClock) => {
 const TOOLS = [
   {
     name: 'ask_shop',
-    description: 'Answer one question about this shop from its own records. Covers sales, profit, expenses, stock on hand, low stock, out of stock, selling prices, services, and best sellers. Include the period, such as today, this week, this month, or from 1 Nov to 10 Nov, and the product or service name when the question is about one item. Voided sales are excluded. A week starts on Monday. This does not record a sale or change a price.',
+    description: 'Answer one question about this shop from its own records. Covers sales, profit, expenses, stock on hand, low stock, out of stock, selling prices, services, best sellers, account balances (cash, mobile money, card, bank, float, and the open drawer), what customers owe, and what the shop owes suppliers. For sales, profit, or expenses, include the period, such as today, this week, this month, or from 1 Nov to 10 Nov, and the product or service name when the question is about one item. A question about balances is answered from the books even when it also names a day. Voided sales are excluded. A week starts on Monday. This does not record a sale or change a price.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -434,7 +434,12 @@ const callTool = (link: GrokShopLink, name: string, args: Record<string, unknown
   if (name === 'shop_status') return toolText(statusText(link, now));
   if (name === 'ask_shop') {
     const question = clip(args.question, 500);
-    if (!question) return toolText('Ask a question such as sales today, profit this month, or what is low on stock.', true);
+    if (!question) return toolText('Ask a question such as sales today, profit this month, what is low on stock, or the cash balance.', true);
+    const booksAsk = booksQuestion(question);
+    if (booksAsk) {
+      if (!link.books) return toolText('Account balances, customer balances, and supplier balances are read with the shop. Ask again in a moment.');
+      return toolText(formatShopBalances(link.books, booksAsk.kind));
+    }
     return toolText(askText(link, question, now));
   }
   if (name === 'shop_balances') {
