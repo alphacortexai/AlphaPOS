@@ -152,6 +152,20 @@ test('initialize and ask_shop answer from the shop records', () => {
   assert.equal(withBooks.kind, 'json');
   if (withBooks.kind !== 'json') return;
   assert.match((withBooks.body.result as { content: { text: string }[] }).content[0].text, /CASH: UGX 15,500/);
+
+  const throughAsk = handleMcpMessage({
+    jsonrpc: '2.0',
+    id: 'd',
+    method: 'tools/call',
+    params: { name: 'ask_shop', arguments: { question: 'cash, mobile money, bank and float balances on 15 Nov 2026' } },
+  }, { ...link, books: { accounts: [{ name: 'CASH', balance: 15500 }, { name: 'Bank', balance: 8000 }], customers: [], suppliers: [], drawer: { expectedCash: 25500 } } }, now);
+  assert.equal(throughAsk.kind, 'json');
+  if (throughAsk.kind !== 'json') return;
+  const balanceText = (throughAsk.body.result as { content: { text: string }[] }).content[0].text;
+  assert.match(balanceText, /CASH: UGX 15,500/);
+  assert.match(balanceText, /Bank: UGX 8,000/);
+  assert.match(balanceText, /Expected cash in the drawer is UGX 25,500/);
+  assert.equal(balanceText.includes('No sales'), false);
 });
 
 const firestoreLink = (tokenHash: string) => ({

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { formatShopBalances, shopBooks } from './grokBooks';
+import { booksQuestion, formatShopBalances, shopBooks } from './grokBooks';
 
 const books = () => shopBooks({
   accounts: [
@@ -35,6 +35,12 @@ test('balances cover accounts, what customers owe, and what is owed to suppliers
   assert.match(text, /Kikuubo: UGX 1,500/);
   assert.match(text, /Expected cash in the drawer is UGX 25,500/);
   assert.equal(text.includes('0700111222'), false);
+});
+
+test('a balances question that names a day stays a balances question', () => {
+  assert.deepEqual(booksQuestion('cash, mobile money, bank and float balances on 15 Nov 2026'), { kind: 'accounts' });
+  assert.equal(booksQuestion('sales today'), null);
+  assert.deepEqual(booksQuestion('who owes the shop'), { kind: 'customers' });
 });
 
 test('a name picks one balance', () => {

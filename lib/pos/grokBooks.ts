@@ -252,6 +252,22 @@ const listLines = (title: string, empty: string, lines: { name: string; amount: 
   return `${title}\n${body}${extra > 0 ? `\n${extra} more are not listed.` : ''}`;
 };
 
+/** A balances question that also names a day must not be answered as sales for that day. */
+export const booksQuestion = (question: string): { kind: string } | null => {
+  const text = question.toLowerCase();
+  const aboutBooks = /\bbalances?\b|\bfloat\b|\bdrawer\b|\bmobile money\b|\bwho owes\b|\bowed\b|\bowes?\b|\bon account\b|\baccounts?\b/.test(text);
+  if (!aboutBooks) return null;
+  const aboutSales = /\b(sold|sell|sales?|revenue|takings|turnover)\b/.test(text);
+  if (aboutSales && !/\bbalances?\b|\bfloat\b|\bdrawer\b|\bowed\b|\bowes?\b|\bon account\b/.test(text)) return null;
+  const customers = /\bcustomers?\b|\bwho owes\b|\bon account\b|\bowes?\b/.test(text);
+  const suppliers = /\bsuppliers?\b/.test(text);
+  const accounts = /\bbalances?\b|\bfloat\b|\bdrawer\b|\bmobile money\b|\bcash\b|\bbank\b|\baccounts?\b|\bcard\b/.test(text);
+  if (accounts && !customers && !suppliers) return { kind: 'accounts' };
+  if (customers && !accounts && !suppliers) return { kind: 'customers' };
+  if (suppliers && !accounts && !customers) return { kind: 'suppliers' };
+  return { kind: 'all' };
+};
+
 export const formatShopBalances = (books: GrokBooks, kind: string, name = '') => {
   const asked = kind.trim().toLowerCase();
   const wantAccounts = !asked || asked === 'all' || asked === 'accounts' || asked === 'account';
