@@ -34,6 +34,8 @@ Sales emails (daily, weekly, or monthly) are sent with [Resend](https://resend.c
 
 The product assistant is on the Assistant page, and only the shop owner can open it. A photo of names and quantities, or a supplier receipt, is read into a list the owner confirms. Confirming adds products or updates purchase prices. A price that is not on the photo is saved as 0, and a missing category is left blank. It does not record a sale. The owner pastes a Gemini API key in Settings → Assistant. That key is stored for the owner, separate from the shop backup. `GEMINI_API_KEY` or `OPENAI_API_KEY` on the server is used only when Settings is empty. `CATALOG_ASSISTANT_ALLOW_LOCAL=false` refuses the on-device counter.
 
+The same Settings page can connect the shop to Grok. The owner copies the shop address into Grok at grok.com/connectors (New Connector, then Custom). Grok can ask about sales, profit, expenses, stock, prices, and services. It cannot ring a sale or change a price, and customer names and phone numbers are not sent. The register sends a fresh copy while the owner is signed in and the shop is open. The on-device counter cannot be connected. Publish the latest `firestore.rules` before connecting. If the Firebase web key is limited to the website, set `GROK_MCP_REFERER` to that public https address, or set `FIREBASE_MCP_API_KEY` to a key that can read Firestore.
+
 ## Run locally
 ```bash
 npm ci

@@ -169,5 +169,29 @@ service cloud.firestore {
     match /users/{owner}/pos/secrets {
       allow read, write: if signedIn() && request.auth.uid == owner;
     }
+
+    // The document id is the hash of the owner's Grok token. Listing is denied.
+    // Knowing that hash lets Grok's server read one shop snapshot. It does not allow writes.
+    match /grokLinks/{linkId} {
+      function ownLink() {
+        return signedIn()
+          && linkId.size() == 64
+          && request.resource.data.linkId == linkId
+          && request.resource.data.ownerUid == request.auth.uid
+          && request.resource.data.updatedAt is string
+          && request.resource.data.updatedAt.size() < 40
+          && request.resource.data.shopName is string
+          && request.resource.data.shopName.size() < 120
+          && request.resource.data.salesTruncatedBefore is string
+          && request.resource.data.salesTruncatedBefore.size() < 40
+          && request.resource.data.snapshot is map
+          && request.resource.data.snapshot.keys().hasOnly(['shopName', 'products', 'services', 'sales', 'expenses', 'branches', 'clock']);
+      }
+      allow get: if true;
+      allow list: if false;
+      allow create: if ownLink();
+      allow update: if ownLink() && resource.data.ownerUid == request.auth.uid;
+      allow delete: if signedIn() && resource.data.ownerUid == request.auth.uid;
+    }
   }
 }
