@@ -7,6 +7,7 @@ import { collection, deleteDoc, doc, getDoc, getDocFromServer, getDocs, incremen
 import Logo from '../components/brand/Logo';
 import CatalogAssistant, { type CatalogCategoryRow, type CatalogCreateRow, type CatalogPriceRow } from '../components/pos/CatalogAssistant';
 import ShopChat from '../components/pos/ShopChat';
+import { GrokConnectCard, GrokConnectSync } from '../components/pos/GrokConnect';
 import RegisterDesk from '../components/pos/RegisterDesk';
 import ShopOnboarding from '../components/pos/ShopOnboarding';
 import ReceiptDialog from '../components/pos/ReceiptDialog';
@@ -1541,6 +1542,15 @@ export default function Page() {
     timezoneOffsetMinutes: shopTimeSettings.timezoneOffsetMinutes,
     dayStartTime: shopTimeSettings.dayStartTime,
   }), [shopTimeSettings.dayStartTime, shopTimeSettings.timezoneOffsetMinutes]);
+  const grokSource = useMemo(() => ({
+    shopName: currentShop?.shopName,
+    products,
+    services,
+    sales,
+    expenses,
+    branches,
+    clock: shopClock,
+  }), [branches, currentShop?.shopName, expenses, products, sales, services, shopClock]);
 
   const getMetricsForPeriod = useCallback((period: DashboardPeriod, offset: number = 0) => {
     const range = reportPeriodRange(period, offset, new Date(), shopClock);
@@ -4334,6 +4344,13 @@ export default function Page() {
 
   return (
     <div className="app">
+      <GrokConnectSync
+        enabled={Boolean(isShopOwner && authUser && authUser.uid !== LOCAL_OPERATOR_ID)}
+        ownerUid={authUser?.uid || ''}
+        source={grokSource}
+        notify={showNotification}
+        onActivity={logActivity}
+      />
       <div className={`sidebar-overlay ${isSidebarOpen ? 'show' : ''}`} onClick={() => setIsSidebarOpen(false)}></div>
       <aside className={`sidebar ${isSidebarOpen ? 'open' : ''}`}>
         <div className="sidebar-header">
@@ -4555,6 +4572,7 @@ export default function Page() {
               <button type="button" className={assistantPane === 'catalog' ? 'active' : ''} onClick={() => setAssistantPane('catalog')}>Catalog</button>
             </div>
             <div hidden={assistantPane !== 'ask'}>
+              <p className="muted-copy shop-chat-lead">These questions can also be asked from Grok after the shop is connected under Settings, then Assistant.</p>
               <ShopChat snapshot={{ shopName: currentShop?.shopName, products, services, sales, expenses, branches, clock: shopClock }} />
             </div>
             <div hidden={assistantPane !== 'catalog'}>
@@ -5814,6 +5832,7 @@ export default function Page() {
               </div>
             )}
             {settingsTab === 'assistant' && (
+              <>
               <div className="card">
                 <h3>Product assistant</h3>
                 <p className="muted-copy">Paste a Gemini API key from Google AI Studio (aistudio.google.com/apikey). It is used only to read product photos and to suggest categories. Questions about sales, stock, prices, profit, and services are answered from the shop&apos;s records and do not use this key. Staff cannot open this page, and the key is not included in a shop backup.</p>
@@ -5843,6 +5862,8 @@ export default function Page() {
                   {catalogKey && <button type="button" className="edit-btn" onClick={() => { void removeCatalogKey(); }}>Remove key</button>}
                 </div>
               </div>
+              <GrokConnectCard />
+              </>
             )}
             {settingsTab === 'register' && (
               <div className="card">
