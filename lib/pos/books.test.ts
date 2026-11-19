@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mergeHeardExpenses, postedExpense, staffAttribution, staffBookTotals, stockWorth } from './books';
+import { computeAccountBalances, mergeHeardExpenses, postedExpense, staffAttribution, staffBookTotals, stockWorth } from './books';
 
 test('adds cost and selling price for units on hand', () => {
   const worth = stockWorth([
@@ -103,6 +103,28 @@ test('staff totals count a receipt once and keep who entered the expense', () =>
   assert.equal(amina?.receipts, 2);
   assert.equal(amina?.expenses, 400);
   assert.equal(rows.some((row) => row.email === 'owner@shop.test'), false);
+});
+
+test('a void takes the money back out, and a receipt is counted once', () => {
+  const accounts = [
+    { id: 'cash', name: 'CASH', openingBalance: 1000, isDefault: true },
+    { id: 'momo', name: 'Mobile money', openingBalance: 0 },
+  ];
+  const balances = computeAccountBalances(accounts, [
+    { amount: 4000, transactionId: 'r1', saleKind: 'sale', tenders: [{ method: 'cash', amount: 4000 }] },
+    { amount: 4000, transactionId: 'r1', saleKind: 'sale', tenders: [{ method: 'cash', amount: 4000 }] },
+    { amount: 2500, transactionId: 'r2', saleKind: 'sale', paymentMethod: 'mobile_money', tenders: [{ method: 'mobile_money', amount: 2500 }], voidedAt: '2026-11-15T10:00:00.000Z' },
+    { amount: -1500, transactionId: 'c1', saleKind: 'return', tenders: [{ method: 'cash', amount: -1500 }] },
+    { amount: -500, transactionId: 'c1', saleKind: 'return', tenders: [{ method: 'cash', amount: -500 }] },
+  ], [], []);
+  assert.equal(balances.get('cash'), 1000 + 4000 - 1500 - 500);
+  assert.equal(balances.get('momo'), 0);
+});
+
+test('a sale with no payment method lands in cash', () => {
+  const accounts = [{ id: 'cash', name: 'CASH', openingBalance: 0, isDefault: true }];
+  const balances = computeAccountBalances(accounts, [{ amount: 3000, accountId: 'cash' }], [], []);
+  assert.equal(balances.get('cash'), 3000);
 });
 
 test('treats a missing price as zero', () => {

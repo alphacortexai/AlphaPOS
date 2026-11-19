@@ -75,6 +75,9 @@ type SaleLike = {
   accountId?: string;
   paymentMethod?: PaymentMethod;
   tenders?: Tender[];
+  voidedAt?: string;
+  saleKind?: 'sale' | 'return';
+  transactionId?: string;
 };
 
 type AccountContribution = { name: string; accountId?: string; amount: number };
@@ -180,7 +183,14 @@ export const computeAccountBalances = (
     balances.set(account.id, (balances.get(account.id) || 0) + amount);
   };
 
+  const countedReceipts = new Set<string>();
   sales.forEach((sale) => {
+    if (sale.voidedAt) return;
+    const sharedReceipt = sale.saleKind !== 'return' && Boolean(sale.transactionId) && Boolean(sale.tenders && sale.tenders.length > 0);
+    if (sharedReceipt && sale.transactionId) {
+      if (countedReceipts.has(sale.transactionId)) return;
+      countedReceipts.add(sale.transactionId);
+    }
     contributionsForSale(sale).forEach((part) => apply(part.name, part.amount, part.name === 'CASH' ? part.accountId : undefined));
   });
   payments.forEach((payment) => apply(TENDER_ACCOUNT_NAME[payment.method], payment.amount));

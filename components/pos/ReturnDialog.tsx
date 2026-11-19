@@ -19,15 +19,17 @@ export default function ReturnDialog({
   formatMoney,
   onClose,
   onSubmit,
+  defaultMethod = 'cash',
 }: {
   receiptNumber: string;
   lines: ReturnableLine[];
   formatMoney: (value: number) => string;
   onClose: () => void;
   onSubmit: (quantities: Record<string, number>, method: PaymentMethod, reference: string) => void;
+  defaultMethod?: PaymentMethod;
 }) {
   const [quantities, setQuantities] = useState<Record<string, number>>(() => Object.fromEntries(lines.map((line) => [line.id, 0])));
-  const [method, setMethod] = useState<PaymentMethod>('cash');
+  const [method, setMethod] = useState<PaymentMethod>(defaultMethod);
   const [reference, setReference] = useState('');
   const refund = useMemo(() => lines.reduce((sum, line) => sum + (quantities[line.id] || 0) * line.unitAmount, 0), [lines, quantities]);
   const hasReturn = lines.some((line) => (quantities[line.id] || 0) > 0);
@@ -81,7 +83,7 @@ export default function ReturnDialog({
           </label>
         )}
         <div className="pos-total-row is-due"><span>Refund</span><strong>{formatMoney(refund)}</strong></div>
-        <p className="pos-pay-note">Returned products go back into stock. This records a credit note and does not rewrite the original receipt.</p>
+        <p className="pos-pay-note">Returned products go back into stock. The refund leaves the account selected above. Cash is already selected when the receipt was paid in cash, or when it did not name another way to pay.</p>
         <button type="submit" className="primary pos-charge" disabled={!hasReturn}>Issue credit note</button>
       </form>
     </div>
