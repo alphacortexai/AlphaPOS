@@ -3569,7 +3569,7 @@ export default function Page() {
     });
     setSales((prev) => prev.map((sale) => ids.includes(sale.id) ? { ...sale, voidedAt, voidReason: reason.trim() } : sale));
     logActivity('void_sale', `Voided a receipt. ${reason.trim()}`);
-    showNotification('Receipt voided. It stays in the book, and the stock was put back.', 'success');
+    showNotification('Receipt voided. The stock is back, and the money is out of the account it was paid into. Cash is used when the receipt did not name another way to pay.', 'success');
   };
 
   const saveMissedSale = async (event: React.FormEvent) => {
@@ -6032,10 +6032,27 @@ export default function Page() {
           <section>
             <div className="card">
               <h3>Where money sits</h3>
-              <p className="muted-copy">{registerSettings.mode === 'drawer' ? 'Each sale and expense updates one of these balances. Cash in the drawer is counted on the register.' : 'Each sale and expense updates one of these balances.'}</p>
+              <p className="muted-copy">{registerSettings.mode === 'drawer' ? 'A sale adds money to the account that was paid. Voiding that receipt takes the same money back out. Cash in the drawer is counted on the register.' : 'A sale adds money to the account that was paid. Voiding that receipt takes the same money back out. Cash is used when the receipt did not name another way to pay.'}</p>
+              {isShopOwner && (
+                <form onSubmit={topUpAccount} className="form" style={{ marginTop: '1rem' }}>
+                  <h3>Put money in</h3>
+                  <p className="muted-copy">Working cash, or any other money you add to the business. Choose the account and the amount. The balance goes up by that amount.</p>
+                  <label className="field">
+                    <span>Account</span>
+                    <select value={accountTopUpForm.accountId || defaultAccount?.id || ''} onChange={(e) => setAccountTopUpForm((prev) => ({ ...prev, accountId: e.target.value }))}>
+                      {accounts.map((account) => <option key={account.id} value={account.id}>{account.name}{account.isDefault ? ' (Default)' : ''}</option>)}
+                    </select>
+                  </label>
+                  <label className="field">
+                    <span>Amount to put in</span>
+                    <input type="number" min={1} value={accountTopUpForm.amount || ''} onChange={(e) => setAccountTopUpForm((prev) => ({ ...prev, amount: Number(e.target.value) }))} required />
+                  </label>
+                  <div><button type="submit" className="primary">Put money in</button></div>
+                </form>
+              )}
               {isShopOwner && (
                 <details className="quiet-fold">
-                  <summary>Add or adjust a balance</summary>
+                  <summary>Add an account</summary>
                   <form onSubmit={createAccount} className="form" style={{ marginTop: '1rem' }}>
                     <label className="field">
                       <span>Account name</span>
@@ -6046,19 +6063,6 @@ export default function Page() {
                       <input type="number" value={accountForm.openingBalance} onChange={(e) => setAccountForm((prev) => ({ ...prev, openingBalance: Number(e.target.value) }))} />
                     </label>
                     <div><button type="submit" className="primary">Add account</button></div>
-                  </form>
-                  <form onSubmit={topUpAccount} className="form" style={{ marginTop: '0.75rem' }}>
-                    <label className="field">
-                      <span>Account</span>
-                      <select value={accountTopUpForm.accountId || defaultAccount?.id || ''} onChange={(e) => setAccountTopUpForm((prev) => ({ ...prev, accountId: e.target.value }))}>
-                        {accounts.map((account) => <option key={account.id} value={account.id}>{account.name}{account.isDefault ? ' (Default)' : ''}</option>)}
-                      </select>
-                    </label>
-                    <label className="field">
-                      <span>Amount to add</span>
-                      <input type="number" min={1} value={accountTopUpForm.amount} onChange={(e) => setAccountTopUpForm((prev) => ({ ...prev, amount: Number(e.target.value) }))} required />
-                    </label>
-                    <div><button type="submit" className="primary">Add money</button></div>
                   </form>
                 </details>
               )}
@@ -6245,6 +6249,12 @@ export default function Page() {
               unitAmount: roundMoney(sale.amount / sale.qty),
             }))}
             formatMoney={formatUGX}
+            defaultMethod={(() => {
+              const original = sales.filter((sale) => transactionKey(sale) === returnTransactionId && sale.saleKind !== 'return');
+              const methods = new Set(original.flatMap((sale) => (sale.tenders && sale.tenders.length > 0 ? sale.tenders.map((tender) => tender.method) : [sale.paymentMethod || 'cash'])));
+              const only = [...methods][0];
+              return methods.size === 1 && only ? only : 'cash';
+            })()}
             onClose={() => setReturnTransactionId('')}
             onSubmit={issueReturn}
           />

@@ -47,6 +47,8 @@ type BookSale = {
   accountId?: string;
   paymentMethod?: PaymentMethod;
   tenders?: Tender[];
+  saleKind?: 'sale' | 'return';
+  transactionId?: string;
   customerId?: string;
   customerName?: string;
   customerPhone?: string;
@@ -78,6 +80,8 @@ const salesOf = (value: unknown): BookSale[] => rows(value).map((sale) => {
     ...(optional(sale.accountId) ? { accountId: optional(sale.accountId) } : {}),
     ...(method ? { paymentMethod: method } : {}),
     ...(tenders.length > 0 ? { tenders } : {}),
+    ...(sale.saleKind === 'return' || sale.saleKind === 'sale' ? { saleKind: sale.saleKind } : {}),
+    ...(optional(sale.transactionId) ? { transactionId: optional(sale.transactionId) } : {}),
     ...(optional(sale.customerId) ? { customerId: optional(sale.customerId) } : {}),
     ...(optional(sale.customerName) ? { customerName: optional(sale.customerName) } : {}),
     ...(optional(sale.customerPhone) ? { customerPhone: optional(sale.customerPhone) } : {}),
